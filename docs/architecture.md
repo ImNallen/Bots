@@ -81,6 +81,31 @@ Friends receive a share of the control VM. Tailscale's sharing gives them that o
 
 User VMs sit on an isolated network. They can reach the internet and the orchestrator. They cannot reach the home LAN, the Proxmox UI, or other users' VMs. A script proves this in step 3 of the [roadmap](roadmap.md), and no friend gets access before that script passes.
 
+## What a bot can reach on a Mac
+
+This is a development safeguard for Docker on a Mac. Step 3 still needs its own network rules on Proxmox, and this sidecar does not replace them.
+
+Docker Desktop forwards `host.docker.internal` to services bound to the Mac's loopback address. Without a guard, a command in the `computerd` container reached Convex and got the dev login's token by sending `Host: localhost` to the public listener.
+
+`computerd` therefore runs in the network namespace of a `netguard` sidecar, defined in `apps/computerd/netguard`. `netguard` has `NET_ADMIN`, applies the outbound rules, and stays alive to hold the namespace. Compose starts `computerd` only after the health check of `netguard` finds the rules. `computerd` has neither `NET_ADMIN` nor `NET_RAW`, so a bot with root through `sudo` cannot change the rules or send packets around them.
+
+The IPv4 and IPv6 rules allow loopback, replies, TCP to the host on the link port only, and the public internet. They reject private, link-local, carrier-grade NAT, multicast, and v4-mapped addresses, so a blocked connection fails at once. IPv6 also allows neighbor discovery, because no IPv6 packet leaves without it.
+
+The namespace belongs to `netguard`, so its lifetime decides what happens to `computerd`:
+
+| Event | Result |
+|---|---|
+| `netguard` restarts | Docker gives `netguard` a new namespace. A running `computerd` stays in the old one, which has only loopback, until `computerd` restarts. `pnpm bootstrap` restarts it |
+| `netguard` stops, then `computerd` restarts | Docker refuses to start `computerd` |
+| `computerd` restarts | `computerd` joins the current namespace of `netguard`, with its rules |
+| Docker or the Mac restarts | `netguard` stays stopped, because its restart policy is `no`. `computerd` then cannot start until you rerun `pnpm bootstrap` |
+
+The restart policy is `no` because a new namespace has no rules for its first 20 ms or so, and Compose waits for health only when Compose starts the containers. A restart policy on `netguard` would also recover nothing, since `computerd` would stay in the old namespace.
+
+One gap remains. If someone restarts `netguard` by hand and `computerd` crashes in that same 20 ms, `computerd` can join before the rules finish. The rules then apply to it as well, and no tool can run that early, because `computerd` must first start Node and connect the link.
+
+A bot can still reach anything on the public internet, and it can read and change its own files. The link port stays open, and `sudo` lets a bot read the link token, so a bot can open its own connection on that port.
+
 ## Why screens share one browser
 
 Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.
@@ -125,7 +150,6 @@ Chromium and `computerd` run under their own Linux user from the first version t
 - The operator can read friends' chats and keys. Friends need to know this.
 - Bots browse from the operator's home IP address, so abuse by one user reflects on that address.
 - Prompt injection remains possible. Approvals, read-only scheduled runs, and network rules limit the damage.
-- Until step 3, bots are not isolated on a Mac. Docker Desktop forwards `host.docker.internal` to services bound to the Mac's loopback address. We tested this: a command in the `computerd` container reached Convex, and it got the dev login's token by sending `Host: localhost` to the public listener. A bot can therefore act as the dev login and reach anything else on the Mac's loopback address. Do not give a bot on a Mac a task you would not run on the Mac itself.
 
 ## What we took from other products
 
