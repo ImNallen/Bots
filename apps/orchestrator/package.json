@@ -4,18 +4,24 @@
   "type": "module",
   "scripts": {
     "dev": "node --env-file=../../.env.local --watch src/main.ts",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --project tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
+    "@bots/convex": "workspace:*",
+    "@bots/protocol": "workspace:*",
     "@hono/node-server": "2.1.6",
+    "convex": "catalog:",
     "hono": "4.13.16",
-    "jose": "catalog:"
+    "jose": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
-    "vitest": "5.1.0"
+    "vitest": "catalog:"
   }
 }

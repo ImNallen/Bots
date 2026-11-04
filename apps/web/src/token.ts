@@ -10,6 +10,10 @@ export async function getToken(): Promise<TokenResult> {
   } catch {
     return { kind: "unreachable" };
   }
+  // A proxy answers 5xx while the orchestrator restarts, so this means the same as a failed connection.
+  if (response.status >= 500) {
+    return { kind: "unreachable" };
+  }
   const body: unknown = await response.json().catch(() => null);
   if (typeof body === "object" && body !== null) {
     if (response.ok && "token" in body && typeof body.token === "string") {

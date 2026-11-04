@@ -5,13 +5,21 @@ import {
   createRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import { useAuthReconnecting } from "./auth.tsx";
+import { BotPage } from "./BotPage.tsx";
 import { Home } from "./Home.tsx";
 
 function RootLayout() {
+  const reconnecting = useAuthReconnecting();
   return (
     <>
       <header className="site-header">
         <h1>Bots</h1>
+        {reconnecting && (
+          <p className="reconnecting" role="status">
+            Reconnecting
+          </p>
+        )}
       </header>
       <main>
         <Outlet />
@@ -48,8 +56,14 @@ const indexRoute = createRoute({
   component: Home,
 });
 
+const botRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/bots/$botId",
+  component: BotPage,
+});
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, botRoute]),
   defaultErrorComponent: RouteError,
   defaultNotFoundComponent: NotFound,
 });

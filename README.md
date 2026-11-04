@@ -2,7 +2,7 @@
 
 A self-hosted agent platform. See the [architecture](docs/architecture.md) and the [roadmap](docs/roadmap.md).
 
-This repository is at roadmap step 1a. It runs Convex in Docker, the orchestrator in dev mode, and the web shell on one Mac.
+This repository is at roadmap step 2. It runs Convex and `computerd` in Docker, and the orchestrator in dev mode and the web app on one Mac. A user chats with a bot, and the bot runs shell and file tools in the `computerd` container.
 
 ## Requirements
 
@@ -17,26 +17,40 @@ pnpm bootstrap
 pnpm dev
 ```
 
-Open http://localhost:5173. The Convex dashboard is at http://127.0.0.1:6791. To sign in to it, use the admin key in `packages/convex/.env.local`.
+Open http://localhost:5173, add a Mistral key on the home page, create a bot, and open it. The Convex dashboard is at http://127.0.0.1:6791. To sign in to it, use the admin key in `packages/convex/.env.local`.
 
-`pnpm bootstrap` generates the signing key, starts the containers, and deploys the Convex functions. It is safe to rerun, and it never replaces a key that still works.
+`pnpm bootstrap` generates the signing key, the master key, and the computer token, starts the containers, and deploys the Convex functions. It also builds and starts `computerd` behind its `netguard` sidecar, which limits what a bot can reach. It is safe to rerun, and it never replaces a key that still works.
 
-To run the built app instead, use `pnpm build` and then `pnpm start`. It serves on http://127.0.0.1:8787.
+Rerun `pnpm bootstrap` after Docker or the Mac restarts, or after `netguard` restarts. Until then `computerd` stays down or has no network, so a bot's tool calls end as `unavailable`.
+
+To serve the built web app instead, use `pnpm build` and then `pnpm start`. It serves on http://127.0.0.1:8787. The orchestrator runs from source in both cases, so `pnpm build` only typechecks it.
+
+The orchestrator reads these optional settings from `.env.local`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LINK_HOST` | `127.0.0.1` | The address where `computerd` connects |
+| `LINK_PORT` | `8788` | The port where `computerd` connects. `pnpm bootstrap` passes it to the container |
+| `MISTRAL_BASE_URL` | `https://api.mistral.ai` | The Mistral API |
+| `MISTRAL_MODEL` | `mistral-large-4` | The model every bot uses |
+| `COMPUTER_WAIT_SECONDS` | `300` | How long a tool call waits for an absent computer before it records `unavailable` |
 
 ## Check it
 
 | Command | What it proves |
 |---|---|
 | `pnpm typecheck` | Every package typechecks |
-| `pnpm test` | Identity resolution and config parsing behave as specified |
-| `pnpm verify:auth` | Tokens, live queries, user isolation, the dev guard, and file serving work against the real Convex backend and the built orchestrator |
+| `pnpm test` | Identity, config, run decisions, message mapping, stream parsing, encryption, the journal, and the output cap behave as specified |
+| `pnpm verify:auth` | Tokens, live queries, user isolation, the dev guard, the link listener's boundary, and file serving work against the real Convex backend and the real orchestrator |
+| `pnpm verify:agent` | Key handling, tools, crash recovery with no duplicate side effects, fencing, cancel, timeouts, link security, isolation, secret placement, the network rules, and the limit on attempts with no progress work against the real Convex backend, a real orchestrator process, and a real `computerd` container, with a scripted fake Mistral |
 
-`pnpm verify:auth` needs the containers from `pnpm bootstrap`. It starts its own orchestrator on a free port, so it can run alongside `pnpm dev`. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
+Both verify commands need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about seven minutes. To run some scenarios, set `VERIFY_SCENARIOS`, as in `VERIFY_SCENARIOS=A,P pnpm verify:agent`. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
 
 ## Stop it
 
 ```sh
+docker compose --env-file .env.local --file apps/computerd/compose.yaml down
 docker compose --file infra/control-vm/compose.yaml down
 ```
 
-Add `--volumes` to delete the Convex data as well.
+Add `--volumes` to delete the workspace and journal, or the Convex data, as well.

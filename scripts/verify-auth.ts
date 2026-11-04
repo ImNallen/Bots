@@ -110,9 +110,18 @@ function lanAddress(): string | null {
   return addresses.find((entry) => entry?.family === "IPv4" && !entry.internal)?.address ?? null;
 }
 
-async function startOrchestrator(args: { port: number; env: Record<string, string | undefined> }) {
+async function startOrchestrator(args: { port: number; linkPort: number; env: Record<string, string | undefined> }) {
   const child = spawn(process.execPath, [paths.orchestratorMain], {
-    env: { ...process.env, ...args.env, AUTH_MODE: "dev", DEV_LOGIN: VERIFY_LOGIN, PORT: String(args.port) },
+    env: {
+      ...process.env,
+      ...args.env,
+      AUTH_MODE: "dev",
+      DEV_LOGIN: VERIFY_LOGIN,
+      PORT: String(args.port),
+      LINK_PORT: String(args.linkPort),
+      // A token is registered to one owner, so this login cannot share the dev computer's token.
+      COMPUTER_TOKEN: randomBytes(32).toString("base64url"),
+    },
     stdio: ["ignore", "ignore", "inherit"],
   });
   const deadline = Date.now() + SUBSCRIPTION_TIMEOUT_MS;
@@ -194,7 +203,8 @@ setTimeout(() => {
 }, WATCHDOG_MS).unref();
 
 const port = await findFreePort();
-const orchestrator = await startOrchestrator({ port, env: rootEnv });
+const linkPort = await findFreePort();
+const orchestrator = await startOrchestrator({ port, linkPort, env: rootEnv });
 const clients: ConvexClient[] = [];
 
 try {
@@ -451,12 +461,44 @@ try {
     });
   }
 
+  await check("GET /api/nope returns 404 and not index.html", async () => {
+    const response = await rawGet({ port, path: "/api/nope" });
+    assert.equal(response.status, 404);
+    assert.notEqual(response.body, indexHtml);
+  });
+
+  for (const path of ["/auth/token", "/", "/healthz", "/api/mistral-key"]) {
+    await check(`the link listener answers GET ${path} with 426 and no content from the public listener`, async () => {
+      const response = await rawGet({ port: linkPort, path });
+      assert.equal(response.status, 426);
+      assert.ok(!response.body.includes("token"));
+      assert.notEqual(response.body, indexHtml);
+    });
+  }
+
+  await check("a service function rejects a user token", async () => {
+    await assert.rejects(clientA.query(api.runs.listQueued, {}), /Not authorized/);
+  });
+
+  await check("a service token from the same key is accepted by a service function", async () => {
+    const service = new ConvexHttpClient(convexUrl);
+    service.setAuth(await signToken({ subject: "service:orchestrator" }));
+    assert.ok(Array.isArray(await service.query(api.runs.listQueued, {})));
+  });
+
+  await check("a subject that only resembles the service subject is rejected", async () => {
+    const lookalike = new ConvexHttpClient(convexUrl);
+    lookalike.setAuth(await signToken({ subject: "dev:service:orchestrator" }));
+    await assert.rejects(lookalike.query(api.runs.listQueued, {}), /Not authorized/);
+  });
+
   const lan = lanAddress();
   if (lan === null) {
     console.log("skip  no LAN address on this machine, so loopback binding was not probed");
   } else {
     for (const [name, probePort] of [
       ["orchestrator", port],
+      ["orchestrator link", linkPort],
       ["Convex backend", 3210],
       ["Convex site proxy", 3211],
       ["Convex dashboard", 6791],

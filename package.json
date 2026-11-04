@@ -11,16 +11,20 @@
     "bootstrap": "node scripts/bootstrap.ts",
     "dev": "pnpm --recursive --parallel --stream run dev",
     "build": "pnpm --recursive run build",
-    "start": "node --env-file=.env.local apps/orchestrator/dist/main.js",
+    "start": "node --env-file=.env.local apps/orchestrator/src/main.ts",
     "typecheck": "pnpm --recursive run typecheck && tsc --project tsconfig.json",
     "test": "pnpm --recursive run test",
-    "verify:auth": "pnpm build && node scripts/verify-auth.ts"
+    "verify:auth": "pnpm build && node scripts/verify-auth.ts",
+    "verify:agent": "pnpm build && node scripts/verify-agent.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",
+    "@bots/protocol": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "convex": "catalog:",
     "jose": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "ws": "catalog:"
   }
 }

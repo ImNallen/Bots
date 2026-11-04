@@ -1,0 +1,44 @@
+name: bots-computer
+
+services:
+  netguard:
+    build: ./netguard
+    image: bots-netguard:dev
+    init: true
+    restart: "no"
+    cap_add:
+      - NET_ADMIN
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      COMPUTER_LINK_URL: ${COMPUTER_LINK_URL:-ws://host.docker.internal:8788}
+    healthcheck:
+      test: ["CMD", "/netguard.sh", "check"]
+      interval: 30s
+      start_period: 30s
+      start_interval: 200ms
+
+  computerd:
+    build:
+      context: ../..
+      dockerfile: apps/computerd/Dockerfile
+    image: bots-computerd:dev
+    init: true
+    restart: unless-stopped
+    network_mode: service:netguard
+    depends_on:
+      netguard:
+        condition: service_healthy
+    cap_drop:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:?Run pnpm bootstrap}
+      COMPUTER_LINK_URL: ${COMPUTER_LINK_URL:-ws://host.docker.internal:8788}
+    volumes:
+      - workspace:/workspace
+      - journal:/var/lib/computerd
+
+volumes:
+  workspace:
+  journal:

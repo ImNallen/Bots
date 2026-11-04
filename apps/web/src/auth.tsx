@@ -18,36 +18,49 @@ function parseConvexUrl(raw: unknown): string {
 
 const convex = new ConvexReactClient(parseConvexUrl(import.meta.env.VITE_CONVEX_URL));
 
-type TokenFailure = Exclude<TokenResult, { kind: "ok" }>;
+const FIRST_RETRY_MS = 500;
+const MAX_RETRY_MS = 8000;
 
-function describeFailure(failure: TokenFailure): string {
-  switch (failure.kind) {
-    case "rejected":
-      return `The orchestrator refused a token (${failure.status}, ${failure.error}).`;
-    case "unreachable":
-      return "The orchestrator could not be reached.";
-  }
+function describeRejection(rejection: Extract<TokenResult, { kind: "rejected" }>): string {
+  return `The orchestrator refused a token (${rejection.status}, ${rejection.error}).`;
 }
 
 type AuthContextValue = {
   failure: string | null;
+  reconnecting: boolean;
   setFailure: (message: string) => void;
+  setReconnecting: (reconnecting: boolean) => void;
 };
 
-const AuthContext = createContext<AuthContextValue>({ failure: null, setFailure: () => {} });
+const AuthContext = createContext<AuthContextValue>({
+  failure: null,
+  reconnecting: false,
+  setFailure: () => {},
+  setReconnecting: () => {},
+});
 
 function useOrchestratorAuth() {
-  const { failure, setFailure } = useContext(AuthContext);
+  const { failure, setFailure, setReconnecting } = useContext(AuthContext);
   // Identity comes from the connection, so there is nothing to wait for before asking. Every call
   // fetches a new token, which also satisfies Convex when it passes forceRefreshToken.
+  // An orchestrator restart is routine, so this keeps Convex waiting until one answers. Only a refusal is final.
   const fetchAccessToken = useCallback(async () => {
-    const result = await getToken();
-    if (result.kind === "ok") {
-      return result.token;
+    for (let delayMs = FIRST_RETRY_MS; ; delayMs = Math.min(delayMs * 2, MAX_RETRY_MS)) {
+      const result = await getToken();
+      switch (result.kind) {
+        case "ok":
+          setReconnecting(false);
+          return result.token;
+        case "rejected":
+          setReconnecting(false);
+          setFailure(describeRejection(result));
+          return null;
+        case "unreachable":
+          setReconnecting(true);
+          await new Promise((done) => setTimeout(done, delayMs));
+      }
     }
-    setFailure(describeFailure(result));
-    return null;
-  }, [setFailure]);
+  }, [setFailure, setReconnecting]);
   return useMemo(
     () => ({ isLoading: false, isAuthenticated: failure === null, fetchAccessToken }),
     [failure, fetchAccessToken],
@@ -58,9 +71,14 @@ export function useAuthFailure(): string | null {
   return useContext(AuthContext).failure;
 }
 
+export function useAuthReconnecting(): boolean {
+  return useContext(AuthContext).reconnecting;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [failure, setFailure] = useState<string | null>(null);
-  const value = useMemo(() => ({ failure, setFailure }), [failure]);
+  const [reconnecting, setReconnecting] = useState(false);
+  const value = useMemo(() => ({ failure, reconnecting, setFailure, setReconnecting }), [failure, reconnecting]);
   return (
     <AuthContext.Provider value={value}>
       <ConvexProviderWithAuth client={convex} useAuth={useOrchestratorAuth}>

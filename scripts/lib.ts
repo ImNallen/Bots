@@ -12,9 +12,10 @@ export const paths = {
   webEnv: resolve(repoRoot, "apps/web/.env.local"),
   convexEnv: resolve(repoRoot, "packages/convex/.env.local"),
   composeDir: resolve(repoRoot, "infra/control-vm"),
+  computerdComposeDir: resolve(repoRoot, "apps/computerd"),
   convexDir: resolve(repoRoot, "packages/convex"),
   convexBin: resolve(repoRoot, "packages/convex/node_modules/.bin/convex"),
-  orchestratorMain: resolve(repoRoot, "apps/orchestrator/dist/main.js"),
+  orchestratorMain: resolve(repoRoot, "apps/orchestrator/src/main.ts"),
   webDist: resolve(repoRoot, "apps/web/dist"),
 };
 
@@ -37,8 +38,13 @@ export function runCommand(args: {
   command: string;
   argv: string[];
   cwd: string;
+  env?: Record<string, string>;
 }): CommandResult {
-  const result = spawnSync(args.command, args.argv, { cwd: args.cwd, encoding: "utf8" });
+  const result = spawnSync(args.command, args.argv, {
+    cwd: args.cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...args.env },
+  });
   if (result.error !== undefined) {
     return { kind: "failed", output: result.error.message };
   }

@@ -18,6 +18,20 @@ export const list = query({
   },
 });
 
+// The id comes from a URL, so a malformed one reads as a bot that does not exist.
+export const get = query({
+  args: { botId: v.string() },
+  handler: async (ctx, { botId }) => {
+    const { user } = await requireIdentity(ctx);
+    const id = ctx.db.normalizeId("bots", botId);
+    const bot = id === null ? null : await ctx.db.get(id);
+    if (user === null || bot === null || bot.ownerId !== user._id) {
+      return null;
+    }
+    return bot;
+  },
+});
+
 export const create = mutation({
   args: { name: v.string() },
   handler: async (ctx, { name }) => {
