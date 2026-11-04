@@ -31,6 +31,8 @@ const SERVICE_SUBJECT = "service:orchestrator";
 const COMPUTER_PROJECT = "bots-verify-agent";
 const DIRECT_PROJECT = "bots-verify-agent-direct";
 const LEASE_MS = 15_000;
+const EXPIRED_POLL_MS = 5000;
+const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
 const COMPUTER_WAIT_SECONDS = 20;
 const JOURNAL_DIR = "/var/lib/computerd/journal";
 const TERMINAL = ["done", "failed", "cancelled"];
@@ -111,7 +113,7 @@ type FakeRequest = {
 type FakeToolCall = { id?: string; name: string; arguments: string };
 
 type Reply =
-  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number }
+  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string }
   | { kind: "tools"; calls: FakeToolCall[]; delivery: "pieces" | "whole" }
   | { kind: "stall"; partial: string }
   | { kind: "status"; status: number; retryAfter?: string };
@@ -145,9 +147,10 @@ function chunk(delta: unknown, finishReason: string | null = null): unknown {
   };
 }
 
-async function finishSse(response: ServerResponse, finishReason: string): Promise<void> {
+async function finishSse(response: ServerResponse, finishReason: string, model = "fake-model"): Promise<void> {
   await writeSse(response, {
     ...(chunk({ content: "" }, finishReason) as object),
+    model,
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   });
   await writeSse(response, "[DONE]");
@@ -175,7 +178,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
         await writeSse(response, chunk({ role: "assistant", content: piece }));
         await sleep(reply.chunkDelayMs ?? 0);
       }
-      await finishSse(response, "stop");
+      await finishSse(response, "stop", reply.model);
       return;
     }
     case "tools": {
@@ -466,6 +469,22 @@ function turnsOf(run: TimelineRun) {
 
 function resultsOf(run: TimelineRun) {
   return bodiesOf(run).filter((body) => body.kind === "toolResult");
+}
+
+function claimCounter(runId: string): number | undefined {
+  const result = runConvex(["data", "runs", "--limit", "1000", "--format", "jsonLines"]);
+  assert.ok(result.kind === "ok", "convex data runs failed");
+  const row = result.stdout
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as { _id: string; claimsWithoutProgress?: number })
+    .find((candidate) => candidate._id === runId);
+  assert.ok(row !== undefined, `no row for ${runId}`);
+  return row.claimsWithoutProgress;
+}
+
+function logCount(args: { event: string; runId: string }): number {
+  return logsText().split(`"event":"${args.event}","runId":"${args.runId}"`).length - 1;
 }
 
 function connectedCount(): number {
@@ -2012,6 +2031,153 @@ try {
         listener.close();
       }
     }
+  });
+
+  await scenario("P. a run that makes no progress stops", async () => {
+    const chat = await newChat({ client: first, name: "no-progress" });
+    const text = `unstorable ${nonce}`;
+    const after = `after unstorable ${nonce}`;
+    // A runEvents row holds at most 1 MiB, and the runner does not cap the model name.
+    fake.script(text, () => ({ kind: "text", text: "never stored", model: "m".repeat(2 * 1024 * 1024) }));
+    fake.script(after, () => ({ kind: "text", text: "working again" }));
+
+    const body = { kind: "userMessage", text: "x" } as const;
+    const progressing = await newChat({ client: second, name: "progressing" });
+    const stuckThenCancelled = await newChat({ client: second, name: "stuck-cancel" });
+    const progressingRunId = await progressing.send(`progressing ${nonce}`);
+    const cancelledRunId = await stuckThenCancelled.send(`stuck ${nonce}`);
+
+    const claimsOverLimit = MAX_CLAIMS_WITHOUT_PROGRESS + 2;
+    const withProgress = async () => {
+      const counters: (number | undefined)[] = [];
+      for (let claim = 0; claim < claimsOverLimit; claim += 1) {
+        const claimed = await service.mutation(api.runs.claim, { runId: progressingRunId });
+        assert.ok(claimed.kind === "claimed", `claim ${claim + 1} was refused`);
+        counters.push(claimCounter(progressingRunId));
+        const { leaseToken, nextSeq } = claimed;
+        await service.mutation(api.runs.append, { runId: progressingRunId, leaseToken, expectedSeq: nextSeq, body });
+        if (claim === claimsOverLimit - 1) {
+          await service.mutation(api.runs.finish, { runId: progressingRunId, leaseToken, state: { kind: "done" } });
+          return counters;
+        }
+        await sleep(LEASE_MS + 1000);
+      }
+      return counters;
+    };
+    const stuckAndCancelled = async () => {
+      const flags: boolean[] = [];
+      for (let claim = 0; claim < MAX_CLAIMS_WITHOUT_PROGRESS; claim += 1) {
+        const claimed = await service.mutation(api.runs.claim, { runId: cancelledRunId });
+        assert.ok(claimed.kind === "claimed", `claim ${claim + 1} was refused`);
+        flags.push(claimed.cancelRequested);
+        if (claim === 0) {
+          await second.mutation(api.runs.requestCancel, { runId: cancelledRunId });
+        }
+        await sleep(LEASE_MS + 1000);
+      }
+      return { flags, last: await service.mutation(api.runs.claim, { runId: cancelledRunId }) };
+    };
+
+    const runId = await chat.send(text);
+    const [progressCounters, cancelled, run] = await Promise.all([
+      withProgress(),
+      stuckAndCancelled(),
+      chat.settled(runId, 180_000),
+    ]);
+
+    await check("the run fails with a reason that says what happened and how to retry", () => {
+      assert.equal(run.state.kind, "failed");
+      assert.match(
+        run.state.kind === "failed" ? run.state.reason : "",
+        /stopped after 5 attempts in a row failed with no progress\. Send another message to try again\./,
+      );
+    });
+    await check("the real limit on a row is what failed each attempt", () => {
+      assert.match(logsText(), /run-attempt-ended[^\n]*too large/i);
+      assert.equal(logCount({ event: "run-attempt-ended", runId }), MAX_CLAIMS_WITHOUT_PROGRESS);
+    });
+    await check("the model was called once per attempt, 5 times in all", () => {
+      assert.equal(fake.requests(text).length, MAX_CLAIMS_WITHOUT_PROGRESS);
+      assert.equal(logCount({ event: "run-claimed", runId }), MAX_CLAIMS_WITHOUT_PROGRESS);
+    });
+    await check("no stream row is left", () => assert.deepEqual(streamRows(runId), []));
+    await sleep(LEASE_MS + EXPIRED_POLL_MS + 1000);
+    await check("nothing tries the run again", () => {
+      assert.equal(fake.requests(text).length, MAX_CLAIMS_WITHOUT_PROGRESS);
+      assert.equal(logCount({ event: "run-claimed", runId }), MAX_CLAIMS_WITHOUT_PROGRESS);
+    });
+    const afterRun = await chat.settled(await chat.send(after));
+    await check("a new message on the same thread works, and keeps the roles alternating", () => {
+      assert.equal(afterRun.state.kind, "done");
+      assert.equal(turnsOf(afterRun)[0]?.text, "working again");
+      const roles = fake.requests(after)[0]?.body.messages.map((message) => message.role);
+      assert.deepEqual(roles, ["system", "user", "assistant", "user"]);
+    });
+    await check(`a run that progresses between claims survives ${claimsOverLimit} claims with its counter at zero`, async () => {
+      assert.deepEqual(progressCounters, Array.from({ length: claimsOverLimit }, () => 0));
+      assert.equal((await progressing.run(progressingRunId))?.state.kind, "done");
+    });
+    await check("a cancel holds through the failed attempts, and the limit ends that run as cancelled", async () => {
+      assert.deepEqual(cancelled.flags, [false, true, true, true, true]);
+      assert.deepEqual(cancelled.last, { kind: "unavailable" });
+      assert.equal((await stuckThenCancelled.run(cancelledRunId))?.state.kind, "cancelled");
+    });
+
+    const longChat = await newChat({ client: first, name: "long-tool" });
+    const longText = `long tool ${nonce}`;
+    const marker = `long-done-${nonce}`;
+    const release = workspaceFile(longChat, "p-release");
+    const path = workspaceFile(longChat, "p.txt");
+    fake.script(longText, ({ toolResults }) =>
+      toolResults.length === 0
+        ? {
+            kind: "tools",
+            delivery: "whole",
+            calls: [
+              shellCall(
+                `echo started >> p.txt; until [ -e p-release ]; do sleep 1; done; echo finished >> p.txt; echo ${marker}`,
+                300,
+              ),
+            ],
+          }
+        : { kind: "text", text: "the long tool finished" },
+    );
+    const longRunId = await longChat.send(longText);
+    await waitFor({
+      description: "the long tool to start",
+      probe: () => (linesOf({ container: mainContainer.id, path }).includes("started") ? true : null),
+    });
+    await sleep(LEASE_MS + EXPIRED_POLL_MS + 1000);
+    await check("a tool that outlasts the lease renews one claim, so the counter stays at zero", () => {
+      assert.equal(logCount({ event: "run-claimed", runId: longRunId }), 1);
+      assert.equal(claimCounter(longRunId), 0);
+    });
+    // The first restart still counts as progress, because the turn listing this call was stored after the first claim.
+    const restarts = MAX_CLAIMS_WITHOUT_PROGRESS;
+    for (let restart = 1; restart <= restarts; restart += 1) {
+      await killOrchestrator();
+      await startOrchestrator();
+      await waitFor({
+        description: `claim ${restart + 1} of the long run`,
+        timeoutMs: LEASE_MS + 3 * EXPIRED_POLL_MS,
+        probe: () => (logCount({ event: "run-claimed", runId: longRunId }) === restart + 1 ? true : null),
+      });
+    }
+    await check(`${restarts} orchestrator restarts during one tool call cost one claim each after the first, below the limit`, () => {
+      assert.equal(claimCounter(longRunId), MAX_CLAIMS_WITHOUT_PROGRESS - 1);
+      assert.equal(shellResult(mainContainer.id, `test -e ${release}`).ok, false);
+    });
+    shellIn(mainContainer.id, `sudo -n -u agent touch ${release}`);
+    const longRun = await longChat.settled(longRunId);
+    await check("the long tool finishes, with one execution and its result", () => {
+      assert.equal(longRun.state.kind, "done");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path }), ["started", "finished"]);
+      const results = resultsOf(longRun);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.outcome, "ok");
+      assert.match(results[0]?.output ?? "", new RegExp(marker));
+      assert.equal(fake.requests(longText).length, 2);
+    });
   });
 } catch (error) {
   failures += 1;
