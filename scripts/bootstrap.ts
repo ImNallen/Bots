@@ -187,19 +187,30 @@ function deployFunctions(): void {
 }
 
 function startComputer(args: { computerToken: string; linkPort: string }): void {
-  requireOk({
-    step: "docker compose up computerd",
-    result: runCommand({
-      command: "docker",
-      argv: ["compose", "up", "--detach", "--build", "--wait"],
-      cwd: paths.computerdComposeDir,
-      env: {
-        COMPUTER_TOKEN: args.computerToken,
-        COMPUTER_LINK_URL: `ws://host.docker.internal:${args.linkPort}`,
-      },
-    }),
-  });
-  report({ step: "computerd", outcome: "running" });
+  const compose = (step: string, argv: string[]): string =>
+    requireOk({
+      step,
+      result: runCommand({
+        command: "docker",
+        argv: ["compose", ...argv],
+        cwd: paths.computerdComposeDir,
+        env: {
+          COMPUTER_TOKEN: args.computerToken,
+          COMPUTER_LINK_URL: `ws://host.docker.internal:${args.linkPort}`,
+        },
+      }),
+    });
+  const namespaceOf = (service: string): string =>
+    compose(`read the ${service} namespace`, ["exec", "-T", service, "readlink", "/proc/self/ns/net"]);
+
+  compose("docker compose up computerd", ["up", "--detach", "--build", "--wait"]);
+  // A restarted netguard gets a new namespace. A running computerd stays in the old one, which has no network, and up leaves it there.
+  if (namespaceOf("computerd") !== namespaceOf("netguard")) {
+    compose("docker compose restart computerd", ["restart", "computerd"]);
+    report({ step: "computerd", outcome: "restarted to join netguard's namespace" });
+    return;
+  }
+  report({ step: "computerd", outcome: "running behind netguard" });
 }
 
 const { privateJwk, issuer, computerToken, linkPort } = await ensureRootEnv();
