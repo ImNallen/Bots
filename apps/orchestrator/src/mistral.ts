@@ -271,11 +271,7 @@ type CompletionArgs = {
   log: (fields: LogFields) => void;
 };
 
-async function readStream(args: {
-  response: Response;
-  signal: AbortSignal;
-  completion: CompletionArgs;
-}): Promise<Attempt> {
+async function readStream(args: { response: Response; completion: CompletionArgs }): Promise<Attempt> {
   const { response, completion } = args;
   const accumulator = createTurnAccumulator({ fallbackModel: completion.model });
   let sawDone = false;
@@ -359,7 +355,7 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
         },
       }),
     );
-    return await readStream({ response: new Response(tracked), signal, completion });
+    return await readStream({ response: new Response(tracked), completion });
   } catch (error) {
     if (completion.signal.aborted) {
       throw error;
