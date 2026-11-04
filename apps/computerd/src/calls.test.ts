@@ -122,7 +122,47 @@ describe("calls", () => {
 });
 
 describe("journal prune", () => {
-  it("removes old entries and temp files and keeps recent ones", async () => {
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  async function age(args: { byMs: number }): Promise<void> {
+    const old = new Date(Date.now() - args.byMs);
+    for (const name of await readdir(dir)) {
+      await utimes(join(dir, name), old, old);
+    }
+  }
+
+  it("never lets a pruned call run again", async () => {
+    const journal = await openJournal({ dir });
+    const { counter, execute } = counting();
+    await createCalls({ journal, execute }).call(request);
+    await age({ byMs: 2 * WEEK_MS });
+    await journal.prune({ now: Date.now(), maxAgeMs: WEEK_MS });
+
+    const replay = await createCalls({ journal, execute }).call(request);
+    expect(replay.outcome).toBe("interrupted");
+    expect(counter.runs).toBe(1);
+  });
+
+  it("never lets a call that died mid-run run again after a prune", async () => {
+    const journal = await openJournal({ dir });
+    await journal.markStarted({ callId: request.callId, botId: "bot", toolName: "shell" });
+    await age({ byMs: 2 * WEEK_MS });
+    await journal.prune({ now: Date.now(), maxAgeMs: WEEK_MS });
+
+    const { counter, execute } = counting();
+    const replay = await createCalls({ journal, execute }).call(request);
+    expect(replay.outcome).toBe("interrupted");
+    expect(counter.runs).toBe(0);
+  });
+
+  it("leaves a recent temp file alone, because a result may be mid-write", async () => {
+    const journal = await openJournal({ dir });
+    await writeFile(join(dir, "run1%3Acall1.result.json.tmp"), "partial");
+    await journal.prune({ now: Date.now(), maxAgeMs: WEEK_MS });
+    expect(await readdir(dir)).toContain("run1%3Acall1.result.json.tmp");
+  });
+
+  it("removes old results and old temp files and keeps recent ones", async () => {
     const journal = await openJournal({ dir });
     await journal.markStarted({ callId: "old:a", botId: "bot", toolName: "shell" });
     await journal.finish({ callId: "old:a", result: ok });
@@ -132,8 +172,8 @@ describe("journal prune", () => {
     }
     await journal.markStarted({ callId: "new:b", botId: "bot", toolName: "shell" });
     const pruned = await journal.prune({ now: Date.now(), maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
-    expect(pruned).toBe(2);
-    expect(await journal.read("old:a")).toEqual({ kind: "absent" });
+    expect(pruned).toBe(1);
+    expect(await journal.read("old:a")).toEqual({ kind: "started" });
     expect(await journal.read("new:b")).toEqual({ kind: "started" });
   });
 });

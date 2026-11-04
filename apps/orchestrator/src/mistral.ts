@@ -305,9 +305,10 @@ async function readStream(args: { response: Response; completion: CompletionArgs
   return { kind: "ok", turn: accumulator.finish() };
 }
 
-async function errorDetail(response: Response): Promise<string> {
-  const body = await response.text().catch(() => "");
-  return body.slice(0, 300).replace(/\s+/g, " ").trim();
+// Redact before the cut, because a key that crosses the cut no longer matches.
+async function errorDetail(args: { response: Response; apiKey: string }): Promise<string> {
+  const body = await args.response.text().catch(() => "");
+  return body.replaceAll(args.apiKey, "[key]").slice(0, 300).replace(/\s+/g, " ").trim();
 }
 
 async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
@@ -344,7 +345,7 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
       };
     }
     if (!response.ok) {
-      const detail = (await errorDetail(response)).replaceAll(completion.apiKey, "[key]");
+      const detail = await errorDetail({ response, apiKey: completion.apiKey });
       return { kind: "failed", reason: `Mistral refused the request with status ${response.status}: ${detail}` };
     }
     const tracked = response.body?.pipeThrough(

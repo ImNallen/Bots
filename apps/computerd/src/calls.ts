@@ -12,7 +12,7 @@ export type CallRequest = { callId: string; botId: string; tool: ToolInvocation 
 type InFlight = { abort: AbortController; result: Promise<ToolResult> };
 
 export const INTERRUPTED_OUTPUT =
-  "computerd restarted while this call was running. The outcome is unknown, and the command may have partly run. It was not run again.";
+  "computerd has no result for this call, because it restarted during the call or the result expired. The outcome is unknown, and the command may have partly run. It was not run again.";
 const CANCELLED_BEFORE_START_OUTPUT = "The call was cancelled before it started.";
 
 export type Calls = {
