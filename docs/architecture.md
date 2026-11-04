@@ -35,7 +35,7 @@ Three mechanisms make this safe:
 
 - A lease gives one runner a run. A runner renews its 15 second lease every 5 seconds, and it stops work on that run as soon as it loses the lease. A restarted runner claims the run after the lease expires.
 - Fencing rejects a stale runner. Every runner write carries the lease token, and each append also carries the expected sequence number. Convex rejects a write that fails either check.
-- A journal in `computerd` makes tool execution at most once. `computerd` writes a meta file with fsync before it starts a tool, and it writes the result to a temp file and renames it. The journal survives restarts of both processes. Results expire after 7 days, but meta files stay, so a call never runs twice however long the orchestrator was away. A call whose result expired answers `interrupted`.
+- A journal in `computerd` makes tool execution at most once. `computerd` writes a meta file with fsync before it starts a tool, and it writes the result to a temp file and renames it. The journal survives restarts of both processes. Results expire after 7 days, but meta files stay, so a call does not run twice however long the orchestrator was away. This holds only while the journal exists. A bot with `sudo` can delete the journal, which is one reason bots lose passwordless `sudo` at step 8. A call whose result expired answers `interrupted`.
 
 The runner persists an assistant turn before it sends any of the turn's tool calls. After a crash it sends each pending call again with the same call id, and `computerd` answers from what it finds:
 
@@ -43,7 +43,7 @@ The runner persists an assistant turn before it sends any of the turn's tool cal
 |---|---|
 | A result exists | The stored result, with no execution |
 | The call is running in this process | The running execution's result |
-| Only meta exists | `interrupted`, recorded and never rerun, because `computerd` died during the call |
+| Only meta exists | `interrupted`, recorded and never rerun, because `computerd` died during the call or the result expired |
 | Nothing exists | A new execution |
 
 A tool keeps running when the link or the orchestrator dies. A model call has no side effects, so a crash during streaming only repeats the call.
@@ -69,7 +69,7 @@ We can add Better Auth later without a large rewrite. Four rules keep that chang
 - Tables reference a `users` row and never a Tailscale login. The provider's ID sits in `users.authSubject`.
 - Convex trusts only the orchestrator's issuer, so a new login method changes one endpoint.
 - Clients get tokens through one `getToken()` function.
-- `users.email` holds the Tailscale login, which is how existing users would map to new accounts. A login is usually an email address, but some identity providers use a form such as `user@github`. Those users would need a manual match.
+- `users.email` holds the Tailscale login, which is how existing users would map to new accounts. A login is usually an email address, but not always the user's real one. GitHub logins look like `user@github`, and a login through Apple's private relay ends in `@privaterelay.appleid.com`. Those users would need a manual match.
 
 ### Local development uses dev mode
 
@@ -148,7 +148,7 @@ Chromium and `computerd` run under their own Linux user from the first version t
 
 ## Accepted risks
 
-- The server has one disk and no off-server backups. A disk failure loses every VM and every chat. ZFS snapshots protect only against a bot damaging its VM.
+- The server has one disk and no off-server backups. A disk failure loses every VM and every chat. LVM-thin snapshots protect only against a bot damaging its VM.
 - The operator can read friends' chats and keys. Friends need to know this.
 - Bots browse from the operator's home IP address, so abuse by one user reflects on that address.
 - Prompt injection remains possible. Approvals, read-only scheduled runs, and network rules limit the damage.
