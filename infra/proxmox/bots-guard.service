@@ -1,0 +1,15 @@
+[Unit]
+Description=Default-deny rules for the bots networks
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target pve-guests.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/bots/bots-guard.nft
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=pve-guests.service
