@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import {
@@ -285,9 +289,15 @@ function docker(argv: string[], env?: Record<string, string>): string {
   return result.stdout;
 }
 
-function computerCompose(args: { project: string; argv: string[]; env?: Record<string, string> }): string {
+function computerCompose(args: {
+  project: string;
+  argv: string[];
+  env?: Record<string, string>;
+  override?: string;
+}): string {
+  const files = [`${paths.computerdComposeDir}/compose.yaml`, ...(args.override === undefined ? [] : [args.override])];
   return docker(
-    ["compose", "--project-name", args.project, "--file", `${paths.computerdComposeDir}/compose.yaml`, ...args.argv],
+    ["compose", "--project-name", args.project, ...files.flatMap((file) => ["--file", file]), ...args.argv],
     { COMPUTER_TOKEN, ...args.env },
   );
 }
@@ -297,6 +307,10 @@ function startComputer(args: { project: string; linkPort: number }): string {
   const env = { COMPUTER_LINK_URL: `ws://host.docker.internal:${args.linkPort}` };
   computerCompose({ project: args.project, argv: ["up", "--detach", "--build", "--wait"], env });
   return computerCompose({ project: args.project, argv: ["ps", "--quiet", "computerd"] }).trim();
+}
+
+function computerService(args: { project: string; service: string }): string {
+  return computerCompose({ project: args.project, argv: ["ps", "--all", "--quiet", args.service] }).trim();
 }
 
 function stopComputer(project: string): void {
@@ -324,6 +338,18 @@ function shellResult(container: string, command: string): { ok: boolean; output:
     cwd: paths.repoRoot,
   });
   return result.kind === "ok" ? { ok: true, output: result.stdout } : { ok: false, output: result.output };
+}
+
+const execFileAsync = promisify(execFile);
+
+// Not spawnSync, which would stop this process's own listeners from answering, and a reached listener would look blocked.
+async function curlAsAgent(args: { container: string; url: string }): Promise<{ ok: boolean; output: string }> {
+  const argv = ["exec", args.container, "sudo", "-n", "-u", "agent", "curl", "-g", "-sS", "--max-time", "8", args.url];
+  try {
+    return { ok: true, output: (await execFileAsync("docker", argv)).stdout };
+  } catch (error) {
+    return { ok: false, output: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 const orchestratorPort = await findFreePort();
@@ -440,6 +466,10 @@ function turnsOf(run: TimelineRun) {
 
 function resultsOf(run: TimelineRun) {
   return bodiesOf(run).filter((body) => body.kind === "toolResult");
+}
+
+function connectedCount(): number {
+  return logsText().split('"event":"computer-connected"').length - 1;
 }
 
 function streamRows(runId: string): unknown[] {
@@ -1726,6 +1756,262 @@ try {
       assert.equal(shellResult(mainContainer.id, "test -e /app/.env.local").ok, false);
       assert.equal(shellResult(mainContainer.id, "test -e /app/packages/convex").ok, false);
     });
+  });
+
+  await scenario("O. a bot cannot reach the Mac or the LAN", async () => {
+    const netguard = computerService({ project: COMPUTER_PROJECT, service: "netguard" });
+    let otherPortHits = 0;
+    const otherPort = await findFreePort();
+    const v6LinkPort = await findFreePort();
+    const onOtherPort = (_: unknown, response: ServerResponse) => {
+      otherPortHits += 1;
+      response.end("reached");
+    };
+    // Docker Desktop forwards the host's IPv6 address to the Mac's ::1, and its IPv4 address to 127.0.0.1.
+    const listeners = [
+      createServer(onOtherPort).listen(otherPort, LOOPBACK),
+      createServer(onOtherPort).listen(otherPort, "::1"),
+      createServer((_, response) => response.end("reached")).listen(v6LinkPort, "::1"),
+    ];
+    const overrideDir = mkdtempSync(join(tmpdir(), "verify-agent-"));
+    const hostAddress = (family: string) =>
+      shellIn(mainContainer.id, `awk '$2 == "host.docker.internal" && $1 ${family} { print $1 }' /etc/hosts`).trim();
+    const hostV4 = hostAddress("!~ /:/");
+    const hostV6 = hostAddress("~ /:/");
+    const bridgeGateway = docker([
+      "inspect",
+      "--format",
+      "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}",
+      netguard,
+    ]).trim();
+    const hostName = "host.docker.internal";
+
+    try {
+      await check("from the Mac, the public listener issues a token and Convex answers, so a block means something", async () => {
+        const token = await fetch(`http://${LOOPBACK}:${orchestratorPort}/auth/token`);
+        assert.equal(token.status, 200);
+        assert.match(await token.text(), /eyJ/);
+        assert.ok((await fetch(`${convexUrl}/version`)).ok);
+      });
+      const tokensBefore = logsText().split('"event":"token-issued"').length;
+      const disconnectsBefore = logsText().split('"event":"computer-disconnected"').length;
+
+      const blocked = [
+        { name: "public-listener", label: "the public listener by name", url: `http://${hostName}:${orchestratorPort}/auth/token` },
+        { name: "public-listener-ip", label: "the public listener by address", url: `http://${hostV4}:${orchestratorPort}/auth/token` },
+        { name: "convex", label: "Convex on the host", url: `http://${hostName}:3210/version` },
+        { name: "other-port", label: "another port on the host gateway", url: `http://${hostName}:${otherPort}/` },
+        { name: "gateway-name", label: "gateway.docker.internal", url: "http://gateway.docker.internal:3210/version" },
+        { name: "bridge-gateway", label: "the bridge gateway", url: `http://${bridgeGateway}:3210/version` },
+        { name: "desktop-gateway", label: "192.168.65.1", url: "http://192.168.65.1:3210/version" },
+        { name: "ten", label: "10.0.0.1", url: "http://10.0.0.1/" },
+        { name: "carrier-grade", label: "100.64.0.1, which holds Tailscale addresses", url: "http://100.64.0.1/" },
+        { name: "link-local", label: "169.254.169.254", url: "http://169.254.169.254/" },
+        { name: "multicast", label: "224.0.0.1", url: "http://224.0.0.1/" },
+        { name: "v4-mapped", label: "a v4-mapped IPv6 address", url: `http://[::ffff:${hostV4}]:3210/version` },
+        ...(hostV6 === "" ? [] : [{ name: "v6-host", label: "the host's IPv6 address", url: `http://[${hostV6}]:3210/version` }]),
+      ];
+      const curl = (url: string) => `curl -g -sS --max-time 8 -H 'Host: localhost' '${url}'`;
+      const rawSocket = (domain: number, type: number, protocol: number) =>
+        `sudo -n perl -e 'print socket(my $s, ${domain}, ${type}, ${protocol}) ? "opened" : $!'`;
+      const script = [
+        'probe() { name=$1; shift; body=$("$@" 2>/dev/null); echo "probe $name $? [$body]"; }',
+        ...blocked.flatMap(({ name, url }) => [
+          `probe agent-${name} ${curl(url)}`,
+          `probe root-${name} sudo -n ${curl(url)}`,
+        ]),
+        `probe link-port curl -sS --max-time 8 -o /dev/null -w '%{http_code}' 'http://${hostName}:${linkPort}/'`,
+        "probe public curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://api.mistral.ai",
+        "probe flush-v4 sudo -n iptables -F",
+        "probe flush-v6 sudo -n ip6tables -F",
+        `probe raw-inet ${rawSocket(2, 3, 1)}`,
+        `probe raw-packet ${rawSocket(17, 3, 0)}`,
+        `probe vsock ${rawSocket(40, 1, 0)}`,
+        "echo \"user $(id -un) root $(sudo -n id -un)\"",
+        "sudo -n grep -E '^Cap(Eff|Bnd)' /proc/self/status",
+      ].join("\n");
+
+      const chat = await newChat({ client: first, name: "netguard" });
+      const text = `netguard ${nonce}`;
+      fake.script(text, ({ toolResults }) => {
+        switch (toolResults.length) {
+          case 0:
+            return { kind: "tools", delivery: "whole", calls: [shellCall(script, 300)] };
+          case 1:
+            return { kind: "tools", delivery: "whole", calls: [shellCall(`echo still-linked-${nonce}`)] };
+          default:
+            return { kind: "text", text: "the rules held" };
+        }
+      });
+      const run = await chat.settled(await chat.send(text), 300_000);
+      const [probes, afterProbes] = resultsOf(run);
+      const output = probes?.output ?? "";
+      const assertProbe = (name: string, expected: string) => {
+        const line = output.split("\n").find((candidate) => candidate.startsWith(`probe ${name} `));
+        assert.equal(line, `probe ${name} ${expected}`);
+      };
+
+      await check("the probes ran as a tool call, as agent with root through sudo", () => {
+        assert.equal(probes?.outcome, "ok");
+        assert.match(output, /^user agent root root$/m);
+      });
+      for (const { name, label } of blocked) {
+        await check(`${label} is refused at once for agent and for root, with no body`, () => {
+          assertProbe(`agent-${name}`, "7 []");
+          assertProbe(`root-${name}`, "7 []");
+        });
+      }
+      await check("no token came back, and the public listener issued none", () => {
+        assert.ok(!output.includes("eyJ"));
+        assert.equal(logsText().split('"event":"token-issued"').length, tokensBefore);
+      });
+      await check("nothing reached the other port on the Mac", () => assert.equal(otherPortHits, 0));
+      await check("the link port is open, and it answers only as the link listener", () => {
+        assertProbe("link-port", "0 [426]");
+      });
+      await check("a public host is reachable and DNS works (this needs internet, so it fails when the machine is offline)", () => {
+        assert.match(output, /^probe public 0 \[[1-5]\d\d\]$/m);
+      });
+      await check("root cannot flush the rules", () => {
+        assert.ok(!/^probe flush-v4 0 /m.test(output));
+        assert.ok(!/^probe flush-v6 0 /m.test(output));
+      });
+      await check("root holds neither NET_ADMIN nor NET_RAW, in its effective or bounding set", () => {
+        const NET_ADMIN = 1n << 12n;
+        const NET_RAW = 1n << 13n;
+        const CAP_SETUID = 1n << 7n;
+        for (const set of ["CapEff", "CapBnd"]) {
+          const value = BigInt(`0x${output.match(new RegExp(`^${set}:\\s+([0-9a-f]+)$`, "m"))?.[1] ?? ""}`);
+          assert.equal(value & NET_ADMIN, 0n, `${set} has NET_ADMIN`);
+          assert.equal(value & NET_RAW, 0n, `${set} has NET_RAW`);
+          assert.notEqual(value & CAP_SETUID, 0n, `${set} is not root's set, so this proves nothing`);
+        }
+      });
+      await check("root cannot open a raw socket, a packet socket, or a vsock", () => {
+        assertProbe("raw-inet", "0 [Operation not permitted]");
+        assertProbe("raw-packet", "0 [Operation not permitted]");
+        assertProbe("vsock", "0 [Operation not permitted]");
+      });
+      await check("the link stayed connected, and a tool call still works after the probes", () => {
+        assert.equal(logsText().split('"event":"computer-disconnected"').length, disconnectsBefore);
+        assert.equal(afterProbes?.outcome, "ok");
+        assert.match(afterProbes?.output ?? "", new RegExp(`still-linked-${nonce}`));
+        assert.equal(run.state.kind, "done");
+      });
+
+      const namespace = (container: string) => docker(["exec", container, "readlink", "/proc/self/ns/net"]).trim();
+      const untilLinked = async (action: () => void) => {
+        const before = connectedCount();
+        action();
+        await waitFor({
+          description: "computerd to reconnect",
+          timeoutMs: 30_000,
+          probe: () => (connectedCount() > before ? true : null),
+        });
+      };
+      const curlFromComputer = (url: string) => curlAsAgent({ container: mainContainer.id, url });
+
+      await check("netguard does not restart itself, so nothing starts a new namespace that has no rules yet", () => {
+        assert.equal(docker(["inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", netguard]).trim(), "no");
+      });
+      docker(["restart", "--timeout", "1", netguard]);
+      await check("a restarted netguard gets a new namespace and leaves computerd in the old one", () => {
+        assert.notEqual(namespace(mainContainer.id), namespace(netguard));
+      });
+      await check("computerd then has no route out at all, so it fails closed", async () => {
+        assert.ok(!shellIn(mainContainer.id, "cat /proc/net/dev").includes("eth0"));
+        assert.equal((await curlFromComputer("https://api.mistral.ai")).ok, false);
+        assert.equal((await curlFromComputer(`http://${hostV4}:${otherPort}/`)).ok, false);
+        assert.equal(otherPortHits, 0);
+      });
+      await untilLinked(() => docker(["restart", "--timeout", "1", mainContainer.id]));
+      await check("restarting computerd joins the new namespace, whose rules still hold", async () => {
+        assert.equal(namespace(mainContainer.id), namespace(netguard));
+        assert.equal((await curlFromComputer(`http://${hostV4}:${otherPort}/`)).ok, false);
+        assert.equal(otherPortHits, 0);
+      });
+
+      docker(["stop", "--timeout", "1", netguard]);
+      shellResult(mainContainer.id, "pkill -KILL -f '^node apps/computerd'");
+      const refused = await waitFor({
+        description: "the restart policy to try computerd",
+        timeoutMs: 20_000,
+        probe: () => {
+          const state = docker(["inspect", "--format", "{{.State.Status}} {{.State.Error}}", mainContainer.id]);
+          return state.startsWith("exited") && state.includes("network namespace") ? state : null;
+        },
+      });
+      await check("computerd cannot start while netguard is down", () => {
+        assert.match(refused, /non running container/);
+      });
+      await untilLinked(() =>
+        computerCompose({
+          project: COMPUTER_PROJECT,
+          argv: ["up", "--detach", "--wait"],
+          env: { COMPUTER_LINK_URL: `ws://host.docker.internal:${linkPort}` },
+        }),
+      );
+      const recovery = `netguard recovery ${nonce}`;
+      fake.script(recovery, ({ toolResults }) =>
+        toolResults.length === 0
+          ? {
+              kind: "tools",
+              delivery: "whole",
+              calls: [shellCall(`curl -sS --max-time 5 -o /dev/null http://${hostName}:${otherPort}/; echo curl-exit-$?`)],
+            }
+          : { kind: "text", text: "back" },
+      );
+      const recovered = await chat.settled(await chat.send(recovery));
+      await check("compose up brings both back, and the rules hold for a new tool call", () => {
+        assert.equal(resultsOf(recovered)[0]?.outcome, "ok");
+        assert.match(resultsOf(recovered)[0]?.output ?? "", /curl-exit-7/);
+        assert.equal(otherPortHits, 0);
+      });
+
+      await check("netguard refuses a link URL it cannot parse, and computerd never starts", () => {
+        const env = { COMPUTER_LINK_URL: "not-a-url" };
+        assert.throws(() => computerCompose({ project: DIRECT_PROJECT, argv: ["up", "--detach", "--wait"], env }));
+        assert.equal(
+          computerCompose({ project: DIRECT_PROJECT, argv: ["ps", "--all", "--format", "{{.State}}", "computerd"], env }).trim(),
+          "created",
+        );
+        stopComputer(DIRECT_PROJECT);
+      });
+
+      if (hostV6 === "") {
+        console.log("info  host.docker.internal has no IPv6 address here, so the IPv6 network checks did not run");
+        return;
+      }
+      const override = join(overrideDir, "ipv6.yaml");
+      writeFileSync(
+        override,
+        "networks:\n  default:\n    enable_ipv6: true\n    ipam:\n      config:\n        - subnet: fd00:b075::/64\n",
+      );
+      computerCompose({
+        project: DIRECT_PROJECT,
+        override,
+        argv: ["up", "--detach", "--wait"],
+        env: { COMPUTER_LINK_URL: `ws://host.docker.internal:${v6LinkPort}` },
+      });
+      const v6Computer = computerService({ project: DIRECT_PROJECT, service: "computerd" });
+      const curlV6 = (port: number) => curlAsAgent({ container: v6Computer, url: `http://[${hostV6}]:${port}/` });
+      await check("on a network with IPv6 on, the link port stays open over IPv6", async () => {
+        assert.deepEqual(await curlV6(v6LinkPort), { ok: true, output: "reached" });
+      });
+      await check("on a network with IPv6 on, IPv6 reaches no other port on the Mac", async () => {
+        assert.equal((await curlV6(otherPort)).ok, false);
+        assert.equal((await curlV6(orchestratorPort)).ok, false);
+        assert.equal((await curlV6(3210)).ok, false);
+        assert.equal(otherPortHits, 0);
+      });
+    } finally {
+      stopComputer(DIRECT_PROJECT);
+      rmSync(overrideDir, { recursive: true, force: true });
+      for (const listener of listeners) {
+        listener.closeAllConnections();
+        listener.close();
+      }
+    }
   });
 } catch (error) {
   failures += 1;
