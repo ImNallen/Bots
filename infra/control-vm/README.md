@@ -62,11 +62,11 @@ pnpm verify:tailnet https://bots-control.<tailnet>.ts.net 192.168.1.161
 
 Each run adds a bot named `verify-tailnet-*` to your list, because bots cannot be deleted yet.
 
-To prove what a user VM can reach, run these commands on the Proxmox host. The check scans every TCP port on six machine addresses, which took about 12 minutes on the Proxmox server. It also needs the tailnet addresses of VM 110, which `tailscale ip` prints on that VM.
+To prove what a user VM can reach, run these commands on the Proxmox host. The check reads the addresses of VM 110 through its guest agent. It scans every TCP port on eight machine addresses and the peer VM, and it runs packet captures on the host. The last full run took about 15 minutes.
 
 ```sh
 bash create-probe-vms.sh
-CONTROL_TAILNET=<IPv4 address> CONTROL_TAILNET6=<IPv6 address> bash verify-network.sh 901 902
+bash verify-network.sh 901 902
 bash create-probe-vms.sh --remove
 ```
 

@@ -213,9 +213,8 @@ async def check_addresses(args, all_ports):
         "proxmox-on-vm-network": args.gateway,
         "proxmox-on-control-network": args.control_gateway,
         "control-lan": args.control_lan,
+        "control-tailnet": args.control_tailnet,
     }
-    if args.control_tailnet:
-        machines["control-tailnet"] = args.control_tailnet
     for name, address in machines.items():
         found = await scan(address, all_ports)
         report(f"{name}: every tcp port on {address} is blocked ({len(all_ports)} ports)", not found, found[:20])
@@ -225,7 +224,7 @@ async def check_addresses(args, all_ports):
             report(f"{name}: udp {address}:{udp_port} is blocked", state == "blocked", state)
 
     report("lan-router: ping gets no reply", not ping(args.router))
-    found = await scan(args.router, SAMPLE_PORTS)
+    found = await scan(args.router, all_ports)
     report(f"lan-router: tcp on {args.router} is blocked", not found, found)
     state = udp(args.router, 53)
     report(f"lan-router: dns on {args.router} is blocked", state == "blocked", state)
@@ -249,27 +248,27 @@ async def check_addresses(args, all_ports):
         report(f"{name}: udp dns to {address} is blocked", state == "blocked", state)
 
 
-async def check_home_public():
+async def check_home_public(all_ports):
     try:
         with urllib.request.urlopen("https://api.ipify.org", timeout=10) as response:
             address = response.read().decode()
     except OSError as error:
         report("home-public: the probe learned the home public address", False, error)
         return
-    found = await scan(address, SAMPLE_PORTS)
-    report("home-public: tcp to the home public address is blocked", not found, found)
+    found = await scan(address, all_ports)
+    report(f"home-public: tcp to the home public address is blocked ({len(all_ports)} ports)", not found, found[:20])
     report("home-public: ping the home public address gets no reply", not ping(address))
 
 
-async def check_peer(args, interface):
+async def check_peer(args, interface, all_ports):
     peer = args.peer
     report(f"peer: ping {peer} gets no reply", not ping(peer))
-    found = await scan(peer, SAMPLE_PORTS)
+    found = await scan(peer, all_ports)
     report(f"peer: tcp to {peer} on the shared network is blocked", not found, found)
     run("ip", "route", "replace", f"{peer}/32", "via", args.gateway, "dev", interface)
     try:
-        found = await scan(peer, SAMPLE_PORTS)
-        report(f"peer: tcp to {peer} routed through the gateway is blocked", not found, found)
+        found = await scan(peer, all_ports)
+        report(f"peer: tcp to {peer} routed through the gateway is blocked", not found, found[:20])
     finally:
         run("ip", "route", "del", f"{peer}/32")
 
@@ -278,8 +277,7 @@ async def check_v6(args, interface):
     with contextlib.suppress(OSError):
         neighbors = v6_neighbors(interface)
         report("ipv6: ping ff02::1 gets no reply from another machine", not neighbors, neighbors)
-    targets = ["2606:4700:4700::1111"] + ([args.control_tailnet6] if args.control_tailnet6 else [])
-    for address in targets:
+    for address in ("2606:4700:4700::1111", args.control_tailnet6):
         state = await tcp(address, 443)
         report(f"ipv6: tcp {address}:443 is blocked", state == "blocked", state)
 
@@ -324,8 +322,8 @@ async def main():
     parser.add_argument("--host-lan", required=True)
     parser.add_argument("--control-lan", required=True)
     parser.add_argument("--router", required=True)
-    parser.add_argument("--control-tailnet", default="")
-    parser.add_argument("--control-tailnet6", default="")
+    parser.add_argument("--control-tailnet", required=True)
+    parser.add_argument("--control-tailnet6", required=True)
     parser.add_argument("--quick", action="store_true")
     args = parser.parse_args()
 
@@ -338,8 +336,8 @@ async def main():
     await check_link(args)
     await check_control_ports(args, all_ports)
     await check_addresses(args, all_ports)
-    await check_home_public()
-    await check_peer(args, interface)
+    await check_home_public(all_ports)
+    await check_peer(args, interface, all_ports)
     await check_v6(args, interface)
     await check_spoofing(args, interface)
 
