@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveIdentity, type AuthMode } from "./auth.ts";
 
-const dev: AuthMode = { kind: "dev", login: "dev@localhost" };
+const dev: AuthMode = { kind: "dev", login: "dev@localhost", computerToken: "token" };
 const tailscale: AuthMode = { kind: "tailscale" };
 
 describe("tailscale mode", () => {

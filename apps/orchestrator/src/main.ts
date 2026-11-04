@@ -1,47 +1,55 @@
+import { api } from "@bots/convex";
+import type { Id } from "@bots/convex/dataModel";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { SignJWT, importJWK } from "jose";
-import { resolveIdentity, type Identity, type RejectionReason } from "./auth.ts";
+import { REJECTION_STATUS, identityFor, resolveIdentity } from "./auth.ts";
 import { parseConfig } from "./config.ts";
+import { keyRoutes } from "./keys.ts";
+import { startLink } from "./link.ts";
+import { log } from "./log.ts";
+import { startRunner } from "./runner.ts";
+import { hashComputerToken } from "./secrets.ts";
+import { createService } from "./service.ts";
 import { loadStaticFiles, resolveStaticFile } from "./static.ts";
+import { createTokenIssuer } from "./tokens.ts";
 
 // tailscale serve is the only thing able to reach this socket, which is what makes its identity header unforgeable.
 const HOST = "127.0.0.1";
-// Convex checks this against applicationID in packages/convex/convex/auth.config.ts.
-const AUDIENCE = "bots";
-const TOKEN_TTL_SECONDS = 60 * 60;
-
-const REJECTION_STATUS = {
-  "missing-tailscale-login": 401,
-  "proxied-request": 403,
-  "non-loopback-host": 403,
-} as const satisfies Record<RejectionReason, number>;
-
-function log(args: { level: "info" | "warn"; event: string; [field: string]: unknown }): void {
-  process.stdout.write(`${JSON.stringify({ time: new Date().toISOString(), ...args })}\n`);
-}
 
 const config = parseConfig(process.env);
-const signingKey = await importJWK(config.signingKey.jwk, "ES256");
+const issuer = await createTokenIssuer(config);
+const service = createService({ url: config.convexUrl, issuer });
 const staticFiles = await loadStaticFiles({ distDir: config.webDistDir });
 
 if (staticFiles.size === 0) {
   log({ level: "warn", event: "web-dist-empty", webDistDir: config.webDistDir });
 }
 
-async function issueToken(identity: Identity): Promise<{ token: string; expiresAt: number }> {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + TOKEN_TTL_SECONDS;
-  const token = await new SignJWT({ email: identity.email, name: identity.displayName })
-    .setProtectedHeader({ alg: "ES256", kid: config.signingKey.kid, typ: "JWT" })
-    .setSubject(identity.subject)
-    .setIssuer(config.issuer)
-    .setAudience(AUDIENCE)
-    .setIssuedAt(issuedAt)
-    .setExpirationTime(expiresAt)
-    .sign(signingKey);
-  return { token, expiresAt };
+// A dev orchestrator serves one login, so it leaves every other owner's runs to whichever process serves that owner.
+async function registerDevComputer(): Promise<Id<"users"> | undefined> {
+  if (config.authMode.kind !== "dev") {
+    return undefined;
+  }
+  const identity = identityFor({ provider: "dev", login: config.authMode.login });
+  const { ownerId } = await service.mutation(api.computers.register, {
+    ownerSubject: identity.subject,
+    email: identity.email,
+    displayName: identity.displayName,
+    tokenHash: hashComputerToken(config.authMode.computerToken),
+  });
+  return ownerId;
 }
+
+const ownerScope = await registerDevComputer();
+
+const link = startLink({
+  ...config.link,
+  computerWaitMs: config.computerWaitMs,
+  authenticate: (token) => service.query(api.computers.byTokenHash, { tokenHash: hashComputerToken(token) }),
+  log,
+});
+
+startRunner({ service, link, masterKey: config.masterKey, mistral: config.mistral, ownerScope, log });
 
 const app = new Hono();
 
@@ -53,7 +61,7 @@ app.get("/auth/token", async (c) => {
   switch (result.kind) {
     case "ok": {
       log({ level: "info", event: "token-issued", subject: result.identity.subject });
-      return c.json(await issueToken(result.identity));
+      return c.json(await issuer.forUser(result.identity));
     }
     case "rejected": {
       log({ level: "warn", event: "token-rejected", reason: result.reason });
@@ -63,6 +71,19 @@ app.get("/auth/token", async (c) => {
 });
 
 app.all("/auth/*", (c) => c.json({ error: "not-found" }, 404));
+
+app.route(
+  "/api/mistral-key",
+  keyRoutes({
+    authMode: config.authMode,
+    masterKey: config.masterKey,
+    mistralBaseUrl: config.mistral.baseUrl,
+    service,
+    log,
+  }),
+);
+
+app.all("/api/*", (c) => c.json({ error: "not-found" }, 404));
 
 app.get("*", (c) => {
   const file = resolveStaticFile({ files: staticFiles, pathname: new URL(c.req.url).pathname });

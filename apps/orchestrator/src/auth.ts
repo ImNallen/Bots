@@ -1,4 +1,4 @@
-export type AuthMode = { kind: "tailscale" } | { kind: "dev"; login: string };
+export type AuthMode = { kind: "tailscale" } | { kind: "dev"; login: string; computerToken: string };
 
 export type Identity = {
   subject: string;
@@ -15,6 +15,12 @@ export type IdentityResult =
   | { kind: "ok"; identity: Identity }
   | { kind: "rejected"; reason: RejectionReason };
 
+export const REJECTION_STATUS = {
+  "missing-tailscale-login": 401,
+  "proxied-request": 403,
+  "non-loopback-host": 403,
+} as const satisfies Record<RejectionReason, number>;
+
 const PROXY_HEADERS = [
   "tailscale-user-login",
   "x-forwarded-for",
@@ -24,14 +30,11 @@ const PROXY_HEADERS = [
 
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
-function identityFor(args: { provider: AuthMode["kind"]; login: string }): IdentityResult {
+export function identityFor(args: { provider: AuthMode["kind"]; login: string }): Identity {
   return {
-    kind: "ok",
-    identity: {
-      subject: `${args.provider}:${args.login}`,
-      email: args.login,
-      displayName: args.login,
-    },
+    subject: `${args.provider}:${args.login}`,
+    email: args.login,
+    displayName: args.login,
   };
 }
 
@@ -43,7 +46,7 @@ export function resolveIdentity(args: { mode: AuthMode; headers: Headers }): Ide
       if (login === null || login === "") {
         return { kind: "rejected", reason: "missing-tailscale-login" };
       }
-      return identityFor({ provider: "tailscale", login });
+      return { kind: "ok", identity: identityFor({ provider: "tailscale", login }) };
     }
     case "dev": {
       if (PROXY_HEADERS.some((name) => headers.has(name))) {
@@ -52,7 +55,7 @@ export function resolveIdentity(args: { mode: AuthMode; headers: Headers }): Ide
       if (!LOOPBACK_HOST.test(headers.get("host") ?? "")) {
         return { kind: "rejected", reason: "non-loopback-host" };
       }
-      return identityFor({ provider: "dev", login: mode.login });
+      return { kind: "ok", identity: identityFor({ provider: "dev", login: mode.login }) };
     }
   }
 }

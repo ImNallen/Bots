@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { calculateJwkThumbprint, exportJWK, generateKeyPair } from "jose";
 import {
@@ -15,6 +16,7 @@ const CONVEX_URL = "http://127.0.0.1:3210";
 const DEFAULT_ISSUER = "https://orchestrator.bots.localhost";
 const DEFAULT_DEV_LOGIN = "dev@localhost";
 const DEFAULT_PORT = "8787";
+const DEFAULT_LINK_PORT = "8788";
 
 function report(args: { step: string; outcome: string }): void {
   console.log(`${args.step}: ${args.outcome}`);
@@ -47,14 +49,18 @@ async function generatePrivateJwk(): Promise<PrivateJwk> {
   return parsePrivateJwk(JSON.stringify({ ...jwk, kid }));
 }
 
-async function ensureRootEnv(): Promise<{ privateJwk: PrivateJwk; issuer: string }> {
+type RootEnv = { privateJwk: PrivateJwk; issuer: string; computerToken: string; linkPort: string };
+
+async function ensureRootEnv(): Promise<RootEnv> {
   const existing = readEnvFile(paths.rootEnv);
   const missing: Record<string, string> = {};
   const defaults = {
     AUTH_MODE: "dev",
     DEV_LOGIN: DEFAULT_DEV_LOGIN,
     PORT: DEFAULT_PORT,
+    LINK_PORT: DEFAULT_LINK_PORT,
     JWT_ISSUER: DEFAULT_ISSUER,
+    CONVEX_URL,
   };
   for (const [key, value] of Object.entries(defaults)) {
     if (existing[key] === undefined) {
@@ -68,6 +74,14 @@ async function ensureRootEnv(): Promise<{ privateJwk: PrivateJwk; issuer: string
   if (existing.JWT_PRIVATE_JWK === undefined) {
     missing.JWT_PRIVATE_JWK = JSON.stringify(privateJwk);
   }
+  // Rotating MASTER_KEY would orphan every stored key, so this only ever adds a missing one.
+  if (existing.MASTER_KEY === undefined) {
+    missing.MASTER_KEY = randomBytes(32).toString("base64");
+  }
+  const computerToken = existing.COMPUTER_TOKEN ?? randomBytes(32).toString("base64url");
+  if (existing.COMPUTER_TOKEN === undefined) {
+    missing.COMPUTER_TOKEN = computerToken;
+  }
   const added = Object.keys(missing);
   if (added.length > 0) {
     addMissingEnvValues({ path: paths.rootEnv, missing });
@@ -76,7 +90,12 @@ async function ensureRootEnv(): Promise<{ privateJwk: PrivateJwk; issuer: string
     step: ".env.local",
     outcome: added.length > 0 ? `added ${added.join(", ")}` : "unchanged",
   });
-  return { privateJwk, issuer: existing.JWT_ISSUER ?? DEFAULT_ISSUER };
+  return {
+    privateJwk,
+    issuer: existing.JWT_ISSUER ?? DEFAULT_ISSUER,
+    computerToken,
+    linkPort: existing.LINK_PORT ?? DEFAULT_LINK_PORT,
+  };
 }
 
 function ensureWebEnv(): void {
@@ -167,9 +186,26 @@ function deployFunctions(): void {
   report({ step: "convex functions", outcome: "deployed" });
 }
 
-const { privateJwk, issuer } = await ensureRootEnv();
+function startComputer(args: { computerToken: string; linkPort: string }): void {
+  requireOk({
+    step: "docker compose up computerd",
+    result: runCommand({
+      command: "docker",
+      argv: ["compose", "up", "--detach", "--build", "--wait"],
+      cwd: paths.computerdComposeDir,
+      env: {
+        COMPUTER_TOKEN: args.computerToken,
+        COMPUTER_LINK_URL: `ws://host.docker.internal:${args.linkPort}`,
+      },
+    }),
+  });
+  report({ step: "computerd", outcome: "running" });
+}
+
+const { privateJwk, issuer, computerToken, linkPort } = await ensureRootEnv();
 ensureWebEnv();
 startContainers();
 ensureAdminKey();
 ensureConvexEnv({ privateJwk, issuer });
 deployFunctions();
+startComputer({ computerToken, linkPort });
