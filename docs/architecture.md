@@ -27,6 +27,31 @@ The cost is that one process serves every user, so a crash affects everyone unti
 
 Convex actions are not an option for the loop. They stop after 30 minutes, or 10 minutes on the Node runtime, and every user would share the one self-hosted backend.
 
+## How a run recovers from a crash
+
+The ordered `runEvents` rows are the truth about a run. A pure function reads them and returns the next action, so the runner keeps no state that a restart could lose. A tool call is pending when an assistant turn lists it and no tool result has its id.
+
+Three mechanisms make this safe:
+
+- A lease gives one runner a run. A runner renews its 15 second lease every 5 seconds, and it stops work on that run as soon as it loses the lease. A restarted runner claims the run after the lease expires.
+- Fencing rejects a stale runner. Every runner write carries the lease token, and each append also carries the expected sequence number. Convex rejects a write that fails either check.
+- A journal in `computerd` makes tool execution at most once. `computerd` writes a meta file with fsync before it starts a tool, and it writes the result to a temp file and renames it. The journal survives restarts of both processes, and it keeps entries for 7 days.
+
+The runner persists an assistant turn before it sends any of the turn's tool calls. After a crash it sends each pending call again with the same call id, and `computerd` answers from what it finds:
+
+| Journal state | Answer |
+|---|---|
+| A result exists | The stored result, with no execution |
+| The call is running in this process | The running execution's result |
+| Only meta exists | `interrupted`, recorded and never rerun, because `computerd` died during the call |
+| Nothing exists | A new execution |
+
+A tool keeps running when the link or the orchestrator dies. A model call has no side effects, so a crash during streaming only repeats the call.
+
+An `interrupted` or `unavailable` outcome tells the model that a side effect may have partly happened. The system refuses to guess, because a repeated payment is worse than a question.
+
+Any unexpected error in the runner ends that attempt and leaves the lease to expire. Recovery from a transient failure therefore takes the same path as recovery from a crash, at the cost of waiting for the lease.
+
 ## Why identity comes from Tailscale
 
 Tailscale already knows who each user is, so friends see no login form. The flow has three steps:
@@ -35,7 +60,7 @@ Tailscale already knows who each user is, so friends see no login form. The flow
 2. The orchestrator reads the header at `GET /auth/token` and returns a short-lived ES256 JWT.
 3. Convex trusts JWTs from that issuer, and it loads the public key from an inline data URI.
 
-The orchestrator listens only on `127.0.0.1`, so nothing can reach it around `tailscale serve` and forge the header.
+The orchestrator's public listener binds only to `127.0.0.1`, so nothing can reach it around `tailscale serve` and forge the header. `computerd` reaches a second listener that serves only the link WebSocket and never `/auth` or web files.
 
 We can add Better Auth later without a large rewrite. Four rules keep that change small:
 
@@ -46,7 +71,9 @@ We can add Better Auth later without a large rewrite. Four rules keep that chang
 
 ### Local development uses dev mode
 
-`AUTH_MODE=dev` returns a token for one fixed login without Tailscale. A dev-mode server would be an open door if it were ever exposed, because later steps give bots a shell. The orchestrator rejects a dev-mode request if it has a forwarding header or a host name other than loopback. That check also covers a dev-mode server placed behind `tailscale serve` by mistake.
+`AUTH_MODE=dev` returns a token for one fixed login without Tailscale. A dev-mode server would be an open door if it were ever exposed, because bots have a shell. The orchestrator rejects a dev-mode request if it has a forwarding header or a host name other than loopback. That check also covers a dev-mode server placed behind `tailscale serve` by mistake.
+
+A dev-mode orchestrator registers its own login's computer at startup, and it claims only that login's runs. Test orchestrators therefore share one Convex backend with a developer's own without touching each other's runs.
 
 ## Why only the control VM joins the tailnet
 
@@ -82,7 +109,11 @@ The test did not cover real websites, more than two screens, input through a VNC
 
 ## Where secrets live
 
-The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores ciphertext only. Bots call connector tools without receiving the tokens.
+The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores ciphertext only. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.
+
+The orchestrator signs a short-lived JWT with the subject `service:orchestrator` for its own Convex calls, and every service function checks that exact subject. User subjects always start with `dev:` or `tailscale:`, so a user token cannot pass that check.
+
+`computerd` holds only its link token. A VM is untrusted, so the orchestrator validates every link message, closes the socket on an invalid one, accepts a result only for a call it sent on that socket, and caps output again.
 
 Logins that a user types into a VM's browser stay in that VM's shared browser profile, so every bot on that VM can use them. A user logs in through take-over until the Vault ships, so passwords never enter the chat. When the Vault ships, bots lose passwordless `sudo`. Otherwise a bot could read a filled password from browser memory.
 
