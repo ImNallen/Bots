@@ -1,5 +1,5 @@
 [Match]
-Name=eth1
+Name=ens19
 
 [Network]
 Address=10.78.0.2/30

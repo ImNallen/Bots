@@ -54,6 +54,10 @@ if nft list table inet bots_guard >/dev/null 2>&1; then guard=true; else guard=f
 result "$guard" "host: the bots_guard table is loaded"
 if systemctl is-enabled --quiet bots-guard.service; then enabled=true; else enabled=false; fi
 result "$enabled" "host: bots-guard.service loads the table at boot"
+[ -z "$(systemctl show -p RequiredBy --value bots-guard.service)" ] && free=true || free=false
+result "$free" "host: restarting bots-guard.service cannot stop guests, because nothing requires it"
+systemctl cat pve-guests.service | grep -q '^ExecStartPre=/usr/sbin/nft list table inet bots_guard' && gated=true || gated=false
+result "$gated" "host: guests do not autostart without the table"
 
 for vm in "$probe_vm" "$peer_vm"; do
   net=$(qm config "$vm" | sed -n 's/^net0: //p')

@@ -29,11 +29,11 @@ git reset --quiet --hard "origin/$BRANCH"
 install -m 0644 infra/control-vm/20-bots-link.network /etc/systemd/network/20-bots-link.network
 networkctl reload
 for _ in $(seq 1 15); do
-  ip -4 addr show dev eth1 2>/dev/null | grep -q " $LINK_HOST/" && break
+  ip -4 -o addr show | grep -q " $LINK_HOST/" && break
   sleep 1
 done
-if ! ip -4 addr show dev eth1 2>/dev/null | grep -q " $LINK_HOST/"; then
-  echo "This machine has no $LINK_HOST on eth1. Run infra/proxmox/create-network.sh on the Proxmox host first." >&2
+if ! ip -4 -o addr show | grep -q " $LINK_HOST/"; then
+  echo "This machine does not have the address $LINK_HOST. Run infra/proxmox/create-network.sh on the Proxmox host first." >&2
   exit 1
 fi
 
