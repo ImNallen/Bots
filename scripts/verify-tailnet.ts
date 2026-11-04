@@ -8,7 +8,7 @@ import { decodeJwt } from "jose";
 const CONVEX_PORT = 8443;
 const LIVE_UPDATE_TIMEOUT_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 3000;
-const PRIVATE_PORTS = [8787, 8788, 3210, 3211, 6791];
+const PRIVATE_PORTS = [443, 8443, 8787, 8788, 3210, 3211, 6791];
 
 const [origin, lanAddress] = process.argv.slice(2);
 if (origin === undefined || !URL.canParse(origin)) {

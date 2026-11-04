@@ -43,8 +43,6 @@ if [ "$(pnpm -v 2>/dev/null || true)" != "$PNPM_VERSION" ]; then
   npm install --global --silent "pnpm@$PNPM_VERSION"
 fi
 
-id bots >/dev/null 2>&1 || useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin bots
-
 if [ ! -d "$APP_DIR/.git" ]; then
   git clone --quiet "$REPO_URL" "$APP_DIR"
 fi

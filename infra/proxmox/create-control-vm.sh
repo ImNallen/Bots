@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run on the Proxmox host. Pass a file of SSH public keys. Safe to rerun, and safe after being killed midway.
+# Run on the Proxmox host. Pass a file of SSH public keys. Safe to rerun.
 set -euo pipefail
 
 VMID=110
@@ -14,9 +14,13 @@ IMAGE=debian-13-genericcloud-amd64.qcow2
 IMPORT_DIR=/var/lib/vz/import
 VENDOR_SNIPPET=bots-control-vendor.yaml
 
-keys_file=${1:?usage: create-control-vm.sh SSH_PUBLIC_KEYS_FILE}
+keys_file=$(realpath "${1:?usage: create-control-vm.sh SSH_PUBLIC_KEYS_FILE}")
 
 if [ -f "/etc/pve/qemu-server/$VMID.conf" ]; then
+  if grep -q '^lock: create' "/etc/pve/qemu-server/$VMID.conf"; then
+    echo "An earlier run stopped while creating VM $VMID. Check that it holds nothing, run: qm destroy $VMID --skiplock, then rerun this script." >&2
+    exit 1
+  fi
   have=$(qm config "$VMID" | sed -n 's/^name: //p')
   if [ "$have" != "$NAME" ]; then
     echo "VM $VMID already exists and is named $have, so this script will not touch it" >&2

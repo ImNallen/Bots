@@ -5,7 +5,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 | Step | Status | Build | Done when |
 |---|---|---|---|
 | 1a | Done | Repository, Convex in Docker, dev mode, and the web shell, on a Mac | The web app shows a live Convex query, using a JWT from `/auth/token` |
-| 1b | Done | Control VM, `tailscale serve`, and Tailscale mode, on Proxmox | A second Tailscale account and a phone browser see the same live query, each as its own user |
+| 1b | Done, with gaps listed below | Control VM, `tailscale serve`, and Tailscale mode, on Proxmox | A second Tailscale account and a phone browser see the same live query, each as its own user |
 | 2 | Done | Agent loop and shell and file tools, with `computerd` in Docker | A user chats with a bot in the web UI, and killing the orchestrator mid-tool resumes the run with no duplicate side effects |
 | 3 | **Next** | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
@@ -22,7 +22,8 @@ Backups are deferred. Add off-server copies of Convex exports and the master key
 
 - The Proxmox host is `192.168.1.32`. Log in as `root` over SSH.
 - The control VM is VM 110, `bots-control`, at `192.168.1.161`. Log in as `bots` over SSH, which has passwordless `sudo`. The app is in `/opt/bots`.
-- Run `tailscale status` on the control VM to find its `https://bots-control.<tailnet>.ts.net` address.
+- Run `sudo tailscale serve status` on the control VM to find its `https://bots-control.<tailnet>.ts.net` address.
+- The service runs as `bots-orchestrator`, which has no `sudo`. Keep it separate from the `bots` login: a process can take over another process of its own user, and `bots` has `sudo`.
 - The control VM deploys a branch until someone deploys another. After the first merge to `main`, run [the deploy script](../infra/control-vm/README.md) with `main`.
 - Your Mac has its own Convex data and its own Mistral key, separate from the control VM.
 
@@ -79,8 +80,10 @@ These are open on purpose. Fix each one when the work reaches it.
 - The orchestrator sends no CSP, `X-Frame-Options`, or `nosniff` header.
 - `scripts/bootstrap.ts` appends to an env file without checking for a trailing newline. The orchestrator then refuses to start, so this fails closed.
 - `parsePrivateJwk` in `scripts/lib.ts` can echo part of a malformed key to the local terminal.
-- The Docker tags `bots-computerd:dev` and `bots-netguard:dev` are shared, so `pnpm verify:agent` replaces a developer's local images.
+- The Docker tags `bots-computerd:dev` and `bots-netguard:dev` are shared, so `pnpm bootstrap` and `pnpm verify:agent` replace a developer's local images.
 - The runner does not cap the model name in a response. Scenario P in `scripts/verify-agent.ts` uses this as its trigger, so update that scenario if you add a cap.
+- A kill during the disk import of `infra/proxmox/create-control-vm.sh` leaves a locked stub VM. A rerun explains the fix instead of converging.
+- `pnpm verify:tailnet` does not check that `systemd-resolved` on port 5355 and SSH on port 22 stay private, and both answer on the VM's LAN address today.
 - Bots cannot be deleted, so `pnpm verify:tailnet` leaves `verify-tailnet-*` bots in the user's list.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.

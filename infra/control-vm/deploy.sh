@@ -5,6 +5,7 @@ set -euo pipefail
 BRANCH=${1:-main}
 APP_DIR=/opt/bots
 CONVEX_PORT=8443
+SERVICE_USER=bots-orchestrator
 UNIT=/etc/systemd/system/bots-orchestrator.service
 
 dns_name=$(tailscale status --json | node -e '
@@ -33,8 +34,9 @@ CI=true pnpm install --frozen-lockfile --silent
 pnpm bootstrap
 pnpm --filter @bots/web run build >/dev/null
 
-# Only the orchestrator's process needs to read its secrets. It cannot change its own code, and it is not in the docker group.
-chown bots:bots .env.local
+# The SSH login has sudo, and a process can take over another process of its own user. So the service needs a user of its own.
+id "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home-dir "$APP_DIR" --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+chown "$SERVICE_USER:$SERVICE_USER" .env.local
 install -m 0644 infra/control-vm/bots-orchestrator.service "$UNIT"
 systemctl daemon-reload
 systemctl enable --quiet bots-orchestrator
