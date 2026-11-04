@@ -1970,6 +1970,8 @@ try {
           env: { COMPUTER_LINK_URL: `ws://host.docker.internal:${linkPort}` },
         }),
       );
+      // F rebuilt the image tag under another project, which adds a different label, so this up replaces the containers.
+      mainContainer.id = computerService({ project: COMPUTER_PROJECT, service: "computerd" });
       const recovery = `netguard recovery ${nonce}`;
       fake.script(recovery, ({ toolResults }) =>
         toolResults.length === 0
