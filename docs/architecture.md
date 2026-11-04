@@ -125,6 +125,7 @@ Chromium and `computerd` run under their own Linux user from the first version t
 - The operator can read friends' chats and keys. Friends need to know this.
 - Bots browse from the operator's home IP address, so abuse by one user reflects on that address.
 - Prompt injection remains possible. Approvals, read-only scheduled runs, and network rules limit the damage.
+- Until step 3, bots are not isolated on a Mac. Docker Desktop forwards `host.docker.internal` to services bound to the Mac's loopback address. We tested this: a command in the `computerd` container reached Convex, and it got the dev login's token by sending `Host: localhost` to the public listener. A bot can therefore act as the dev login and reach anything else on the Mac's loopback address. Do not give a bot on a Mac a task you would not run on the Mac itself.
 
 ## What we took from other products
 
