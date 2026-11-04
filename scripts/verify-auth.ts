@@ -243,9 +243,10 @@ try {
     assert.equal(firstClaims.sub, `dev:${VERIFY_LOGIN}`);
     assert.equal(typeof firstClaims.iss, "string");
     assert.equal(typeof firstClaims.aud, "string");
-    assert.equal(typeof firstClaims.iat, "number");
-    assert.equal(firstClaims.exp, expiresAt);
-    assert.equal(firstClaims.exp! - firstClaims.iat!, 3600);
+    const { iat, exp } = firstClaims;
+    assert.ok(typeof iat === "number" && typeof exp === "number", "iat or exp is missing");
+    assert.equal(exp, expiresAt);
+    assert.equal(exp - iat, 3600);
   });
 
   await check("token verifies against the JWKS published in the Convex deployment", async () => {

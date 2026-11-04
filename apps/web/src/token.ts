@@ -3,13 +3,6 @@ export type TokenResult =
   | { kind: "rejected"; status: number; error: string }
   | { kind: "unreachable" };
 
-function readProperty(args: { body: unknown; name: string }): unknown {
-  if (typeof args.body !== "object" || args.body === null) {
-    return undefined;
-  }
-  return Object.getOwnPropertyDescriptor(args.body, args.name)?.value;
-}
-
 export async function getToken(): Promise<TokenResult> {
   let response: Response;
   try {
@@ -18,14 +11,13 @@ export async function getToken(): Promise<TokenResult> {
     return { kind: "unreachable" };
   }
   const body: unknown = await response.json().catch(() => null);
-  const token = readProperty({ body, name: "token" });
-  if (response.ok && typeof token === "string") {
-    return { kind: "ok", token };
+  if (typeof body === "object" && body !== null) {
+    if (response.ok && "token" in body && typeof body.token === "string") {
+      return { kind: "ok", token: body.token };
+    }
+    if ("error" in body && typeof body.error === "string") {
+      return { kind: "rejected", status: response.status, error: body.error };
+    }
   }
-  const error = readProperty({ body, name: "error" });
-  return {
-    kind: "rejected",
-    status: response.status,
-    error: typeof error === "string" ? error : "unexpected response",
-  };
+  return { kind: "rejected", status: response.status, error: "unexpected response" };
 }
