@@ -49,7 +49,7 @@ Both verify commands need the containers from `pnpm bootstrap`. Each starts its 
 ## Stop it
 
 ```sh
-docker compose --file apps/computerd/compose.yaml down
+docker compose --env-file .env.local --file apps/computerd/compose.yaml down
 docker compose --file infra/control-vm/compose.yaml down
 ```
 
