@@ -42,7 +42,7 @@ We can add Better Auth later without a large rewrite. Four rules keep that chang
 - Tables reference a `users` row and never a Tailscale login. The provider's ID sits in `users.authSubject`.
 - Convex trusts only the orchestrator's issuer, so a new login method changes one endpoint.
 - Clients get tokens through one `getToken()` function.
-- `users.email` holds a verified email, which is how existing users would map to new accounts.
+- `users.email` holds the Tailscale login, which is how existing users would map to new accounts. A login is usually an email address, but some identity providers use a form such as `user@github`. Those users would need a manual match.
 
 ### Local development uses dev mode
 
