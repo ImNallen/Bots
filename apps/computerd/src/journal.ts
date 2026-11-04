@@ -87,12 +87,16 @@ export async function openJournal(args: { dir: string }): Promise<Journal> {
       await syncDirectory();
     },
 
+    // A meta file is never pruned. It is what stops a call from running twice, however long the orchestrator was away.
     async prune({ now, maxAgeMs }) {
       let pruned = 0;
       for (const name of await readdir(dir)) {
+        if (name.endsWith(META_SUFFIX)) {
+          continue;
+        }
         const path = join(dir, name);
         const { mtimeMs } = await stat(path);
-        if (name.endsWith(TEMP_SUFFIX) || now - mtimeMs > maxAgeMs) {
+        if (now - mtimeMs > maxAgeMs) {
           await rm(path, { force: true });
           pruned += 1;
         }
