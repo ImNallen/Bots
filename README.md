@@ -42,9 +42,9 @@ The orchestrator reads these optional settings from `.env.local`:
 | `pnpm typecheck` | Every package typechecks |
 | `pnpm test` | Identity, config, run decisions, message mapping, stream parsing, encryption, the journal, and the output cap behave as specified |
 | `pnpm verify:auth` | Tokens, live queries, user isolation, the dev guard, the link listener's boundary, and file serving work against the real Convex backend and the real orchestrator |
-| `pnpm verify:agent` | Key handling, tools, crash recovery with no duplicate side effects, fencing, cancel, timeouts, link security, isolation, secret placement, and the network rules work against the real Convex backend, a real orchestrator process, and a real `computerd` container, with a scripted fake Mistral |
+| `pnpm verify:agent` | Key handling, tools, crash recovery with no duplicate side effects, fencing, cancel, timeouts, link security, isolation, secret placement, the network rules, and the limit on attempts with no progress work against the real Convex backend, a real orchestrator process, and a real `computerd` container, with a scripted fake Mistral |
 
-Both verify commands need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about three minutes. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
+Both verify commands need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about seven minutes. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
 
 ## Stop it
 

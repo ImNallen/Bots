@@ -52,6 +52,8 @@ An `interrupted` or `unavailable` outcome tells the model that a side effect may
 
 Any unexpected error in the runner ends that attempt and leaves the lease to expire. Recovery from a transient failure therefore takes the same path as recovery from a crash, at the cost of waiting for the lease.
 
+`runs.claim` ends a run after 5 attempts in a row that stored no event, because each attempt can pay for a model call on the user's key with nobody watching.
+
 ## Why identity comes from Tailscale
 
 Tailscale already knows who each user is, so friends see no login form. The flow has three steps:
