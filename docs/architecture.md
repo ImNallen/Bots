@@ -52,7 +52,7 @@ An `interrupted` or `unavailable` outcome tells the model that a side effect may
 
 Any unexpected error in the runner ends that attempt and leaves the lease to expire. Recovery from a transient failure therefore takes the same path as recovery from a crash, at the cost of waiting for the lease.
 
-`runs.claim` ends a run after 5 attempts in a row that stored no event, because each attempt can pay for a model call on the user's key with nobody watching.
+`runs.claim` ends a run after 5 attempts in a row that stored no event, because each attempt can pay for a model call on the user's key with nobody watching. The same mutation records an `unavailable` result for any tool call the run never answered. Every later model request replays the thread's history, and a call with no result would make that history malformed.
 
 ## Why identity comes from Tailscale
 
