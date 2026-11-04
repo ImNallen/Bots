@@ -1,6 +1,6 @@
 #!/bin/bash
 # From a VM, the home network's public address reaches the router's own services through hairpin NAT, and it looks like
-# any other public address. So the guard needs to know it. A failed lookup keeps the previous address.
+# any other public address. So the guard needs to know it.
 set -euo pipefail
 
 CACHE=/var/lib/bots/public-ip

@@ -1,6 +1,4 @@
 #!/usr/sbin/nft -f
-# Default-deny for the two bots networks. This table depends on no per-VM flag, so a VM created by mistake with its
-# firewall off is still held to these rules. Other traffic on this host passes through untouched.
 
 table inet bots_guard
 delete table inet bots_guard
