@@ -2,7 +2,7 @@
 
 A self-hosted agent platform. See the [architecture](docs/architecture.md) and the [roadmap](docs/roadmap.md).
 
-This repository is at roadmap step 2. It runs Convex and `computerd` in Docker, and the orchestrator in dev mode and the web app on one Mac. A user chats with a bot, and the bot runs shell and file tools in the `computerd` container.
+This repository is at roadmap step 2, and step 1b has run on Proxmox. The steps below run Convex and `computerd` in Docker, and the orchestrator in dev mode and the web app on one Mac. A user chats with a bot, and the bot runs shell and file tools in the `computerd` container. To deploy over Tailscale, see [the control VM guide](infra/control-vm/README.md).
 
 ## Requirements
 
