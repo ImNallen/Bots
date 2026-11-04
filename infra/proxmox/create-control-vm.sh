@@ -23,7 +23,11 @@ if [ -f "/etc/pve/qemu-server/$VMID.conf" ]; then
     exit 1
   fi
 else
-  mkdir -p "$IMPORT_DIR"
+  if ! pvesm status --content snippets | awk 'NR > 1 { print $1 }' | grep -qx local; then
+    echo "Storage local must allow snippets. Run: pvesm set local --content iso,vztmpl,backup,import,snippets" >&2
+    exit 1
+  fi
+  mkdir -p "$IMPORT_DIR" /var/lib/vz/snippets
   cd "$IMPORT_DIR"
   curl -fsSL -o SHA512SUMS.tmp "$IMAGE_BASE/SHA512SUMS"
   if ! grep " $IMAGE\$" SHA512SUMS.tmp | sha512sum --check --status 2>/dev/null; then
