@@ -11,6 +11,7 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/bots/bots-guard.nft
+ExecStartPost=-/usr/local/sbin/bots-guard-public-ip --cached
 
 [Install]
 WantedBy=multi-user.target

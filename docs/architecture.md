@@ -108,6 +108,24 @@ One gap remains. If someone restarts `netguard` by hand and `computerd` crashes 
 
 A bot can still reach anything on the public internet, and it can read and change its own files. The link port stays open, and `sudo` lets a bot read the link token, so a bot can open its own connection on that port.
 
+## What a bot can reach on Proxmox
+
+A bot has root in its VM, so no rule inside the VM counts. Every rule runs on the Proxmox host, in three layers:
+
+- Two networks keep machines apart. User VMs share `botsvms`, and port isolation stops their frames from reaching each other. The control VM sits alone on `botsctl`. A VM therefore shares no layer 2 network with anything except the host, and every packet it sends to another machine goes through the host's routing.
+- A host nftables table, `bots_guard`, decides what the host routes. It allows the internet and TCP to the link port on `10.78.0.2`, and it rejects everything else, including IPv6. The table depends on no per-VM flag, so a VM created with its firewall off still gets these rules.
+- Per-VM firewall filters stop a VM from using another address. The MAC filter and `ipfilter-net0` drop any frame or ARP claim that does not match the VM's own addresses. This layer matters because the link is plain `ws://`. If a VM could claim another VM's address, the host would send that VM's link traffic to the wrong machine. These filters do depend on a per-VM flag, so the provisioner must set `firewall=1`.
+
+We did not use the VNet firewall, which the first plan proposed. It needs the tech-preview nftables engine across the whole host, and its documentation says every running VM must then restart. It filters only forwarded traffic and has no per-VM view of addresses, so it could have replaced only the second layer. `bots_guard` does that job with no change of engine.
+
+Three details are easy to break:
+
+- A packet from a VM to any address of the host arrives at the host's input hook, not its forward hook. That includes the host's LAN address, so `bots_guard` needs a rule in both places.
+- The home network's public address looks like any other public address, but from a VM it reaches the router's own services through hairpin NAT. A test reached the router's admin console this way. A timer on the host keeps that address in `bots_guard`, so if the address changes, a VM can reach the router for up to a minute.
+- `bots-guard.service` must never be required by `pve-guests.service`. Restarting a required unit restarts the unit that requires it, and stopping `pve-guests` shuts down every guest. This rebooted the control VM twice during step 3. A precheck on `pve-guests` blocks autostart when the table is missing, without that link.
+
+`infra/proxmox/verify-network.sh` proves all of this from inside a real VM. A spoofed or one-way packet gets no reply that a probe could observe, so the script also runs packet captures on the host, and each capture must stay empty.
+
 ## Why screens share one browser
 
 Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.

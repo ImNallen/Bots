@@ -23,7 +23,7 @@ SCAN_CONCURRENCY = 512
 TCP_TIMEOUT = 2.0
 SCAN_TIMEOUT = 1.0
 REPLY_TIMEOUT = 1.0
-SAMPLE_PORTS = [22, 53, 80, 443, 3128, 5355, 8006, 8443, 8787, 8788, 3210, 3211, 6790, 6791]
+SAMPLE_PORTS = [22, 53, 80, 443, 3128, 5355, 8006, 8080, 8443, 8787, 8788, 3210, 3211, 6790, 6791]
 SAMPLE_UDP_PORTS = [53, 123, 5353, 5355, 41641]
 RESERVED_V4 = {
     "this-network": "0.0.0.1",
@@ -249,6 +249,18 @@ async def check_addresses(args, all_ports):
         report(f"{name}: udp dns to {address} is blocked", state == "blocked", state)
 
 
+async def check_home_public():
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=10) as response:
+            address = response.read().decode()
+    except OSError as error:
+        report("home-public: the probe learned the home public address", False, error)
+        return
+    found = await scan(address, SAMPLE_PORTS)
+    report("home-public: tcp to the home public address is blocked", not found, found)
+    report("home-public: ping the home public address gets no reply", not ping(address))
+
+
 async def check_peer(args, interface):
     peer = args.peer
     report(f"peer: ping {peer} gets no reply", not ping(peer))
@@ -326,6 +338,7 @@ async def main():
     await check_link(args)
     await check_control_ports(args, all_ports)
     await check_addresses(args, all_ports)
+    await check_home_public()
     await check_peer(args, interface)
     await check_v6(args, interface)
     await check_spoofing(args, interface)

@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh the home public address in the bots guard every minute
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=1min
+
+[Install]
+WantedBy=timers.target

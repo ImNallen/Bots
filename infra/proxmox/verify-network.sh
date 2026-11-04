@@ -58,6 +58,8 @@ result "$enabled" "host: bots-guard.service loads the table at boot"
 result "$free" "host: restarting bots-guard.service cannot stop guests, because nothing requires it"
 systemctl cat pve-guests.service | grep -q '^ExecStartPre=/usr/sbin/nft list table inet bots_guard' && gated=true || gated=false
 result "$gated" "host: guests do not autostart without the table"
+systemctl is-active --quiet bots-guard-public-ip.timer && refreshing=true || refreshing=false
+result "$refreshing" "host: a timer keeps the home public address current"
 
 for vm in "$probe_vm" "$peer_vm"; do
   net=$(qm config "$vm" | sed -n 's/^net0: //p')

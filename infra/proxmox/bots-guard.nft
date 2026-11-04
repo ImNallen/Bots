@@ -27,6 +27,10 @@ table inet bots_guard {
 		}
 	}
 
+	set home_public {
+		type ipv4_addr
+	}
+
 	chain refuse {
 		reject with icmpx admin-prohibited
 	}
@@ -45,6 +49,7 @@ table inet bots_guard {
 
 	chain leaving_bots_network {
 		iifname "botsvms" oifname "botsctl" ip saddr 10.77.0.0/24 ip daddr 10.78.0.2 tcp dport 8788 accept
+		ip daddr @home_public jump refuse
 		iifname "botsvms" oifname "vmbr0" ip saddr 10.77.0.0/24 ip daddr != @not_public accept
 		iifname "botsctl" oifname "botsvms" ct state established,related accept
 		jump refuse

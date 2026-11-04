@@ -22,9 +22,14 @@ install -D -m 0644 "$here/bots-guard.nft" /etc/bots/bots-guard.nft
 install -m 0644 "$here/bots-guard.service" /etc/systemd/system/bots-guard.service
 # Guests do not autostart without the rules.
 install -D -m 0644 "$here/pve-guests-bots-guard.conf" /etc/systemd/system/pve-guests.service.d/bots-guard.conf
+install -m 0755 "$here/bots-guard-public-ip.sh" /usr/local/sbin/bots-guard-public-ip
+install -m 0644 "$here/bots-guard-public-ip.service" "$here/bots-guard-public-ip.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --quiet bots-guard.service
 nft -f /etc/bots/bots-guard.nft
+/usr/local/sbin/bots-guard-public-ip --cached
+/usr/local/sbin/bots-guard-public-ip
+systemctl enable --now --quiet bots-guard-public-ip.timer
 
 exists "/cluster/sdn/zones/$ZONE" \
   || pvesh create /cluster/sdn/zones --zone "$ZONE" --type simple --ipam pve
