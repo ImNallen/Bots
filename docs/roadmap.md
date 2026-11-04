@@ -44,7 +44,8 @@ These are proposals, so change them if you find a better answer:
 - Model each computer with desired and observed state, and converge them in a reconcile loop. Extend the `computers` table with those fields.
 - Call `computers.register` from the provisioner, with a separate link token for each VM. Bind the link listener to the private network address through `LINK_HOST`. The public listener stays on `127.0.0.1`.
 - Run `computerd` under systemd in the VM template, with the same `computerd` and `agent` users and sudoers rule as its Dockerfile. `netguard` is for Docker on a Mac and does not apply to VMs.
-- Write a network check like scenario O in `scripts/verify-agent.ts`, and run it from inside a real VM.
+- Write a network check like scenario O in `scripts/verify-agent.ts`, and run it from inside a real VM. Also test `192.0.0.0/24`, `198.18.0.0/15`, and `240.0.0.0/4`, which `netguard` does not block.
+- Keep the public listener away from VMs. In Tailscale mode, one header on that socket creates a token for any identity, so a VM that reaches it could act as any user. VMs reach only the link listener.
 
 Step 3 also has to decide how an update reaches `computerd` on existing VMs. Nothing does that yet.
 
@@ -65,7 +66,20 @@ These are open on purpose. Fix each one when the work reaches it.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
 - A bot can reach the public internet with no approval step until step 4, so a prompt-injected bot could send out anything in its workspace.
 - A tool that calls `setsid` can survive a cancel or a timeout.
-- A pending call older than 7 days could run again after the journal prunes it.
+- A bot with `sudo` can delete the journal, and the wiped call then runs again. Deleting the `computerd` journal volume has the same effect. Step 8 removes passwordless `sudo`.
+- A `sudo` child and a `setsid` child both outlive a cancel or a timeout, because `computerd` kills the process group as `agent`.
+- A bot can read its VM's link token through `sudo`, and it can then forge results for its own owner's runs. It cannot reach another owner's runs.
+- One unreadable journal entry, such as a broken symlink, stops `computerd` at startup until someone removes it. `prune` also has no guard for a file that vanishes mid-scan.
+- Meta files in the journal never expire, so the journal grows slowly. Pruning 200,000 of them took 158 ms.
+- An error body cut at 300 characters can split an emoji. Convex then rejects the failure reason, so the run makes 5 model calls before it stops.
+- Redaction matches only the whole, exact key. An upstream that echoes part of a key could put that part in a failure reason.
+- `.run-failure` in `apps/web/src/styles.css` has no `overflow-wrap`, so a long unbroken error widens the page.
+- The orchestrator's dev guard checks four forwarding headers and the host name. Binding to loopback is the real boundary.
+- Vite's default CORS lets any page on a localhost port read a dev token from `/auth/token`. Setting `server.cors` to `false` closes this.
+- The orchestrator sends no CSP, `X-Frame-Options`, or `nosniff` header.
+- `scripts/bootstrap.ts` appends to an env file without checking for a trailing newline. The orchestrator then refuses to start, so this fails closed.
+- `parsePrivateJwk` in `scripts/lib.ts` can echo part of a malformed key to the local terminal.
+- The Docker tags `bots-computerd:dev` and `bots-netguard:dev` are shared, so `pnpm verify:agent` replaces a developer's local images.
 - The runner does not cap the model name in a response. Scenario P in `scripts/verify-agent.ts` uses this as its trigger, so update that scenario if you add a cap.
 - Bots cannot be deleted, so `pnpm verify:tailnet` leaves `verify-tailnet-*` bots in the user's list.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.

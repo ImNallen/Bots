@@ -35,7 +35,7 @@ Three mechanisms make this safe:
 
 - A lease gives one runner a run. A runner renews its 15 second lease every 5 seconds, and it stops work on that run as soon as it loses the lease. A restarted runner claims the run after the lease expires.
 - Fencing rejects a stale runner. Every runner write carries the lease token, and each append also carries the expected sequence number. Convex rejects a write that fails either check.
-- A journal in `computerd` makes tool execution at most once. `computerd` writes a meta file with fsync before it starts a tool, and it writes the result to a temp file and renames it. The journal survives restarts of both processes. Results expire after 7 days, but meta files stay, so a call never runs twice however long the orchestrator was away. A call whose result expired answers `interrupted`.
+- A journal in `computerd` makes tool execution at most once. `computerd` writes a meta file with fsync before it starts a tool, and it writes the result to a temp file and renames it. The journal survives restarts of both processes. Results expire after 7 days, but meta files stay, so a call does not run twice however long the orchestrator was away. This holds only while the journal exists. A bot with `sudo` can delete the journal, which is one reason bots lose passwordless `sudo` at step 8. A call whose result expired answers `interrupted`.
 
 The runner persists an assistant turn before it sends any of the turn's tool calls. After a crash it sends each pending call again with the same call id, and `computerd` answers from what it finds:
 
@@ -43,7 +43,7 @@ The runner persists an assistant turn before it sends any of the turn's tool cal
 |---|---|
 | A result exists | The stored result, with no execution |
 | The call is running in this process | The running execution's result |
-| Only meta exists | `interrupted`, recorded and never rerun, because `computerd` died during the call |
+| Only meta exists | `interrupted`, recorded and never rerun, because `computerd` died during the call or the result expired |
 | Nothing exists | A new execution |
 
 A tool keeps running when the link or the orchestrator dies. A model call has no side effects, so a crash during streaming only repeats the call.
