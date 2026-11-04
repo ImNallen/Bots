@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { calculateJwkThumbprint, exportJWK, generateKeyPair } from "jose";
 import {
   parseConvexEnvList,
@@ -27,20 +27,17 @@ function requireOk(args: { step: string; result: CommandResult }): string {
   return args.result.stdout;
 }
 
-// A kill between the copy and the rename leaves only the gitignored temp file, which the next run overwrites.
-function addMissingEnvValues(args: {
-  path: string;
-  missing: Record<string, string>;
-}): void {
+// A kill before the rename leaves only the gitignored temp file, which the next run overwrites.
+function writeEnvFile(args: { path: string; content: string }): void {
   const temp = `${args.path}.tmp`;
-  if (existsSync(args.path)) {
-    copyFileSync(args.path, temp);
-  } else {
-    writeFileSync(temp, "");
-  }
-  const lines = Object.entries(args.missing).map(([key, value]) => `${key}='${value}'\n`);
-  appendFileSync(temp, lines.join(""), { mode: 0o600 });
+  writeFileSync(temp, args.content, { mode: 0o600 });
   renameSync(temp, args.path);
+}
+
+function addMissingEnvValues(args: { path: string; missing: Record<string, string> }): void {
+  const existing = existsSync(args.path) ? readFileSync(args.path, "utf8") : "";
+  const added = Object.entries(args.missing).map(([key, value]) => `${key}='${value}'\n`);
+  writeEnvFile({ path: args.path, content: existing + added.join("") });
 }
 
 async function generatePrivateJwk(): Promise<PrivateJwk> {
@@ -137,10 +134,10 @@ function ensureAdminKey(): void {
     return;
   }
   // A key the backend refuses belongs to a deleted volume, so replacing it rotates nothing.
-  const content = `CONVEX_SELF_HOSTED_URL='${CONVEX_URL}'\nCONVEX_SELF_HOSTED_ADMIN_KEY='${generateAdminKey()}'\n`;
-  const temp = `${paths.convexEnv}.tmp`;
-  writeFileSync(temp, content, { mode: 0o600 });
-  renameSync(temp, paths.convexEnv);
+  writeEnvFile({
+    path: paths.convexEnv,
+    content: `CONVEX_SELF_HOSTED_URL='${CONVEX_URL}'\nCONVEX_SELF_HOSTED_ADMIN_KEY='${generateAdminKey()}'\n`,
+  });
   report({ step: "packages/convex/.env.local", outcome: "wrote a new admin key" });
 }
 
