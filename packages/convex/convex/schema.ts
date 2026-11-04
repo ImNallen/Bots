@@ -44,6 +44,8 @@ export default defineSchema({
     state: runState,
     cancelRequested: v.boolean(),
     nextSeq: v.number(),
+    lastClaimSeq: v.optional(v.number()),
+    claimsWithoutProgress: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
     .index("by_state", ["state.kind"]),

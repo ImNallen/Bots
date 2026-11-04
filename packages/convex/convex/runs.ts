@@ -6,6 +6,8 @@ import { runEventBody, terminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
+const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
+const NO_PROGRESS_REASON = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress. Send another message to try again.`;
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
 
@@ -75,8 +77,21 @@ export const claim = mutation({
     if (!claimable) {
       return { kind: "unavailable" as const };
     }
+    // Every attempt passes through here, and a crash cannot lose this count. Each attempt may have paid for a model call.
+    const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
+    if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
+      await ctx.db.patch(runId, {
+        state: run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON },
+      });
+      await deleteStream(ctx, runId);
+      return { kind: "unavailable" as const };
+    }
     const leaseToken = crypto.randomUUID();
-    await ctx.db.patch(runId, { state: { kind: "running", leaseToken, leaseUntil: now + LEASE_MS } });
+    await ctx.db.patch(runId, {
+      state: { kind: "running", leaseToken, leaseUntil: now + LEASE_MS },
+      lastClaimSeq: run.nextSeq,
+      claimsWithoutProgress,
+    });
     const bot = await ctx.db.get(run.botId);
     return {
       kind: "claimed" as const,
