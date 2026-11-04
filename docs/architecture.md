@@ -48,7 +48,7 @@ The runner persists an assistant turn before it sends any of the turn's tool cal
 
 A tool keeps running when the link or the orchestrator dies. A model call has no side effects, so a crash during streaming only repeats the call.
 
-An `interrupted` or `unavailable` outcome tells the model that a side effect may have partly happened. The system refuses to guess, because a repeated payment is worse than a question.
+An `interrupted` or `unavailable` outcome tells the model that a side effect may have partly happened. The system never reruns such a call, and the model decides what to do next.
 
 Any unexpected error in the runner ends that attempt and leaves the lease to expire. Recovery from a transient failure therefore takes the same path as recovery from a crash, at the cost of waiting for the lease.
 

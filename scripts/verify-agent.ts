@@ -1129,6 +1129,59 @@ try {
     });
   });
 
+  await scenario("G. a frozen runner that wakes after losing its lease writes nothing", async () => {
+    const chat = await newChat({ client: first, name: "zombie" });
+    const text = `zombie ${nonce}`;
+    const toolCallId = "zombieId1";
+    fake.script(text, ({ toolResults }) =>
+      toolResults.length === 0
+        ? { kind: "tools", delivery: "whole", calls: [{ id: toolCallId, ...shellCall("sleep 1; echo from-zombie") }] }
+        : { kind: "text", text: "the zombie must never get here" },
+    );
+    const runId = await chat.send(text);
+    await waitFor({
+      description: "the assistant turn",
+      probe: async () => {
+        const entry = await chat.run(runId);
+        return entry !== undefined && turnsOf(entry).length === 1 ? true : null;
+      },
+      intervalMs: 20,
+    });
+    orchestrator?.kill("SIGSTOP");
+    await sleep(LEASE_MS + 1000);
+    const takeover = await service.mutation(api.runs.claim, { runId });
+    assert.ok(takeover.kind === "claimed");
+    orchestrator?.kill("SIGCONT");
+    await waitFor({
+      description: "the runner to notice the lost lease",
+      timeoutMs: 20_000,
+      probe: () =>
+        logsText().includes(`"event":"run-attempt-ended","runId":"${runId}"`) ||
+        logsText().includes(`"event":"run-lease-lost","runId":"${runId}"`)
+          ? true
+          : null,
+    });
+    await sleep(2000);
+    const run = await chat.run(runId);
+    await check("the woken runner recorded no tool result", () => {
+      assert.ok(run !== undefined);
+      assert.equal(resultsOf(run).length, 0);
+    });
+    await check("the woken runner did not call the model again", () => {
+      assert.equal(fake.requests(text).length, 1);
+    });
+    await check("the new holder's lease still works", async () => {
+      assert.equal((await service.mutation(api.runs.heartbeat, { runId, leaseToken: takeover.leaseToken })).kind, "renewed");
+      await service.mutation(api.runs.append, {
+        runId,
+        leaseToken: takeover.leaseToken,
+        expectedSeq: takeover.nextSeq,
+        body: { kind: "toolResult", toolCallId, name: "shell", outcome: "cancelled", output: "", truncated: false },
+      });
+      await service.mutation(api.runs.finish, { runId, leaseToken: takeover.leaseToken, state: { kind: "cancelled" } });
+    });
+  });
+
   await scenario("H and M. cancel mid-tool, and send during an active run", async () => {
     const chat = await newChat({ client: first, name: "cancel" });
     const text = `cancel ${nonce}`;
