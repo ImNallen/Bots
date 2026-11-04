@@ -1,5 +1,6 @@
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createSseParser, createTurnAccumulator, parseRetryAfterMs } from "./mistral.ts";
+import { completeWithRetry, createSseParser, createTurnAccumulator, parseRetryAfterMs } from "./mistral.ts";
 
 function parseAll(chunks: string[]): string[] {
   const payloads: string[] = [];
@@ -135,6 +136,41 @@ describe("createTurnAccumulator", () => {
     expect(turn.text).toBe("kept");
     expect(JSON.stringify(turn).length).toBeLessThan(1024 * 1024);
     expect(turn.toolCalls[0]?.arguments.length).toBeLessThan(1024);
+  });
+});
+
+describe("completeWithRetry", () => {
+  const API_KEY = "sk-secret-abcdefghijklmnopqrstuvwxyz012345";
+
+  async function failureFor(body: string): Promise<string> {
+    const server = createServer((_, response) => {
+      response.writeHead(400).end(body);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      const result = await completeWithRetry({
+        baseUrl: `http://127.0.0.1:${port}`,
+        model: "m",
+        apiKey: API_KEY,
+        messages: [],
+        tools: [],
+        signal: new AbortController().signal,
+        onAttempt: () => {},
+        onProgress: () => {},
+        log: () => {},
+      });
+      return result.kind === "failed" ? result.reason : "";
+    } finally {
+      server.close();
+    }
+  }
+
+  it.each([10, 260, 290, 296, 299])("keeps no part of a key echoed at offset %i out of the failure reason", async (offset) => {
+    const reason = await failureFor(`${"x".repeat(offset)}${API_KEY}${"x".repeat(100)}`);
+    expect(reason).toMatch(/status 400/);
+    expect(reason).not.toContain(API_KEY.slice(0, 4));
   });
 });
 
