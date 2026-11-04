@@ -1,0 +1,3 @@
+Defaults:computerd !use_pty, !requiretty, !lecture
+computerd ALL=(agent) NOPASSWD: ALL
+agent ALL=(ALL) NOPASSWD: ALL
