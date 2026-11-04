@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  "@types/node": 26.6.6
+  convex: 1.49.0
+  jose: 6.2.15
+  typescript: 7.0.2
+
+allowBuilds:
+  esbuild: true

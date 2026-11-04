@@ -1,0 +1,19 @@
+{
+  "name": "@bots/convex",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./convex/_generated/api.js"
+  },
+  "scripts": {
+    "dev": "convex dev",
+    "typecheck": "tsc --project convex/tsconfig.json"
+  },
+  "dependencies": {
+    "convex": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "@types/node": "catalog:"
+  }
+}

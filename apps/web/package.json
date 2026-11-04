@@ -1,0 +1,24 @@
+{
+  "name": "@bots/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@bots/convex": "workspace:*",
+    "@tanstack/react-router": "1.170.46",
+    "convex": "catalog:",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "typescript": "catalog:",
+    "vite": "8.3.5"
+  }
+}
