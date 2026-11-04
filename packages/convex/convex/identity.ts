@@ -1,7 +1,10 @@
 import { ConvexError } from "convex/values";
 import type { UserIdentity } from "convex/server";
-import type { Doc } from "./_generated/dataModel.js";
-import type { QueryCtx } from "./_generated/server.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+
+// User subjects always start with dev: or tailscale:, so no user token can carry this one.
+const SERVICE_SUBJECT = "service:orchestrator";
 
 export type CurrentIdentity = {
   identity: UserIdentity;
@@ -18,4 +21,28 @@ export async function requireIdentity(ctx: QueryCtx): Promise<CurrentIdentity> {
     .withIndex("by_auth_subject", (q) => q.eq("authSubject", identity.subject))
     .unique();
   return { identity, user };
+}
+
+export async function requireService(ctx: QueryCtx): Promise<void> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (identity?.subject !== SERVICE_SUBJECT) {
+    throw new ConvexError("Not authorized");
+  }
+}
+
+export async function upsertUser(
+  ctx: MutationCtx,
+  fields: { authSubject: string; email: string; displayName: string },
+): Promise<Id<"users">> {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_auth_subject", (q) => q.eq("authSubject", fields.authSubject))
+    .unique();
+  if (user === null) {
+    return await ctx.db.insert("users", fields);
+  }
+  if (user.email !== fields.email || user.displayName !== fields.displayName) {
+    await ctx.db.patch(user._id, { email: fields.email, displayName: fields.displayName });
+  }
+  return user._id;
 }
