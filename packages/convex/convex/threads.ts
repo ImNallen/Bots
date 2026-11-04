@@ -9,6 +9,7 @@ const MAX_MESSAGE_LENGTH = 64 * 1024;
 const TIMELINE_RUNS = 30;
 // A query may read 16 MiB. One event is at most 1 MiB, so stopping here cannot overshoot the limit.
 const TIMELINE_BYTES = 8 * 1024 * 1024;
+const encoder = new TextEncoder();
 
 async function requireOwnedThread(ctx: QueryCtx, threadId: Id<"threads">): Promise<Doc<"threads">> {
   const { user } = await requireIdentity(ctx);
@@ -108,7 +109,7 @@ export const timeline = query({
         .query("runEvents")
         .withIndex("by_run_seq", (q) => q.eq("runId", run._id))
         .order("desc")) {
-        bytes += JSON.stringify(event).length;
+        bytes += encoder.encode(JSON.stringify(event)).length;
         if (bytes > TIMELINE_BYTES) {
           omittedOlder = true;
           break;

@@ -21,6 +21,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
 import { WebSocket, WebSocketServer } from "ws";
+import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
 import { decryptApiKey, hashComputerToken } from "../apps/orchestrator/src/secrets.ts";
 import { paths, parsePrivateJwk, readEnvFile, runCommand, runConvex } from "./lib.ts";
 
@@ -57,7 +58,13 @@ async function check(name: string, body: () => void | Promise<void>): Promise<vo
   }
 }
 
+const ONLY_SCENARIOS = new Set((process.env.VERIFY_SCENARIOS ?? "").split(",").filter((id) => id !== ""));
+
 async function scenario(title: string, body: () => Promise<void>): Promise<void> {
+  const id = title.split(/[. ]/)[0] ?? "";
+  if (ONLY_SCENARIOS.size > 0 && !ONLY_SCENARIOS.has(id)) {
+    return;
+  }
   console.log(`--- ${title}`);
   try {
     await body();
@@ -119,6 +126,24 @@ type Reply =
   | { kind: "status"; status: number; retryAfter?: string };
 
 type Script = (context: { attempt: number; toolResults: FakeMessage[] }) => Reply;
+
+// Stricter than the docs promise, on purpose: a history with an unanswered tool call must never reach a model.
+function unansweredToolCall(messages: FakeMessage[]): string | null {
+  for (const [index, message] of messages.entries()) {
+    const answered = new Set<string | undefined>();
+    for (const next of messages.slice(index + 1)) {
+      if (next.role !== "tool") {
+        break;
+      }
+      answered.add(next.tool_call_id);
+    }
+    const missing = message.tool_calls?.find((call) => !answered.has(call.id));
+    if (missing !== undefined) {
+      return missing.id;
+    }
+  }
+  return null;
+}
 
 function latestUserText(messages: FakeMessage[]): string {
   const last = messages.findLast((message) => message.role === "user");
@@ -227,7 +252,7 @@ function startFakeMistral() {
       requests.set(text, seen);
       const script = scripts.get(text);
       const reply: Reply =
-        script === undefined
+        script === undefined || unansweredToolCall(body.messages) !== null
           ? { kind: "status", status: 400 }
           : script({ attempt: seen.length, toolResults: toolMessagesAfterLatestUser(body.messages) });
       streamReply(response, reply).catch(() => response.destroy());
@@ -2049,6 +2074,33 @@ try {
     const progressingRunId = await progressing.send(`progressing ${nonce}`);
     const cancelledRunId = await stuckThenCancelled.send(`stuck ${nonce}`);
 
+    const pendingChat = await newChat({ client: second, name: "pending-call" });
+    const pendingRunId = await pendingChat.send(`pending ${nonce}`);
+    const pendingCallId = "pendingCa1";
+    const stuckOnToolCall = async () => {
+      const claimed = await service.mutation(api.runs.claim, { runId: pendingRunId });
+      assert.ok(claimed.kind === "claimed", "the first claim was refused");
+      await service.mutation(api.runs.append, {
+        runId: pendingRunId,
+        leaseToken: claimed.leaseToken,
+        expectedSeq: claimed.nextSeq,
+        body: {
+          kind: "assistantTurn",
+          text: "",
+          toolCalls: [{ id: pendingCallId, name: "shell", arguments: '{"command":"true"}' }],
+          usage: { promptTokens: 1, completionTokens: 1 },
+          model: "m",
+        },
+      });
+      for (;;) {
+        await sleep(LEASE_MS + 1000);
+        const next = await service.mutation(api.runs.claim, { runId: pendingRunId });
+        if (next.kind === "unavailable") {
+          return;
+        }
+      }
+    };
+
     const claimsOverLimit = MAX_CLAIMS_WITHOUT_PROGRESS + 2;
     const withProgress = async () => {
       const counters: (number | undefined)[] = [];
@@ -2085,6 +2137,7 @@ try {
       withProgress(),
       stuckAndCancelled(),
       chat.settled(runId, 180_000),
+      stuckOnToolCall(),
     ]);
 
     await check("the run fails with a reason that says what happened and how to retry", () => {
@@ -2123,6 +2176,19 @@ try {
       assert.deepEqual(cancelled.flags, [false, true, true, true, true]);
       assert.deepEqual(cancelled.last, { kind: "unavailable" });
       assert.equal((await stuckThenCancelled.run(cancelledRunId))?.state.kind, "cancelled");
+    });
+
+    const pendingRun = await pendingChat.run(pendingRunId);
+    await check("the limit records a result for a tool call the run never answered", () => {
+      assert.equal(pendingRun?.state.kind, "failed");
+      const results = pendingRun === undefined ? [] : resultsOf(pendingRun);
+      assert.deepEqual(results.map((result) => [result.toolCallId, result.outcome]), [[pendingCallId, "unavailable"]]);
+      assert.match(results[0]?.output ?? "", /outcome is unknown/);
+      assert.deepEqual(pendingRun?.events.map((event) => event.seq), [0, 1, 2]);
+    });
+    await check("the next message on that thread gives Mistral a history it accepts", () => {
+      const events = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
+      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", events })), null);
     });
 
     const longChat = await newChat({ client: first, name: "long-tool" });
@@ -2179,6 +2245,36 @@ try {
       assert.equal(results[0]?.outcome, "ok");
       assert.match(results[0]?.output ?? "", new RegExp(marker));
       assert.equal(fake.requests(longText).length, 2);
+    });
+  });
+
+  await scenario("Q. a long history of wide characters still loads", async () => {
+    const chat = await newChat({ client: second, name: "wide-characters" });
+    const runId = await chat.send(`wide ${nonce}`);
+    const claimed = await service.mutation(api.runs.claim, { runId });
+    assert.ok(claimed.kind === "claimed", "the claim was refused");
+    const { leaseToken, nextSeq } = claimed;
+    // Three bytes per character, so each row is near the 1 MiB limit and the thread holds about 18 MiB.
+    const output = "\u6f22".repeat(300_000);
+    // The self-hosted backend allows 4 MiB of writes per second.
+    const WIDE_APPEND_GAP_MS = 400;
+    for (let index = 0; index < 20; index += 1) {
+      await service.mutation(api.runs.append, {
+        runId,
+        leaseToken,
+        expectedSeq: nextSeq + index,
+        body: { kind: "toolResult", toolCallId: `wide${index}`, name: "shell", outcome: "ok", output, truncated: false },
+      });
+      await sleep(WIDE_APPEND_GAP_MS);
+    }
+    await service.mutation(api.runs.finish, { runId, leaseToken, state: { kind: "done" } });
+    const timeline = await second.query(api.threads.timeline, { threadId: chat.threadId });
+    await check("the timeline returns the newest events and says older ones are hidden", () => {
+      assert.equal(timeline.omittedOlder, true);
+      const shown = timeline.runs.flatMap((run) => run.events);
+      assert.ok(shown.length > 0 && shown.length < 21, `showed ${shown.length} events`);
+      const newest = shown.at(-1)?.body;
+      assert.equal(newest?.kind === "toolResult" ? newest.toolCallId : "", "wide19");
     });
   });
 } catch (error) {
