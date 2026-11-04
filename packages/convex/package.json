@@ -7,7 +7,6 @@
   },
   "scripts": {
     "dev": "convex dev",
-    "build": "tsc --project convex/tsconfig.json",
     "typecheck": "tsc --project convex/tsconfig.json"
   },
   "dependencies": {
