@@ -4,8 +4,17 @@ set -euo pipefail
 
 IMAGE=/var/lib/vz/import/debian-13-genericcloud-amd64.qcow2
 VENDOR_SNIPPET=bots-control-vendor.yaml
+TAG=bots-probe
 PROBES=("901 10.77.0.11" "902 10.77.0.12")
 node=$(hostname)
+
+for probe in "${PROBES[@]}"; do
+  vm=${probe% *}
+  if qm config "$vm" >/dev/null 2>&1 && ! qm config "$vm" | grep -qx "tags: $TAG"; then
+    echo "VM $vm exists without the tag $TAG, so this script will not touch it" >&2
+    exit 1
+  fi
+done
 
 if [ "${1:-}" = --remove ]; then
   for probe in "${PROBES[@]}"; do
@@ -22,7 +31,7 @@ for probe in "${PROBES[@]}"; do
   vm=${probe% *}
   address=${probe#* }
   if ! qm config "$vm" >/dev/null 2>&1; then
-    qm create "$vm" --name "net-probe-$vm" --tags bots-probe --ostype l26 --cpu host --cores 2 --memory 1536 \
+    qm create "$vm" --name "net-probe-$vm" --tags "$TAG" --ostype l26 --cpu host --cores 2 --memory 1536 \
       --balloon 0 --agent enabled=1 --serial0 socket --vga serial0 --scsihw virtio-scsi-single \
       --scsi0 "local-lvm:0,import-from=$IMAGE,discard=on,iothread=1,ssd=1" --ide2 local-lvm:cloudinit \
       --boot order=scsi0 --ciuser probe --cicustom "vendor=local:snippets/$VENDOR_SNIPPET" --nameserver 1.1.1.1 \
