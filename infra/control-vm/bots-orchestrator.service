@@ -1,0 +1,18 @@
+[Unit]
+Description=Bots orchestrator
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=bots
+WorkingDirectory=/opt/bots
+ExecStart=/usr/local/bin/node --env-file=/opt/bots/.env.local apps/orchestrator/src/main.ts
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

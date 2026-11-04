@@ -219,4 +219,7 @@ startContainers();
 ensureAdminKey();
 ensureConvexEnv({ privateJwk, issuer });
 deployFunctions();
-startComputer({ computerToken, linkPort });
+// In Tailscale mode, users' computers are VMs, not this machine's containers.
+if ((readEnvFile(paths.rootEnv).AUTH_MODE ?? "dev") === "dev") {
+  startComputer({ computerToken, linkPort });
+}

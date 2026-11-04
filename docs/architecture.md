@@ -148,7 +148,7 @@ Chromium and `computerd` run under their own Linux user from the first version t
 
 ## Accepted risks
 
-- The server has one disk and no off-server backups. A disk failure loses every VM and every chat. ZFS snapshots protect only against a bot damaging its VM.
+- The server has one disk and no off-server backups. A disk failure loses every VM and every chat. LVM-thin snapshots protect only against a bot damaging its VM.
 - The operator can read friends' chats and keys. Friends need to know this.
 - Bots browse from the operator's home IP address, so abuse by one user reflects on that address.
 - Prompt injection remains possible. Approvals, read-only scheduled runs, and network rules limit the damage.

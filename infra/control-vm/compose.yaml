@@ -5,6 +5,7 @@ services:
     image: ghcr.io/convex/convex-backend:d1fcbeaf939502a23a0f4b7e9095a12e84866294@sha256:e9c084e8bd6c1f249012c672193f0988c748824f55a24cdad45f6185a8462f9a
     stop_grace_period: 10s
     stop_signal: SIGINT
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3210:3210"
       - "127.0.0.1:3211:3211"
@@ -26,6 +27,7 @@ services:
     image: ghcr.io/convex/convex-dashboard:d1fcbeaf939502a23a0f4b7e9095a12e84866294@sha256:caf95d3f2241cddc103a84b728294fa0777c6acc291a2c4612c1d06faaa1c43a
     stop_grace_period: 10s
     stop_signal: SIGINT
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6791:6791"
     environment:
