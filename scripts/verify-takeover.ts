@@ -82,7 +82,99 @@ function refusal(path: string, headers: Record<string, string>): Promise<number 
   });
 }
 
-const form = `<!doctype html><title>Login</title><style>body{margin:0}input{position:fixed;left:0;width:100%;height:50%;font-size:40px}#u{top:0}#p{top:50%}</style><input id=u aria-label=Name><input id=p type=password aria-label=Secret>`;
+const CONTROL_L = 0xffe3;
+const RETURN = 0xff0d;
+// The panel and the window's bars take this much of the 800 pixels. verify-desktop.sh pins the window below them.
+const PAGE_TOP = 114;
+const PAGE_HEIGHT = 800 - PAGE_TOP;
+const SELECT_HEIGHT = 34;
+
+// A viewer over the real path. It speaks RFB as noVNC does, so what reaches the desktop is a pointer or a key message, and only
+// the orchestrator's relay and x11vnc stand between it and the display.
+async function openRfb(path: string) {
+  const socket = new WebSocket(`${wsOrigin}${path}`, { headers: { Origin: origin as string } });
+  const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+  let buffered = Buffer.alloc(0);
+  let wake = () => {};
+  socket.on("message", (data: Buffer) => {
+    buffered = Buffer.concat([buffered, data]);
+    wake();
+  });
+  await new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  const read = async (count: number): Promise<Buffer> => {
+    while (buffered.length < count) {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          wake = resolve;
+        }),
+        closed.then((code) => {
+          throw new Error(`the stream closed during its handshake, with code ${code}`);
+        }),
+      ]);
+    }
+    const out = buffered.subarray(0, count);
+    buffered = buffered.subarray(count);
+    return out;
+  };
+  await read(12);
+  socket.send(Buffer.from("RFB 003.008\n"));
+  const types = await read((await read(1))[0] as number);
+  assert.ok(types.includes(1), "the stream asks for a password");
+  socket.send(Buffer.from([1]));
+  assert.equal((await read(4)).readUInt32BE(0), 0, "the stream refused the session");
+  socket.send(Buffer.from([1]));
+  const init = await read(24);
+  await read(init.readUInt32BE(20));
+
+  const key = (keysym: number, down: boolean) => {
+    const message = Buffer.alloc(8);
+    message[0] = 4;
+    message[1] = down ? 1 : 0;
+    message.writeUInt32BE(keysym, 4);
+    socket.send(message);
+  };
+  const pointer = (x: number, y: number, buttons: number) => {
+    const message = Buffer.alloc(6);
+    message[0] = 5;
+    message[1] = buttons;
+    message.writeUInt16BE(x, 2);
+    message.writeUInt16BE(y, 4);
+    socket.send(message);
+  };
+  const tap = async (keysym: number) => {
+    key(keysym, true);
+    key(keysym, false);
+    await sleep(25);
+  };
+  return {
+    socket,
+    closed,
+    tap,
+    press: async (modifier: number, keysym: number) => {
+      key(modifier, true);
+      await tap(keysym);
+      key(modifier, false);
+    },
+    type: async (text: string) => {
+      for (const character of text) {
+        await tap(character.codePointAt(0) as number);
+      }
+    },
+    clickAt: async (x: number, y: number) => {
+      pointer(x, y, 0);
+      await sleep(30);
+      pointer(x, y, 1);
+      await sleep(40);
+      pointer(x, y, 0);
+    },
+  };
+}
+
+// The select sits at the top so its menu opens below it, over the fields, at a place the check can name.
+const form = `<!doctype html><title>Login</title><style>body{margin:0}select{position:fixed;left:40px;top:40px;width:400px;font:24px sans-serif}input{position:fixed;left:0;width:100%;height:30%;font-size:40px}#u{top:40%}#p{top:70%}</style><select aria-label=Pick><option>one<option>two<option>three<option>four</select><input id=u aria-label=Name><input id=p type=password aria-label=Secret>`;
 const watched = await newChat("watched");
 const other = await newChat("other");
 
@@ -100,31 +192,46 @@ const inputPath = `/screens/${watched.botId}/input`;
 const before = await refusal(inputPath, { Origin: origin });
 report(before === 403, "input is refused until the owner takes over", String(before));
 
+const watcher = await openRfb(`/screens/${watched.botId}`);
+let watcherClosed = false;
+watcher.closed.then(() => {
+  watcherClosed = true;
+});
+
 await client.mutation(api.bots.takeOver, { botId: watched.botId });
 const crossSite = await refusal(inputPath, { Origin: "https://evil.example" });
 report(crossSite === 403, "during a take-over, a page from another site still cannot send input", String(crossSite));
 
-const input = new WebSocket(`${wsOrigin}${inputPath}`, { headers: { Origin: origin } });
-await new Promise((resolve, reject) => {
-  input.once("open", resolve);
-  input.once("error", reject);
-});
-const inputClosed = new Promise<number>((resolve) => input.once("close", resolve));
-const send = (event: object) => input.send(JSON.stringify(event));
-const tapAt = (x: number, y: number) => {
-  send({ kind: "pointer", x, y, action: "move" });
-  send({ kind: "pointer", x, y, action: "down" });
-  send({ kind: "pointer", x, y, action: "up" });
-};
+const replaced = await openRfb(inputPath);
+const input = await openRfb(inputPath);
+const replacedCode = await Promise.race([replaced.closed, sleep(5000).then(() => "still open")]);
+report(replacedCode !== "still open", "a second take-over ends the first viewer's input stream", String(replacedCode));
 
-// The panel and the window's bars take about 115 pixels of the 800, and each field covers half of what is left.
-tapAt(640, 260);
+await input.press(CONTROL_L, "l".charCodeAt(0));
 await sleep(400);
-send({ kind: "text", text: PUBLIC_TEXT });
+await input.type(`127.0.0.1:${PORT}/form.html?via=address-bar`);
+await input.tap(RETURN);
+await sleep(2500);
+
+const selectY = PAGE_TOP + 40 + SELECT_HEIGHT / 2;
+await input.clickAt(240, selectY);
+await sleep(700);
+await input.clickAt(240, selectY + 3 * SELECT_HEIGHT);
+await sleep(700);
+
+const nameY = PAGE_TOP + Math.round(0.55 * PAGE_HEIGHT);
+const secretY = PAGE_TOP + Math.round(0.85 * PAGE_HEIGHT);
+await input.clickAt(640, nameY);
+await sleep(600);
+await input.type(PUBLIC_TEXT);
 await sleep(400);
-tapAt(640, 620);
-await sleep(400);
-send({ kind: "text", text: SECRET });
+
+await watcher.type("viewonly");
+await sleep(600);
+
+await input.clickAt(640, secretY);
+await sleep(600);
+await input.type(SECRET);
 await sleep(800);
 
 const gated = await client.mutation(api.threads.send, {
@@ -149,14 +256,22 @@ report(
 );
 
 await client.mutation(api.bots.releaseTakeover, { botId: watched.botId });
-const closeCode = await Promise.race([inputClosed, sleep(15_000).then(() => "still open")]);
+const closeCode = await Promise.race([input.closed, sleep(15_000).then(() => "still open")]);
 report(closeCode === LINK_CLOSE.takeoverEnded, "giving back closes the input channel", String(closeCode));
+const afterGiveBack = await refusal(inputPath, { Origin: origin });
+report(afterGiveBack === 403, "input is refused again after giving back", String(afterGiveBack));
+report(!watcherClosed, "the watch stream stayed connected through the take-over");
+watcher.socket.close();
 
 const finished = await settled(watched, gated);
 const snapshot = resultsOf(finished).find((result) => result.name === "browser_snapshot");
+const lineWith = (text: string) => snapshot?.output.split("\n").find((line) => line.includes(text));
 report(finished.state.kind === "done" && snapshot?.outcome === "ok", "the bot carries on after the owner gives back", `run ${finished.state.kind}`);
-report(snapshot?.output.includes(`value: ${PUBLIC_TEXT}`) === true, "what the person typed reached the right field on the real page", snapshot?.output.split("\n").find((line) => line.includes('"Name"')));
-report(/"Secret" value: hidden/.test(snapshot?.output ?? ""), "the password reached its field, and the bot sees it only as hidden", snapshot?.output.split("\n").find((line) => line.includes('"Secret"')));
+report(snapshot?.output.includes("?via=address-bar") === true, "Ctrl+L and the address bar reached the bot's window, which CDP could not do", lineWith("URL:"));
+report(lineWith('"Pick"')?.includes("selected: three") === true, "a mouse click chose a dropdown option, which CDP could not do", lineWith('"Pick"'));
+report(snapshot?.output.includes(`value: ${PUBLIC_TEXT}`) === true, "what the person typed reached the right field on the real page", lineWith('"Name"'));
+report(snapshot?.output.includes("viewonly") === false, "keys sent through the watch stream reached nothing", lineWith('"Name"'));
+report(/"Secret" value: hidden/.test(snapshot?.output ?? ""), "the password reached its field, and the bot sees it only as hidden", lineWith('"Secret"'));
 
 const { runs } = await client.query(api.threads.timeline, { threadId: watched.threadId });
 report(!JSON.stringify(runs).includes(SECRET), "the password appears nowhere in the thread that reaches the model");
