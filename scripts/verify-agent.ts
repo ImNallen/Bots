@@ -9,14 +9,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
-import {
-  OUTPUT_CAP_BYTES,
+import { OUTPUT_CAP_BYTES,
   callIdToFileStem,
   computerMessage,
   parseJsonMessage,
   type OrchestratorMessage,
-  type ToolResult,
-} from "@bots/protocol";
+  type ToolResult, toolDefinitions } from "@bots/protocol";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
@@ -817,11 +815,16 @@ try {
       assert.match(content, /^outcome: ok\nexit code: 0\n/);
       assert.match(content, new RegExp(`hello-${nonce}`));
     });
-    await check("the request disables parallel tool calls, streams, and lists the three tools", () => {
+    await check("the request disables parallel tool calls, streams, and lists every tool", () => {
       const body = requests[0]?.body;
       assert.equal(body?.parallel_tool_calls, false);
       assert.equal(body?.stream, true);
-      assert.deepEqual(body?.tools.map((tool) => tool.function.name), ["shell", "read_file", "write_file"]);
+      assert.deepEqual(
+        body?.tools.map((tool) => tool.function.name),
+        toolDefinitions.map((tool) => tool.function.name),
+      );
+      assert.ok(body?.tools.some((tool) => tool.function.name === "shell"));
+      assert.ok(body?.tools.some((tool) => tool.function.name === "browser_navigate"));
     });
     await check("the model call carries the decrypted key", () => {
       assert.equal(requests[0]?.authorization, `Bearer ${MISTRAL_KEY}`);

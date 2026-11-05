@@ -57,6 +57,17 @@ The user chose to update `computerd` in place, because bots and users install th
 3. Done. The orchestrator converges each computer from its desired state in Convex, using a Proxmox token scoped to one pool. `scripts/verify-reconcile.ts` kills it at each stage, and `pnpm test` kills it between every pair of calls against a fake Proxmox.
 4. Done. The reconcile loop updates and repairs `computerd` in place, and `infra/proxmox/verify-network.sh` scanned every port from two template clones.
 
+### Progress on step 4
+
+1. Done. A test on a real VM settled how screens and input work. The architecture document has the results.
+2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
+3. Next. Stream each screen to the web app, view-only, over the link port.
+4. Let a user take over a screen, with input through CDP, while the bot waits.
+5. Add approvals. The user decides what asks for one.
+6. Run the step's check, on a phone.
+
+After step 4, add a way for a user to reset a computer.
+
 ## After step 3: deploy from `main`
 
 Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tailscale key and no SSH key. The timer does these things:
@@ -110,3 +121,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.
 - No test has used noVNC on a phone. The step 4 check does.
+- Any bot can reach CDP on loopback, so it can drive another bot's window on the same computer. Those bots have one owner and already share logins, so this crosses no user's boundary.
+- A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
+- A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
+- A site can block the browser. GitLab stopped it at a Cloudflare check during testing.

@@ -46,6 +46,7 @@ The orchestrator reads these optional settings from `.env.local`:
 | `pnpm verify:tailnet <address> <LAN address>` | Identity, a forged header, live queries through `tailscale serve`, and closed LAN ports work on a real deployment. Run it from a device on the tailnet |
 | `pnpm verify:template <address> <VM name>` | A real chat, with a real model, runs a shell tool on the named user VM. Run it from a device on the tailnet, as [the control VM guide](infra/control-vm/README.md) describes |
 | `node --env-file=.env.local scripts/verify-reconcile.ts` | The real orchestrator converges a test VM after a kill at each provisioning stage, the VM has its firewall filters, removal leaves nothing behind, and the Proxmox token cannot touch the control VM. Run it as root on the control VM, from `/opt/bots` |
+| `pnpm verify:browser <address>` | Two bots use real websites at once, each on its own screen, with a real model. Run it from a device on the tailnet |
 | `infra/proxmox/verify-network.sh <VM> <VM>` | A user VM reaches only the internet and the link port, and cannot claim another VM's addresses. Run it on the Proxmox host, as [the control VM guide](infra/control-vm/README.md) describes |
 
 `verify:auth` and `verify:agent` use the Convex functions from your last `pnpm bootstrap`, so run it first after you change anything in `packages/convex`. Otherwise they test the old functions, and they can still pass.

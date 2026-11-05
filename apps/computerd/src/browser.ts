@@ -31,6 +31,7 @@ export type CdpConnector = () => Promise<Cdp>;
 // This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
 const SNAPSHOT_SCRIPT = `(() => {
   const MAX_TEXT = 120;
+  const MAX_URL = 300;
   const INTERACTIVE = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=menuitem],[role=tab],[contenteditable=true],[onclick]';
   const visible = (e) => {
     const r = e.getBoundingClientRect();
@@ -69,7 +70,7 @@ const SNAPSHOT_SCRIPT = `(() => {
   };
   walk(document.body ?? document.documentElement);
   const deduped = lines.filter((l, i) => l !== lines[i - 1]);
-  return 'Title: ' + document.title + '\\nURL: ' + location.href + '\\n\\n' + deduped.join('\\n');
+  return 'Title: ' + document.title + '\\nURL: ' + location.href.slice(0, MAX_URL) + '\\n\\n' + deduped.join('\\n');
 })()`;
 
 const LOCATE_SCRIPT = (ref: number) => `(() => {
