@@ -5,6 +5,12 @@ import { ConvexHttpClient } from "convex/browser";
 import { WebSocket } from "ws";
 
 const CONVEX_PORT = 8443;
+const OVERALL_TIMEOUT_MS = 60_000;
+
+setTimeout(() => {
+  console.log(`FAIL  the check did not finish in ${OVERALL_TIMEOUT_MS / 1000} seconds`);
+  process.exit(1);
+}, OVERALL_TIMEOUT_MS).unref();
 const [origin] = process.argv.slice(2);
 if (origin === undefined || !URL.canParse(origin)) {
   console.error("usage: pnpm verify:screen https://<machine>.<tailnet>.ts.net");
@@ -72,7 +78,7 @@ function rfbSession(): Promise<{ width: number; height: number; name: string; so
       (async () => {
         const version = (await read(12)).toString();
         assert.match(version, /^RFB 003\./);
-        socket.send("RFB 003.008\n");
+        socket.send(Buffer.from("RFB 003.008\n"));
         const count = (await read(1))[0] as number;
         const types = await read(count);
         assert.ok(types.includes(1), "the stream must need no password inside the authenticated relay");
