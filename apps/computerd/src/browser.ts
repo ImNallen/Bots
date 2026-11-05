@@ -1,15 +1,11 @@
-import { readFile, rename, writeFile } from "node:fs/promises";
 import { capText, type BrowserInputEvent, type BrowserInvocation, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
+import type { Desktops } from "./desktops.ts";
 
-const REGION_WIDTH = 1280;
-const REGION_HEIGHT = 800;
-const SCREEN_COUNT = 8;
 const CDP_CONNECT_TIMEOUT_MS = 5000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const SETTLE_MS = 400;
 const MAX_SETTLE_ROUNDS = 4;
-const POPUP_OFFSET = 60;
 
 const KEY_CODES: Record<string, number> = {
   Enter: 13,
@@ -24,10 +20,10 @@ const KEY_CODES: Record<string, number> = {
 
 type Cdp = {
   send: (method: string, params?: Record<string, unknown>, sessionId?: string) => Promise<Record<string, unknown>>;
-  onEvent: (listener: (method: string, params: Record<string, unknown>) => void) => void;
+  onClose: (listener: () => void) => void;
 };
 
-export type CdpConnector = () => Promise<Cdp>;
+export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
 // This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
 const SNAPSHOT_SCRIPT = `(() => {
@@ -90,120 +86,61 @@ const CLEAR_SCRIPT = (ref: number) => `(() => {
   else document.execCommand('selectAll');
 })()`;
 
-type Screen = { region: number; pages: string[]; lastUsed: number };
+// Every page target on this browser belongs to this bot.
+type Connection = {
+  cdpPort: number;
+  client: Cdp;
+  // Oldest first. The last one is the page that the bot acts on.
+  pages: string[];
+  sessions: Map<string, string>;
+};
+
+type TargetInfo = { targetId: string; type: string; openerId?: string };
+
+// A closed page leaves the list, so the bot falls back to the page under it. A new page goes on the end, so a popup becomes the
+// current page. Pages seen for the first time together, as after a computerd restart, put the ones with an opener last, so a
+// popup that was open before the restart stays current.
+export function nextPages(known: readonly string[], targets: readonly TargetInfo[]): string[] {
+  const pages = targets.filter((target) => target.type === "page");
+  const alive = new Set(pages.map((page) => page.targetId));
+  const fresh = pages.filter((page) => !known.includes(page.targetId));
+  return [
+    ...known.filter((page) => alive.has(page)),
+    ...fresh.filter((page) => page.openerId === undefined).map((page) => page.targetId),
+    ...fresh.filter((page) => page.openerId !== undefined).map((page) => page.targetId),
+  ];
+}
 
 export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
-  regionFor: (botId: string) => Promise<number>;
   input: (botId: string, event: BrowserInputEvent) => Promise<void>;
 };
 
-export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; connector?: CdpConnector }): Browser {
-  const connector = args.connector ?? webSocketConnector(args.cdpBaseUrl ?? "");
-  let screens: Promise<Map<string, Screen>> | null = null;
-  let saving: Promise<unknown> = Promise.resolve();
-  let connection: Promise<Cdp> | null = null;
-  const sessions = new Map<string, string>();
+export function createBrowser(args: { desktops: Pick<Desktops, "acquire" | "hold">; connector?: CdpConnector }): Browser {
+  const { desktops, connector = webSocketConnector } = args;
+  // Only one bot's queue touches its entry, so this needs no promise to share.
+  const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
   const queues = new Map<string, Promise<unknown>>();
 
-  // Callers share one promise, so two bots that start together cannot each read their own copy of the map.
-  function loadScreens(): Promise<Map<string, Screen>> {
-    screens ??= readFile(args.stateFile, "utf8").then(
-      (raw) => new Map(Object.entries(JSON.parse(raw) as Record<string, Screen>)),
-      () => new Map<string, Screen>(),
-    );
-    return screens;
-  }
-
-  // Saves share one temp file, so they run one at a time. Each writes the map as it is when its turn comes.
-  function saveScreens(): Promise<void> {
-    const save = async () => {
-      const map = await loadScreens();
-      const temporary = `${args.stateFile}.tmp`;
-      await writeFile(temporary, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
-      await rename(temporary, args.stateFile);
-    };
-    const next = saving.then(save, save);
-    saving = next.catch(() => {});
-    return next;
-  }
-
-  function screenOwning(map: Map<string, Screen>, targetId: string): Screen | undefined {
-    for (const screen of map.values()) {
-      if (screen.pages.includes(targetId)) {
-        return screen;
-      }
+  async function connectionFor(botId: string, cdpPort: number): Promise<Connection> {
+    const known = connections.get(botId);
+    if (known?.cdpPort === cdpPort) {
+      return known;
     }
-    return undefined;
-  }
-
-  function cdp(): Promise<Cdp> {
-    connection ??= connector()
-      .then(async (client) => {
-        client.onEvent((method, params) => {
-          void handleEvent(client, method, params).catch(() => {});
-        });
-        await client.send("Target.setDiscoverTargets", { discover: true });
-        return client;
-      })
-      .catch((error: unknown) => {
-        connection = null;
-        sessions.clear();
-        throw error;
-      });
+    const client = await connector(cdpPort);
+    const connection: Connection = { cdpPort, client, pages: [], sessions: new Map() };
+    connections.set(botId, connection);
+    client.onClose(() => {
+      if (connections.get(botId) === connection) {
+        connections.delete(botId);
+      }
+    });
     return connection;
   }
 
-  // A popup opens wherever Chromium chooses, so this moves it to the screen of the bot that opened it.
-  async function handleEvent(client: Cdp, method: string, params: Record<string, unknown>): Promise<void> {
-    if (method === "cdp.disconnected") {
-      connection = null;
-      sessions.clear();
-      return;
-    }
-    const map = await loadScreens();
-    if (method === "Target.targetDestroyed") {
-      const targetId = String(params.targetId);
-      sessions.delete(targetId);
-      const screen = screenOwning(map, targetId);
-      if (screen !== undefined) {
-        screen.pages = screen.pages.filter((page) => page !== targetId);
-        await saveScreens();
-      }
-      return;
-    }
-    if (method !== "Target.targetCreated") {
-      return;
-    }
-    const info = params.targetInfo as { targetId: string; type: string; openerId?: string };
-    if (info.type !== "page" || info.openerId === undefined) {
-      return;
-    }
-    const screen = screenOwning(map, info.openerId);
-    if (screen === undefined || screen.pages.includes(info.targetId)) {
-      return;
-    }
-    screen.pages.push(info.targetId);
-    await saveScreens();
-    await placeWindow(client, info.targetId, screen.region, POPUP_OFFSET);
-  }
-
-  async function placeWindow(client: Cdp, targetId: string, region: number, inset: number): Promise<void> {
-    const { windowId } = await client.send("Browser.getWindowForTarget", { targetId });
-    await client.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
-    await client.send("Browser.setWindowBounds", {
-      windowId,
-      bounds: {
-        left: region * REGION_WIDTH + inset,
-        top: inset,
-        width: REGION_WIDTH - inset * 2,
-        height: REGION_HEIGHT - inset * 2,
-      },
-    });
-  }
-
-  async function sessionFor(client: Cdp, targetId: string): Promise<string> {
+  async function sessionFor(connection: Connection, targetId: string): Promise<string> {
+    const { client, sessions } = connection;
     const existing = sessions.get(targetId);
     if (existing !== undefined) {
       return existing;
@@ -218,49 +155,17 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
     return id;
   }
 
-  // This has no await, so two bots that start together cannot take the same region.
-  function claimScreen(map: Map<string, Screen>, botId: string): { screen: Screen; evicted: string[] } {
-    const taken = new Set([...map.values()].map((screen) => screen.region));
-    for (let region = 0; region < SCREEN_COUNT; region += 1) {
-      if (!taken.has(region)) {
-        const screen = { region, pages: [], lastUsed: Date.now() };
-        map.set(botId, screen);
-        return { screen, evicted: [] };
-      }
+  // Asking on every look means nothing has to watch for events, and nothing is lost across a restart.
+  async function currentPage(connection: Connection): Promise<{ client: Cdp; targetId: string; sessionId: string }> {
+    const { client } = connection;
+    const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
+    connection.pages = nextPages(connection.pages, targetInfos);
+    if (connection.pages.length === 0) {
+      const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
+      connection.pages.push(String(targetId));
     }
-    // Every screen is taken, so the bot that acted longest ago gives up its screen. Its logins stay in the shared profile.
-    const [oldestBot, oldest] = [...map.entries()].sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0] as [string, Screen];
-    map.delete(oldestBot);
-    const screen = { region: oldest.region, pages: [], lastUsed: Date.now() };
-    map.set(botId, screen);
-    return { screen, evicted: oldest.pages };
-  }
-
-  // The newest page is the one on top of this bot's screen, so a popup takes over until it closes.
-  async function currentPage(botId: string): Promise<{ client: Cdp; screen: Screen; targetId: string; sessionId: string }> {
-    const client = await cdp();
-    const map = await loadScreens();
-    const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: Array<{ targetId: string; type: string }> };
-    const alive = new Set(targetInfos.filter((target) => target.type === "page").map((target) => target.targetId));
-    let screen = map.get(botId);
-    if (screen !== undefined) {
-      screen.pages = screen.pages.filter((page) => alive.has(page));
-    } else {
-      const claimed = claimScreen(map, botId);
-      screen = claimed.screen;
-      for (const page of claimed.evicted) {
-        await client.send("Target.closeTarget", { targetId: page }).catch(() => {});
-      }
-    }
-    if (screen.pages.length === 0) {
-      const { targetId } = await client.send("Target.createTarget", { url: "about:blank", newWindow: true });
-      screen.pages.push(String(targetId));
-      await placeWindow(client, String(targetId), screen.region, 0);
-    }
-    screen.lastUsed = Date.now();
-    await saveScreens();
-    const targetId = screen.pages.at(-1) as string;
-    return { client, screen, targetId, sessionId: await sessionFor(client, targetId) };
+    const targetId = connection.pages.at(-1) as string;
+    return { client, targetId, sessionId: await sessionFor(connection, targetId) };
   }
 
   async function evaluate(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
@@ -315,69 +220,76 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<string> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
     signal.throwIfAborted();
-    const { client, screen, sessionId } = await currentPage(botId);
-    signal.throwIfAborted();
-    switch (tool.name) {
-      case "browser_navigate": {
-        const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
-        if (typeof reply.errorText === "string") {
-          throw new Error(`the page did not load: ${reply.errorText}`);
+    const lease = await desktops.acquire(botId);
+    try {
+      // A cancel during a slow start still sends nothing.
+      signal.throwIfAborted();
+      const connection = await connectionFor(botId, lease.cdpPort);
+      const { client, sessionId } = await currentPage(connection);
+      signal.throwIfAborted();
+      switch (tool.name) {
+        case "browser_navigate": {
+          const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
+          if (typeof reply.errorText === "string") {
+            throw new Error(`the page did not load: ${reply.errorText}`);
+          }
+          break;
         }
-        break;
-      }
-      case "browser_snapshot":
-        break;
-      case "browser_click": {
-        const point = await locate(client, sessionId, tool.args.ref);
-        signal.throwIfAborted();
-        await click(client, sessionId, point);
-        break;
-      }
-      case "browser_type": {
-        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
-        await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
-        signal.throwIfAborted();
-        await client.send("Input.insertText", { text: tool.args.text }, sessionId);
-        if (tool.args.submit) {
+        case "browser_snapshot":
+          break;
+        case "browser_click": {
+          const point = await locate(client, sessionId, tool.args.ref);
           signal.throwIfAborted();
-          await press(client, sessionId, "Enter");
+          await click(client, sessionId, point);
+          break;
         }
-        break;
+        case "browser_type": {
+          await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
+          await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
+          signal.throwIfAborted();
+          await client.send("Input.insertText", { text: tool.args.text }, sessionId);
+          if (tool.args.submit) {
+            signal.throwIfAborted();
+            await press(client, sessionId, "Enter");
+          }
+          break;
+        }
+        case "browser_press":
+          await press(client, sessionId, tool.args.key);
+          break;
       }
-      case "browser_press":
-        await press(client, sessionId, tool.args.key);
-        break;
-    }
-    // An action can open a popup at any time during the wait, and the next action goes to the newest page.
-    // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
-    let after = await currentPage(botId);
-    for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
-      await settle(after.client, after.sessionId, signal);
-      const latest = await currentPage(botId);
-      if (latest.targetId === after.targetId) {
-        break;
+      // An action can open a popup at any time during the wait, and the next action goes to the newest page.
+      // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
+      let after = await currentPage(connection);
+      for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
+        await settle(after.client, after.sessionId, signal);
+        const latest = await currentPage(connection);
+        if (latest.targetId === after.targetId) {
+          break;
+        }
+        after = latest;
       }
-      after = latest;
+      const snapshot = String(await evaluate(after.client, after.sessionId, SNAPSHOT_SCRIPT));
+      return `Screen ${lease.slot}\n${snapshot}`;
+    } finally {
+      lease.release();
     }
-    const snapshot = String(await evaluate(after.client, after.sessionId, SNAPSHOT_SCRIPT));
-    return `Screen ${screen.region + 1}\n${snapshot}`;
   }
 
-  // A viewer sees the whole 1280x800 region, and CDP wants a point inside the page, below the window's own bars.
+  // A viewer sees the whole 1280x800 desktop, and CDP wants a point inside the page, below the panel and the window's own bars.
   async function toViewport(args: {
     client: Cdp;
     sessionId: string;
     targetId: string;
-    region: number;
     x: number;
     y: number;
   }): Promise<{ x: number; y: number } | null> {
-    const { client, sessionId, targetId, region, x, y } = args;
+    const { client, sessionId, targetId, x, y } = args;
     const { bounds } = (await client.send("Browser.getWindowForTarget", { targetId })) as {
       bounds: { left: number; top: number };
     };
     const barHeight = Number(await evaluate(client, sessionId, "outerHeight - innerHeight"));
-    const point = { x: x - (bounds.left - region * REGION_WIDTH), y: y - bounds.top - barHeight };
+    const point = { x: x - bounds.left, y: y - bounds.top - barHeight };
     return point.x < 0 || point.y < 0 ? null : point;
   }
 
@@ -402,48 +314,62 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
           return { outcome: "error", output: `The browser action failed: ${message}`, truncated: false };
         }
       }),
-    regionFor: (botId) => inOrder(botId, async () => (await currentPage(botId)).screen.region),
     input: (botId, event) =>
       inOrder(botId, async () => {
-        const { client, sessionId, targetId, screen } = await currentPage(botId);
-        switch (event.kind) {
-          case "pointer": {
-            const point = await toViewport({ client, sessionId, targetId, region: screen.region, x: event.x, y: event.y });
-            // The tab strip and the address bar are outside the page, and CDP input cannot reach them.
-            if (point === null) {
+        // A pointer move must not run sudo, so a live connection needs only a hold.
+        const release = desktops.hold(botId);
+        try {
+          let connection = connections.get(botId);
+          if (connection === undefined) {
+            const lease = await desktops.acquire(botId);
+            try {
+              connection = await connectionFor(botId, lease.cdpPort);
+            } finally {
+              lease.release();
+            }
+          }
+          const { client, sessionId, targetId } = await currentPage(connection);
+          switch (event.kind) {
+            case "pointer": {
+              const point = await toViewport({ client, sessionId, targetId, x: event.x, y: event.y });
+              // The tab strip and the address bar are outside the page, and CDP input cannot reach them.
+              if (point === null) {
+                return;
+              }
+              const type = { move: "mouseMoved", down: "mousePressed", up: "mouseReleased" }[event.action];
+              const held = event.action === "down" ? 1 : 0;
+              const button = event.action === "move" ? "none" : "left";
+              await client.send(
+                "Input.dispatchMouseEvent",
+                { type, x: point.x, y: point.y, button, buttons: held, clickCount: event.action === "move" ? 0 : 1 },
+                sessionId,
+              );
               return;
             }
-            const type = { move: "mouseMoved", down: "mousePressed", up: "mouseReleased" }[event.action];
-            const held = event.action === "down" ? 1 : 0;
-            const button = event.action === "move" ? "none" : "left";
-            await client.send(
-              "Input.dispatchMouseEvent",
-              { type, x: point.x, y: point.y, button, buttons: held, clickCount: event.action === "move" ? 0 : 1 },
-              sessionId,
-            );
-            return;
-          }
-          case "scroll": {
-            const point = await toViewport({ client, sessionId, targetId, region: screen.region, x: event.x, y: event.y });
-            if (point === null) {
+            case "scroll": {
+              const point = await toViewport({ client, sessionId, targetId, x: event.x, y: event.y });
+              if (point === null) {
+                return;
+              }
+              await client.send(
+                "Input.dispatchMouseEvent",
+                { type: "mouseWheel", x: point.x, y: point.y, deltaX: event.dx, deltaY: event.dy },
+                sessionId,
+              );
               return;
             }
-            await client.send(
-              "Input.dispatchMouseEvent",
-              { type: "mouseWheel", x: point.x, y: point.y, deltaX: event.dx, deltaY: event.dy },
-              sessionId,
-            );
-            return;
+            case "text":
+              await client.send("Input.insertText", { text: event.text }, sessionId);
+              return;
+            case "key":
+              await press(client, sessionId, event.key);
+              return;
+            case "navigate":
+              await client.send("Page.navigate", { url: event.url }, sessionId);
+              return;
           }
-          case "text":
-            await client.send("Input.insertText", { text: event.text }, sessionId);
-            return;
-          case "key":
-            await press(client, sessionId, event.key);
-            return;
-          case "navigate":
-            await client.send("Page.navigate", { url: event.url }, sessionId);
-            return;
+        } finally {
+          release();
         }
       }),
   };
@@ -473,65 +399,58 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function webSocketConnector(baseUrl: string): CdpConnector {
-  return async () => {
-    let debuggerUrl: string;
-    try {
-      const response = await fetch(`${baseUrl}/json/version`, { signal: AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS) });
-      debuggerUrl = ((await response.json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl;
-    } catch {
-      throw new Error("this computer has no running browser");
-    }
-    const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024 });
-    await new Promise((resolve, reject) => {
-      socket.once("open", resolve);
-      socket.once("error", reject);
-    });
-    let nextId = 1;
-    const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
-    const listeners: Array<(method: string, params: Record<string, unknown>) => void> = [];
-    socket.on("message", (raw: Buffer) => {
-      const message = JSON.parse(raw.toString("utf8")) as {
-        id?: number;
-        method?: string;
-        params?: Record<string, unknown>;
-        result?: Record<string, unknown>;
-        error?: { message: string };
-      };
-      if (message.id !== undefined) {
-        const waiter = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error !== undefined) {
-          waiter?.reject(new Error(message.error.message));
-        } else {
-          waiter?.resolve(message.result ?? {});
-        }
-      } else if (message.method !== undefined) {
-        for (const listener of listeners) {
-          listener(message.method, message.params ?? {});
-        }
-      }
-    });
-    socket.on("close", () => {
-      for (const waiter of pending.values()) {
-        waiter.reject(new Error("the browser closed the connection"));
-      }
-      pending.clear();
-      for (const listener of listeners) {
-        listener("cdp.disconnected", {});
-      }
-    });
-    return {
-      send: (method, params = {}, sessionId) =>
-        new Promise((resolve, reject) => {
-          const id = nextId;
-          nextId += 1;
-          pending.set(id, { resolve, reject });
-          socket.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }));
-        }),
-      onEvent: (listener) => {
-        listeners.push(listener);
-      },
+async function webSocketConnector(cdpPort: number): Promise<Cdp> {
+  let debuggerUrl: string;
+  try {
+    const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS) });
+    debuggerUrl = ((await response.json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl;
+  } catch {
+    throw new Error("this computer has no running browser");
+  }
+  const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024 });
+  await new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  let nextId = 1;
+  const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
+  socket.on("message", (raw: Buffer) => {
+    const message = JSON.parse(raw.toString("utf8")) as {
+      id?: number;
+      result?: Record<string, unknown>;
+      error?: { message: string };
     };
+    if (message.id !== undefined) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error !== undefined) {
+        waiter?.reject(new Error(message.error.message));
+      } else {
+        waiter?.resolve(message.result ?? {});
+      }
+    }
+  });
+  socket.on("close", () => {
+    for (const waiter of pending.values()) {
+      waiter.reject(new Error("the browser closed the connection"));
+    }
+    pending.clear();
+  });
+  return {
+    send: (method, params = {}, sessionId) =>
+      new Promise((resolve, reject) => {
+        const id = nextId;
+        nextId += 1;
+        pending.set(id, { resolve, reject });
+        socket.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }));
+      }),
+    // A socket can close before anyone listens, and a stale connection would then fail every later call.
+    onClose: (listener) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.once("close", listener);
+      } else {
+        listener();
+      }
+    },
   };
 }

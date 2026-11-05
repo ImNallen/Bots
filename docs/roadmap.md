@@ -65,11 +65,11 @@ The user chose to update `computerd` in place, because bots and users install th
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
 4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
 5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
-6. Next. Build a desktop for each bot, as the next section describes, and then run the step's check on a real phone. Step 4 is not done until that check passes.
+6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 3 and 4 of the next section's list come next, and then the step's check on a real phone. Step 4 is not done until that check passes.
 
 ## Next: a desktop for each bot
 
-The owner decided this after looking inside Grok Bot's VM, which runs a full Xfce desktop. Screens now show only a browser, in one wide display, and that design has limits the owner does not want. A test on a throwaway VM showed that a desktop for each bot works. `docs/spikes/desktop-per-bot` has its scripts.
+The owner decided this after looking inside Grok Bot's VM, which runs a full Xfce desktop. Screens used to show only a browser, in one wide display, and that design had limits the owner did not want. A test on a throwaway VM showed that a desktop for each bot works. `docs/spikes/desktop-per-bot` has its scripts.
 
 ### What Grok Bot does
 
@@ -97,12 +97,12 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 
 ### What to build
 
-1. Give each active bot a display, an Xfce desktop, and its own Chromium, started on demand and stopped when idle. Keep the sandbox on.
-2. Give each display a view-only stream for watching, and a separate input stream that opens only during a take-over.
-3. Make take-over the real desktop through noVNC, and remove the CDP input path, its custom touch controls, and the wide display with its regions. Check on a real phone whether noVNC's keyboard and touch are enough, and keep a key bar if they are not.
-4. Move logins. When the owner gives back a take-over, copy the bot's cookies to the base profile and to every running browser through CDP. Start a new bot from a copy of the base. A site that keeps its session in localStorage needs that bot's browser restarted from a new copy.
+1. Done. Give each active bot a display, an Xfce desktop, and its own Chromium, started on demand and stopped when idle. Keep the sandbox on.
+2. Half done. Each display has a view-only stream for watching. It still needs a separate input stream that opens only during a take-over.
+3. Make take-over the real desktop through noVNC, and remove the CDP input path and its custom touch controls. Check on a real phone whether noVNC's keyboard and touch are enough, and keep a key bar if they are not.
+4. Half done. A new bot starts from a copy of the base, `/home/browser/profile`. Next, move logins. When the owner gives back a take-over, copy the bot's cookies to the base profile and to every running browser through CDP. A site that keeps its session in localStorage needs that bot's browser restarted from a new copy.
 5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
-6. Run the step's check on a real phone, with two bots, and then `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check, because a VM gains new services.
+6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed against desktops. Run them again after items 3 and 4, because take-over adds an input stream. Then run the step's check on a real phone, with two bots.
 
 ### Follow-ups, in this order
 
@@ -169,10 +169,19 @@ These are open on purpose. Fix each one when the work reaches it.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.
 - No test has used noVNC on a phone. The step 4 check does.
-- Any bot can reach CDP on loopback, so it can drive another bot's window on the same computer. Those bots have one owner and already share logins, so this crosses no user's boundary.
+- Any bot can reach CDP on loopback, so it can drive another bot's browser on the same computer, and read the logins in that browser. Those bots have one owner, so this crosses no user's boundary.
 - A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
 - A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
-- A viewer whose bot loses its screen to another bot keeps the stream of that region, so it shows the other bot. Both bots have one owner, and this needs more than 8 active bots.
+- A login that the owner types during a take-over stays in that bot's profile, so no other bot can use it until logins move. A login from before desktops is in the base, so every new bot starts with it.
+- Chromium writes a new cookie to disk about 30 seconds after it changes, and SIGTERM does not make it write sooner. A test lost a cookie set 20 seconds before a stop and kept one set 35 seconds before. So a stop soon after a login loses that login, which includes the update that replaces the shared browser.
+- A pending approval has no signal that reaches a desktop. After an hour with no tool, the desktop stops, and a ninth bot can take its slot sooner. The approved click then gets the stale ref error, so it clicks nothing wrong, and the bot starts again on a blank page.
+- A bot loses its page on every browser restart and idle stop. Its next snapshot says `about:blank`.
+- A ninth bot gets an error when all 8 screens have a tool running or a person watching. This is on purpose, so a screen never stops under a viewer.
+- A viewer whose phone loses its network holds its desktop until TCP gives up, because a viewer's socket has no ping.
+- A Chromium that cannot start, for example with a damaged profile, restarts every 2 seconds until the idle stop. Each `browser_*` call waits 45 seconds for it and then answers that there is no running browser.
+- A bot can take a slot's display number or port before a slot needs it. That display then fails to start, and its bots on that computer report no running browser.
+- The `browser` user has `nologin` as its shell, so an Xfce terminal may exit at once. Nobody can reach a terminal until take-over uses noVNC.
+- A new desktop has a fixed list of fonts, so some scripts show as empty boxes. example.com's Arabic and Hebrew text did on a real VM.
 - A tool that is running when the owner takes over keeps running. The bot waits only before its next tool.
 - A closed tab or a sleeping phone leaves the bot waiting for up to 15 minutes, because only the renewal stopping can show that the owner left.
 - The keys that a person can send are text and the key bar, so no shortcut with Ctrl or Cmd reaches the page. The address bar and tabs of the window cannot be clicked, so take-over has its own address box.

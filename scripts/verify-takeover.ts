@@ -117,7 +117,7 @@ const tapAt = (x: number, y: number) => {
   send({ kind: "pointer", x, y, action: "up" });
 };
 
-// The window's bars take about 85 pixels of the 800, and each field covers half of what is left.
+// The panel and the window's bars take about 115 pixels of the 800, and each field covers half of what is left.
 tapAt(640, 260);
 await sleep(400);
 send({ kind: "text", text: PUBLIC_TEXT });

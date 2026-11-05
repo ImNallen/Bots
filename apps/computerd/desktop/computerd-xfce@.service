@@ -1,0 +1,19 @@
+[Unit]
+Description=Bots desktop %i Xfce
+BindsTo=computerd-xvfb@%i.service
+After=computerd-xvfb@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=browser
+Environment=DISPLAY=:%i XDG_RUNTIME_DIR=/run/computerd-xfce-%i
+RuntimeDirectory=computerd-xfce-%i
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/dbus-run-session -- /bin/sh -c 'xfwm4 --compositor=off & xfdesktop & exec xfce4-panel'
+# Chromium draws its window for the window manager it finds. A browser that starts first gets a second title bar, which moves
+# the page.
+ExecStartPost=/bin/sh -c 'until xprop -display :%i -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; do sleep 0.1; done'
+Restart=always
+RestartSec=2
+TimeoutStartSec=15

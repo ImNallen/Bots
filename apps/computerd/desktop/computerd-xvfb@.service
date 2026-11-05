@@ -1,0 +1,13 @@
+# The display. Everything in a desktop is bound to it, so stopping or losing it stops the whole desktop, and it has no Restart=
+# for that reason. The next use starts the desktop again.
+[Unit]
+Description=Bots desktop %i display
+
+[Service]
+Type=exec
+User=browser
+# A kill leaves these behind, and the check below must not find an old socket.
+ExecStartPre=-/bin/rm -f /tmp/.X%i-lock /tmp/.X11-unix/X%i
+ExecStart=/usr/bin/Xvfb :%i -screen 0 1280x800x24 -nolisten tcp -noreset
+ExecStartPost=/bin/sh -c 'until [ -S /tmp/.X11-unix/X%i ]; do sleep 0.1; done'
+TimeoutStartSec=15

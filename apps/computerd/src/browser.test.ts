@@ -1,66 +1,59 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { BrowserInvocation } from "@bots/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createBrowser, type CdpConnector } from "./browser.ts";
+import { createBrowser, nextPages, type CdpConnector } from "./browser.ts";
+import { desktopOf, type Desktops, type Slot } from "./desktops.ts";
 
 type Sent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
 function fakeChromium() {
-  const pages = new Set<string>();
-  const windows = new Map<string, Record<string, unknown>>();
+  const pages = new Map<string, { openerId?: string }>([["target-0", {}]]);
+  const bounds = new Map<string, Record<string, unknown>>();
   const sent: Sent[] = [];
-  const listeners: Array<(method: string, params: Record<string, unknown>) => void> = [];
+  const closeListeners: Array<() => void> = [];
   let nextTarget = 1;
-  let failing = false;
   let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
   let sendHook: ((method: string) => void) | undefined;
 
-  const emit = (method: string, params: Record<string, unknown>) => {
-    for (const listener of listeners) {
-      listener(method, params);
-    }
-  };
-  const openPopup = async (openerId: string) => {
-    const targetId = `target-${nextTarget++}`;
-    pages.add(targetId);
-    emit("Target.targetCreated", { targetInfo: { targetId, type: "page", openerId } });
-    await new Promise((done) => setTimeout(done, 20));
-    return targetId;
-  };
-
-  const connector: CdpConnector = async () => {
-    if (failing) {
-      throw new Error("this computer has no running browser");
-    }
-    return {
-      onEvent: (listener) => listeners.push(listener),
-      send: async (method, params = {}, sessionId) => {
+  return {
+    pages,
+    bounds,
+    sent,
+    openPopup: (openerId: string) => {
+      const targetId = `target-${nextTarget++}`;
+      pages.set(targetId, { openerId });
+      return targetId;
+    },
+    closeSocket: () => closeListeners.splice(0).forEach((listener) => listener()),
+    onSend: (hook: (method: string) => void) => {
+      sendHook = hook;
+    },
+    setLocate: (value: { x: number; y: number } | null) => {
+      locateResult = value;
+    },
+    client: {
+      onClose: (listener: () => void) => {
+        closeListeners.push(listener);
+      },
+      send: async (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
         sent.push({ method, params, sessionId });
         sendHook?.(method);
         switch (method) {
           case "Target.getTargets":
-            return { targetInfos: [...pages].map((targetId) => ({ targetId, type: "page" })) };
+            return {
+              targetInfos: [
+                { targetId: "omnibox", type: "browser_ui" },
+                ...[...pages].map(([targetId, page]) => ({ targetId, type: "page", ...page })),
+              ],
+            };
           case "Target.createTarget": {
             const targetId = `target-${nextTarget++}`;
-            pages.add(targetId);
+            pages.set(targetId, {});
             return { targetId };
           }
-          case "Target.closeTarget":
-            pages.delete(String(params.targetId));
-            return {};
           case "Target.attachToTarget":
             return { sessionId: `session-${String(params.targetId)}` };
           case "Browser.getWindowForTarget":
-            return { windowId: params.targetId, bounds: windows.get(String(params.targetId)) ?? { left: 0, top: 0 } };
-          case "Browser.setWindowBounds": {
-            const bounds = params.bounds as Record<string, unknown>;
-            if (bounds.left !== undefined) {
-              windows.set(String(params.windowId), bounds);
-            }
-            return {};
-          }
+            return { windowId: 1, bounds: bounds.get(String(params.targetId)) ?? { left: 0, top: 27 } };
           case "Runtime.evaluate": {
             const expression = String(params.expression);
             if (expression === "document.readyState") {
@@ -78,23 +71,68 @@ function fakeChromium() {
             return {};
         }
       },
-    };
+    },
+  };
+}
+
+type FakeChromium = ReturnType<typeof fakeChromium>;
+
+function world() {
+  const slots = new Map<string, Slot>([
+    ["a", 1],
+    ["b", 2],
+  ]);
+  const chromiums = new Map<number, FakeChromium>();
+  let openLeases = 0;
+  let acquires = 0;
+  let acquireError: Error | null = null;
+  let connects = 0;
+  let connectError: Error | null = null;
+
+  const chromiumOn = (port: number): FakeChromium => {
+    let chromium = chromiums.get(port);
+    if (chromium === undefined) {
+      chromium = fakeChromium();
+      chromiums.set(port, chromium);
+    }
+    return chromium;
+  };
+  const desktops: Pick<Desktops, "acquire" | "hold"> = {
+    hold: () => () => {},
+    acquire: async (botId) => {
+      acquires += 1;
+      if (acquireError !== null) {
+        throw acquireError;
+      }
+      openLeases += 1;
+      return {
+        ...desktopOf(slots.get(botId) as Slot),
+        release: () => {
+          openLeases -= 1;
+        },
+      };
+    },
+  };
+  const connector: CdpConnector = async (port) => {
+    connects += 1;
+    if (connectError !== null) {
+      throw connectError;
+    }
+    return chromiumOn(port).client;
   };
   return {
+    desktops,
     connector,
-    pages,
-    windows,
-    sent,
-    emit,
-    openPopup,
-    onSend: (hook: (method: string) => void) => {
-      sendHook = hook;
+    slots,
+    chromiumOfBot: (botId: string) => chromiumOn(desktopOf(slots.get(botId) as Slot).cdpPort),
+    openLeases: () => openLeases,
+    acquires: () => acquires,
+    connects: () => connects,
+    failAcquire: (error: Error | null) => {
+      acquireError = error;
     },
-    setFailing: (value: boolean) => {
-      failing = value;
-    },
-    setLocate: (value: { x: number; y: number } | null) => {
-      locateResult = value;
+    failConnect: (error: Error | null) => {
+      connectError = error;
     },
   };
 }
@@ -103,164 +141,163 @@ const signal = new AbortController().signal;
 const navigate: BrowserInvocation = { name: "browser_navigate", args: { url: "https://example.com/" } };
 const snapshot: BrowserInvocation = { name: "browser_snapshot", args: {} };
 
-let stateFile: string;
-let chromium: ReturnType<typeof fakeChromium>;
+let machine: ReturnType<typeof world>;
+let chromium: FakeChromium;
 
-beforeEach(async () => {
-  stateFile = join(await mkdtemp(join(tmpdir(), "browser-test-")), "screens.json");
-  chromium = fakeChromium();
+beforeEach(() => {
+  machine = world();
+  chromium = machine.chromiumOfBot("a");
 });
 
 function browserOf() {
-  return createBrowser({ stateFile, connector: chromium.connector });
+  return createBrowser({ desktops: machine.desktops, connector: machine.connector });
 }
 
+const look = (browser: ReturnType<typeof browserOf>, botId: string) => browser.execute({ botId, tool: snapshot, signal });
+const lastEvaluated = (target: FakeChromium) =>
+  target.sent.filter((entry) => entry.method === "Runtime.evaluate").at(-1)?.sessionId;
+
 describe("browser", () => {
-  it("gives two bots that start together different screens", async () => {
+  it("sends each bot's commands only to that bot's browser", async () => {
     const browser = browserOf();
-    const regions = await Promise.all(["a", "b", "c"].map((bot) => browser.regionFor(bot)));
-    expect(new Set(regions).size).toBe(3);
+    await Promise.all([
+      browser.execute({ botId: "a", tool: { name: "browser_navigate", args: { url: "https://a.example/" } }, signal }),
+      browser.execute({ botId: "b", tool: { name: "browser_navigate", args: { url: "https://b.example/" } }, signal }),
+    ]);
+    const navigated = (target: FakeChromium) =>
+      target.sent.filter((entry) => entry.method === "Page.navigate").map((entry) => entry.params.url);
+    expect(navigated(machine.chromiumOfBot("a"))).toEqual(["https://a.example/"]);
+    expect(navigated(machine.chromiumOfBot("b"))).toEqual(["https://b.example/"]);
   });
 
-  it("places each bot's window in its own region", async () => {
+  it("acts on the blank page a browser starts with, and opens no other", async () => {
     const browser = browserOf();
     await browser.execute({ botId: "a", tool: navigate, signal });
-    await browser.execute({ botId: "b", tool: navigate, signal });
-    const lefts = [...chromium.windows.values()].map((bounds) => bounds.left);
-    expect(lefts).toEqual([0, 1280]);
-    expect(chromium.pages.size).toBe(2);
+    await look(browser, "a");
+    expect([...chromium.pages.keys()]).toEqual(["target-0"]);
+    expect(lastEvaluated(chromium)).toBe("session-target-0");
   });
 
-  it("keeps a bot on its screen and page across calls", async () => {
+  it("keeps a connection across calls", async () => {
     const browser = browserOf();
-    const first = await browser.regionFor("a");
-    await browser.execute({ botId: "a", tool: navigate, signal });
-    await browser.execute({ botId: "a", tool: snapshot, signal });
-    expect(await browser.regionFor("a")).toBe(first);
-    expect(chromium.pages.size).toBe(1);
+    await look(browser, "a");
+    await look(browser, "a");
+    expect(machine.connects()).toBe(1);
   });
 
-  it("finds the same screen after computerd restarts", async () => {
-    const before = browserOf();
-    await before.regionFor("a");
-    const region = await before.regionFor("b");
+  it("closes its lease after each call, and after an error", async () => {
+    const browser = browserOf();
+    await look(browser, "a");
+    expect(machine.openLeases()).toBe(0);
+    chromium.setLocate(null);
+    await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    expect(machine.openLeases()).toBe(0);
+  });
+
+  it("finds the same page after computerd restarts", async () => {
+    await look(browserOf(), "a");
     const after = browserOf();
-    expect(await after.regionFor("b")).toBe(region);
-    expect(chromium.pages.size).toBe(2);
-  });
-
-  it("opens a new window on the same screen when Chromium restarted and lost the page", async () => {
-    const browser = browserOf();
-    const region = await browser.regionFor("a");
-    chromium.pages.clear();
-    expect(await browser.regionFor("a")).toBe(region);
+    await look(after, "a");
+    expect(lastEvaluated(chromium)).toBe("session-target-0");
     expect(chromium.pages.size).toBe(1);
   });
 
-  it("takes the screen of the bot that acted longest ago when every screen is taken", async () => {
-    const browser = browserOf();
-    const regions: number[] = [];
-    for (let bot = 0; bot < 8; bot += 1) {
-      regions.push(await browser.regionFor(`bot-${bot}`));
-      await new Promise((done) => setTimeout(done, 2));
-    }
-    expect(new Set(regions).size).toBe(8);
-    await browser.regionFor("bot-0");
-    const taken = await browser.regionFor("bot-8");
-    expect(taken).toBe(regions[1]);
-    expect(chromium.pages.size).toBe(8);
-    expect(await browser.regionFor("bot-0")).toBe(regions[0]);
+  it("opens a page when the browser has none", async () => {
+    chromium.pages.clear();
+    const result = await look(browserOf(), "a");
+    expect(result.outcome).toBe("ok");
+    expect(chromium.pages.size).toBe(1);
   });
 
-  it("moves a popup to its opener's screen, and acts on it until it closes", async () => {
+  it("acts on a popup until it closes", async () => {
     const browser = browserOf();
-    await browser.regionFor("a");
-    const region = await browser.regionFor("b");
-    const opener = [...chromium.pages][1] as string;
-    const popup = await chromium.openPopup(opener);
-    expect(chromium.windows.get(popup)?.left).toBe(region * 1280 + 60);
-    chromium.sent.length = 0;
-    await browser.execute({ botId: "b", tool: snapshot, signal });
-    const evaluated = chromium.sent.filter((entry) => entry.method === "Runtime.evaluate");
-    expect(evaluated.at(-1)?.sessionId).toBe(`session-${popup}`);
+    await look(browser, "a");
+    const popup = chromium.openPopup("target-0");
+    await look(browser, "a");
+    expect(lastEvaluated(chromium)).toBe(`session-${popup}`);
 
     chromium.pages.delete(popup);
-    chromium.emit("Target.targetDestroyed", { targetId: popup });
-    await new Promise((done) => setTimeout(done, 20));
-    chromium.sent.length = 0;
-    await browser.execute({ botId: "b", tool: snapshot, signal });
-    expect(chromium.sent.filter((entry) => entry.method === "Runtime.evaluate").at(-1)?.sessionId).toBe(`session-${opener}`);
+    await look(browser, "a");
+    expect(lastEvaluated(chromium)).toBe("session-target-0");
   });
 
-  it("does not move a popup from a window that belongs to no bot", async () => {
-    const browser = browserOf();
-    await browser.regionFor("a");
-    await chromium.openPopup("the-blank-window");
-    expect(chromium.windows.size).toBe(1);
+  it("stays on a popup that was open before computerd restarted", async () => {
+    await look(browserOf(), "a");
+    const popup = chromium.openPopup("target-0");
+    await look(browserOf(), "a");
+    expect(lastEvaluated(chromium)).toBe(`session-${popup}`);
   });
 
   it("sends a bot's typing only to that bot's page", async () => {
     const browser = browserOf();
-    await browser.regionFor("a");
-    await browser.regionFor("b");
-    const [pageA, pageB] = [...chromium.pages];
-    chromium.sent.length = 0;
     await Promise.all([
       browser.execute({ botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "for a", submit: false } }, signal }),
       browser.execute({ botId: "b", tool: { name: "browser_type", args: { ref: 1, text: "for b", submit: false } }, signal }),
     ]);
-    const typed = chromium.sent.filter((entry) => entry.method === "Input.insertText");
-    expect(typed.find((entry) => entry.params.text === "for a")?.sessionId).toBe(`session-${pageA}`);
-    expect(typed.find((entry) => entry.params.text === "for b")?.sessionId).toBe(`session-${pageB}`);
+    const typed = (target: FakeChromium) => target.sent.filter((entry) => entry.method === "Input.insertText").map((entry) => entry.params.text);
+    expect(typed(machine.chromiumOfBot("a"))).toEqual(["for a"]);
+    expect(typed(machine.chromiumOfBot("b"))).toEqual(["for b"]);
   });
 
-  it("sends a person's input only to the bot's own page", async () => {
-    const browser = browserOf();
-    await browser.regionFor("a");
-    await browser.regionFor("b");
-    const pageB = [...chromium.pages][1];
-    chromium.sent.length = 0;
-    await browser.input("b", { kind: "text", text: "secret" });
-    await browser.input("b", { kind: "pointer", x: 5, y: 6, action: "down" });
-    await browser.input("b", { kind: "key", key: "Enter" });
-    const input = chromium.sent.filter((entry) => entry.method.startsWith("Input."));
-    expect(input.length).toBeGreaterThan(2);
-    expect(new Set(input.map((entry) => entry.sessionId))).toEqual(new Set([`session-${pageB}`]));
-  });
-
-  describe("a person's pointer", () => {
+  describe("a person's input", () => {
     const mouseEvents = () => chromium.sent.filter((entry) => entry.method === "Input.dispatchMouseEvent");
 
-    it("maps a point on the stream to a point in the page, below the window's bars", async () => {
+    it("reaches only the bot's own page", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
+      await look(browser, "a");
+      await look(browser, "b");
+      const other = machine.chromiumOfBot("b");
+      other.sent.length = 0;
       chromium.sent.length = 0;
-      await browser.input("a", { kind: "pointer", x: 640, y: 400, action: "down" });
-      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mousePressed", x: 640, y: 315, button: "left", buttons: 1 });
+      await browser.input("b", { kind: "text", text: "secret" });
+      await browser.input("b", { kind: "pointer", x: 5, y: 200, action: "down" });
+      await browser.input("b", { kind: "key", key: "Enter" });
+      const input = other.sent.filter((entry) => entry.method.startsWith("Input."));
+      expect(input.length).toBeGreaterThan(2);
+      expect(new Set(input.map((entry) => entry.sessionId))).toEqual(new Set(["session-target-0"]));
+      expect(chromium.sent.filter((entry) => entry.method.startsWith("Input."))).toEqual([]);
     });
 
-    it("ignores a click on the window's bars, which CDP input cannot reach", async () => {
+    it("takes no lease per event, so a pointer move runs no sudo", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
+      await look(browser, "a");
+      const before = machine.acquires();
+      for (let move = 0; move < 20; move += 1) {
+        await browser.input("a", { kind: "pointer", x: move, y: 200, action: "move" });
+      }
+      expect(machine.acquires()).toBe(before);
+    });
+
+    it("starts the desktop once when there is no connection yet", async () => {
+      const browser = browserOf();
+      await browser.input("a", { kind: "text", text: "first" });
+      await browser.input("a", { kind: "text", text: "second" });
+      expect(machine.acquires()).toBe(1);
+      expect(machine.openLeases()).toBe(0);
+      expect(chromium.sent.filter((entry) => entry.method === "Input.insertText")).toHaveLength(2);
+    });
+
+    it("maps a point on the stream to a point in the page, below the panel and the window's bars", async () => {
+      const browser = browserOf();
+      await look(browser, "a");
+      chromium.sent.length = 0;
+      await browser.input("a", { kind: "pointer", x: 640, y: 400, action: "down" });
+      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mousePressed", x: 640, y: 288, button: "left", buttons: 1 });
+    });
+
+    it("ignores a click on the panel or the window's bars, which CDP input cannot reach", async () => {
+      const browser = browserOf();
+      await look(browser, "a");
       chromium.sent.length = 0;
       await browser.input("a", { kind: "pointer", x: 640, y: 40, action: "down" });
       expect(mouseEvents()).toEqual([]);
     });
 
-    it("maps a point on the second screen the same way, relative to that screen", async () => {
+    it("maps a point inside a popup from that window's own bounds", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
-      await browser.regionFor("b");
-      chromium.sent.length = 0;
-      await browser.input("b", { kind: "pointer", x: 640, y: 400, action: "up" });
-      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseReleased", x: 640, y: 315 });
-    });
-
-    it("maps a point inside a popup, which sits inset on its screen", async () => {
-      const browser = browserOf();
-      await browser.regionFor("a");
-      const opener = [...chromium.pages][0] as string;
-      await chromium.openPopup(opener);
+      await look(browser, "a");
+      const popup = chromium.openPopup("target-0");
+      chromium.bounds.set(popup, { left: 60, top: 60 });
       chromium.sent.length = 0;
       await browser.input("a", { kind: "pointer", x: 300, y: 300, action: "down" });
       expect(mouseEvents()[0]?.params).toMatchObject({ x: 240, y: 155 });
@@ -268,35 +305,69 @@ describe("browser", () => {
 
     it("scrolls the page at that point", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
+      await look(browser, "a");
       chromium.sent.length = 0;
       await browser.input("a", { kind: "scroll", x: 640, y: 400, dx: 0, dy: 120 });
-      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseWheel", x: 640, y: 315, deltaY: 120 });
+      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseWheel", x: 640, y: 288, deltaY: 120 });
     });
   });
 
   it("reports a stale ref as an error that tells the bot what to do", async () => {
-    const browser = browserOf();
     chromium.setLocate(null);
-    const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    const result = await browserOf().execute({ botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
     expect(result.outcome).toBe("error");
     expect(result.output).toContain("take a new snapshot");
   });
 
+  it("reports a stale ref after a browser restart lost the page, so a bot never clicks the wrong thing", async () => {
+    const browser = browserOf();
+    await look(browser, "a");
+    chromium.closeSocket();
+    chromium.pages.clear();
+    chromium.pages.set("target-new", {});
+    chromium.setLocate(null);
+    const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 3 } }, signal });
+    expect(result.outcome).toBe("error");
+    expect(result.output).toContain("take a new snapshot");
+    expect(chromium.sent.some((entry) => entry.method === "Input.dispatchMouseEvent")).toBe(false);
+  });
+
   it("reports a computer with no browser as an error", async () => {
-    chromium.setFailing(true);
+    machine.failAcquire(new Error("this computer has no running browser"));
     const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
     expect(result).toMatchObject({ outcome: "error", truncated: false });
     expect(result.output).toContain("no running browser");
   });
 
+  it("reports a desktop whose browser does not answer as an error, and closes the lease", async () => {
+    machine.failConnect(new Error("this computer has no running browser"));
+    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    expect(result.output).toContain("no running browser");
+    expect(machine.openLeases()).toBe(0);
+  });
+
+  it("reports every screen in use in words a bot can act on", async () => {
+    machine.failAcquire(new Error("every screen on this computer is in use, so try again in a few minutes"));
+    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    expect(result.output).toContain("try again in a few minutes");
+  });
+
   it("connects again after the browser restarts", async () => {
     const browser = browserOf();
-    await browser.regionFor("a");
-    chromium.emit("cdp.disconnected", {});
-    await new Promise((done) => setTimeout(done, 20));
-    const result = await browser.execute({ botId: "a", tool: snapshot, signal });
+    await look(browser, "a");
+    chromium.closeSocket();
+    const result = await look(browser, "a");
     expect(result.outcome).toBe("ok");
+    expect(machine.connects()).toBe(2);
+  });
+
+  it("connects to the new port when a bot comes back on another slot", async () => {
+    const browser = browserOf();
+    await look(browser, "a");
+    machine.slots.set("a", 5);
+    const result = await look(browser, "a");
+    expect(result.output).toMatch(/^Screen 5\n/);
+    expect(machine.chromiumOfBot("a").sent.some((entry) => entry.method === "Target.getTargets")).toBe(true);
   });
 
   describe("a cancelled call", () => {
@@ -319,9 +390,28 @@ describe("browser", () => {
       expect(chromium.sent.filter((entry) => entry.method === "Page.navigate")).toEqual([]);
     });
 
+    it("sends nothing when the cancel arrives during a slow start, and closes the lease", async () => {
+      const abort = new AbortController();
+      const browser = createBrowser({
+        connector: machine.connector,
+        desktops: {
+          ...machine.desktops,
+          acquire: async (botId) => {
+            const lease = await machine.desktops.acquire(botId);
+            abort.abort(new Error("stopped"));
+            return lease;
+          },
+        },
+      });
+      const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal: abort.signal });
+      expect(result.outcome).toBe("cancelled");
+      expect(inputSent()).toEqual([]);
+      expect(machine.openLeases()).toBe(0);
+    });
+
     it("sends nothing when the cancel arrives while the call waits in the queue", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
+      await look(browser, "a");
       chromium.sent.length = 0;
       const abort = new AbortController();
       const earlier = browser.execute({ botId: "a", tool: snapshot, signal });
@@ -338,7 +428,7 @@ describe("browser", () => {
 
     it("does not press Enter when the cancel arrives after the text", async () => {
       const browser = browserOf();
-      await browser.regionFor("a");
+      await look(browser, "a");
       const abort = new AbortController();
       chromium.onSend((method) => {
         if (method === "Input.insertText") {
@@ -355,18 +445,27 @@ describe("browser", () => {
     });
   });
 
+  it("keeps one bot's steps in order, and another bot does not wait", async () => {
+    const browser = browserOf();
+    await look(browser, "a");
+    const order: string[] = [];
+    const first = browser.execute({ botId: "a", tool: navigate, signal }).then(() => order.push("a first"));
+    const second = browser.execute({ botId: "a", tool: snapshot, signal }).then(() => order.push("a second"));
+    const other = browser.execute({ botId: "b", tool: snapshot, signal }).then(() => order.push("b"));
+    await Promise.all([first, second, other]);
+    expect(order.indexOf("a first")).toBeLessThan(order.indexOf("a second"));
+    expect(order.indexOf("b")).toBeLessThan(order.indexOf("a second"));
+  });
+
   it("reads the popup when an action opens one during the wait, so the next action matches the snapshot", async () => {
     const browser = browserOf();
-    await browser.regionFor("a");
-    const opener = [...chromium.pages][0] as string;
+    await look(browser, "a");
     let popup = "";
     chromium.onSend((method) => {
       if (method === "Input.dispatchMouseEvent" && popup === "") {
         popup = "pending";
         setTimeout(() => {
-          void chromium.openPopup(opener).then((id) => {
-            popup = id;
-          });
+          popup = chromium.openPopup("target-0");
         }, 50);
       }
     });
@@ -377,8 +476,28 @@ describe("browser", () => {
   });
 
   it("returns a snapshot that names the screen", async () => {
-    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    const result = await browserOf().execute({ botId: "b", tool: navigate, signal });
     expect(result.outcome).toBe("ok");
-    expect(result.output).toMatch(/^Screen 1\n/);
+    expect(result.output).toMatch(/^Screen 2\n/);
+  });
+});
+
+describe("nextPages", () => {
+  const page = (targetId: string, openerId?: string) => ({ targetId, type: "page", ...(openerId === undefined ? {} : { openerId }) });
+
+  it("ignores targets that are not pages", () => {
+    expect(nextPages([], [{ targetId: "omnibox", type: "browser_ui" }, page("p")])).toEqual(["p"]);
+  });
+
+  it("keeps known pages in order and puts a new page last, wherever Chromium lists it", () => {
+    expect(nextPages(["old"], [page("new"), page("old")])).toEqual(["old", "new"]);
+  });
+
+  it("drops a closed page, so the one under it is current", () => {
+    expect(nextPages(["old", "popup"], [page("old")])).toEqual(["old"]);
+  });
+
+  it("puts a page with an opener last when it first sees them together", () => {
+    expect(nextPages([], [page("popup", "opener"), page("opener")])).toEqual(["opener", "popup"]);
   });
 });
