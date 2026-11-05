@@ -121,7 +121,7 @@ We did not use the VNet firewall, which the first plan proposed. It needs the te
 Three details are easy to break:
 
 - A packet from a VM to any address of the host arrives at the host's input hook, not its forward hook. That includes the host's LAN address, so `bots_guard` needs a rule in both places.
-- The home network's public address looks like any other public address, but from a VM it reaches the router's own services through hairpin NAT. A test reached the router's admin console this way. A timer on the host keeps that address in `bots_guard`, so if the address changes, a VM can reach the router for up to a minute.
+- The home network's public address looks like any other public address, but from a VM it reaches the router's own services through hairpin NAT. A test reached the router's admin console this way. A timer on the host keeps that address in `bots_guard`, so if the address changes, a VM can reach the router until the next successful refresh.
 - `bots-guard.service` must never be required by `pve-guests.service`. Restarting a required unit restarts the unit that requires it, and stopping `pve-guests` shuts down every guest. This rebooted the control VM twice during step 3. A precheck on `pve-guests` blocks autostart when the table is missing, without that link.
 
 `infra/proxmox/verify-network.sh` proves all of this from inside a real VM. A spoofed or one-way packet gets no reply that a probe could observe, so the script also runs packet captures on the host, and each capture must stay empty.
