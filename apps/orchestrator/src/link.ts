@@ -307,7 +307,6 @@ export function startLink(args: {
       }
       dropConnection(connection);
       connection.socket.close(LINK_CLOSE.unauthorized);
-      log({ level: "info", event: "computer-disconnected", computerId: connection.computer.computerId });
     },
     async call(call) {
       for (;;) {
