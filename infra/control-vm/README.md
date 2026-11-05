@@ -56,7 +56,7 @@ In the Tailscale admin console, open the `bots-control` machine and select **Sha
 
 The orchestrator creates and repairs user VMs in a loop, from what Convex says each user should have. These steps set that up once and then declare a computer.
 
-1. On the Proxmox host, build the template from a Git ref. The template is VM 9000. User VMs are full clones, so you can rebuild it at any time.
+1. On the Proxmox host, build the template from a Git ref. The template is VM 9000. User VMs are full clones, so to rebuild it, run `qm destroy 9000 --purge 1` first.
 
 	```sh
 	bash create-user-template.sh main
@@ -87,6 +87,8 @@ The orchestrator creates and repairs user VMs in a loop, from what Convex says e
 	pnpm verify:template https://bots-control.<tailnet>.ts.net bots-user-201
 	```
 
+You do not update `computerd` by hand. Each deploy records the last commit that changed it, and the loop moves every VM to that commit once its owner has no run in progress. The loop also reinstalls `computerd` on a VM that stays disconnected for 2 minutes. Neither touches what a bot installed. A computer's `computerdCommit` field shows its version. The commit must be on GitHub, because each VM downloads it.
+
 To remove a computer, run `computers:removeVm` the same way, with `'{"ownerSubject":"tailscale:<login>"}'`. The link refuses a new connection from the VM at once. Within about 15 seconds, the loop closes the live connection and then destroys the VM and its workspace. You cannot undo this.
 
 ## Check it
@@ -109,7 +111,7 @@ bash create-probe-vms.sh --remove
 
 To run the network check from VMs that the template creates, run `bash clone-user-vm.sh <VM> <address> 2 2048 16` twice in place of `create-probe-vms.sh`, and wait until `cloud-init status` in each VM says `done`. A clone is tagged `bots-user`, so remove both before you next run `create-provisioner-token.sh`.
 
-To prove that provisioning survives a kill, run this as root on the control VM, from `/opt/bots`. It kills the real orchestrator once for each stage, and it takes about 10 minutes. It refuses to run if the pool holds a VM with no computer.
+To prove that provisioning survives a kill, run this as root on the control VM, from `/opt/bots`. It kills the real orchestrator once for each stage, and it takes about 12 minutes. It refuses to run if the pool holds a VM with no computer.
 
 ```sh
 node --env-file=.env.local scripts/verify-reconcile.ts

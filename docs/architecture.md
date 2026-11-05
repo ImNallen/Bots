@@ -126,6 +126,20 @@ Three details are easy to break:
 
 `infra/proxmox/verify-network.sh` proves all of this from inside a real VM. A spoofed or one-way packet gets no reply that a probe could observe, so the script also runs packet captures on the host, and each capture must stay empty.
 
+## How `computerd` updates on a VM
+
+Bots and users install their own software on their VMs, so an update must not touch that software, and that software must not break `computerd`. Replacing the VM would lose both, so the reconcile loop updates `computerd` in place through the guest agent. A broken `computerd` cannot update itself, and the guest agent does not depend on it.
+
+`infra/proxmox/install-computerd.sh` builds, updates, and repairs with the same steps:
+
+- Each release has its own directory under `/opt/bots-computerd` and its own Node, so a bot that changes the system's Node does not affect `computerd`.
+- The script swaps one symlink just before the restart, so a kill leaves a whole old release or a whole new one. A second run waits on a lock.
+- The script changes nothing outside that directory, except the sudoers file, the unit file, and any tool that `computerd` needs and a bot removed.
+
+The deploy script records the last commit that changed `computerd`, and VMs follow that commit. So the orchestrator and `computerd` stay compatible, and a deploy that leaves `computerd` alone restarts nothing on a VM. An update restarts `computerd`, which reports a running tool as interrupted, so the loop waits until the owner has no queued or running run. It reads that from Convex, because a deploy restarts the orchestrator and the orchestrator's memory is empty at that moment.
+
+A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM stays disconnected for 2 minutes, the loop reinstalls `computerd`.
+
 ## Why screens share one browser
 
 Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.
