@@ -124,6 +124,19 @@ await browser.input(BOTS[1], { kind: "text", text: "typed by a person" });
 const typed = await browse(BOTS[1], { name: "browser_snapshot", args: {} });
 check(typed.output.includes("typed by a person"), "a person's click lands in the page below the panel and the window's bars, and text follows", typed.output);
 
+const target = "position:fixed;left:200px;top:150px;width:60px;height:40px;background:#f0f;border:0";
+await browse(BOTS[1], {
+  name: "browser_navigate",
+  args: { url: pageWith("not clicked", `<button style="${target}" onclick="document.title='clicked'"></button>`) },
+});
+await new Promise((done) => setTimeout(done, 500));
+const [x, y] = (await probe("rfb-find-magenta", String((leases.get(BOTS[1]) as DesktopLease).vncPort))).split(",").map(Number) as [number, number];
+await browser.input(BOTS[1], { kind: "pointer", x, y, action: "down" });
+await browser.input(BOTS[1], { kind: "pointer", x, y, action: "up" });
+const hit = await browse(BOTS[1], { name: "browser_snapshot", args: {} });
+check(hit.output.includes("Title: clicked"), `a person's click at ${x},${y} on the stream lands on what the stream shows there`, hit.output);
+
+await browse(BOTS[1], { name: "browser_navigate", args: { url: pageWith("a form", `<input id="field" value="typed by a person">`) } });
 const recovered = createDesktops({ systemd: counted, runtimeDir: RUNTIME_DIR, now });
 const again = await recovered.acquire(BOTS[1]);
 check(again.slot === (leases.get(BOTS[1]) as DesktopLease).slot, "a new instance over the same state finds the same slot", String(again.slot));

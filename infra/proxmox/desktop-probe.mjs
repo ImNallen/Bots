@@ -163,6 +163,27 @@ switch (command) {
     console.log(args[1]);
     break;
   }
+  // Prints the middle of the pure magenta area on a frame, so a check can click what a viewer sees.
+  case "rfb-find-magenta": {
+    const session = await rfbSession(Number(args[0]));
+    const pixels = await frameOf(session);
+    const { width, height } = session;
+    const found = { left: width, right: -1, top: height, bottom: -1 };
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const at = (y * width + x) * 4;
+        if (pixels[at] === 255 && pixels[at + 1] === 0 && pixels[at + 2] === 255) {
+          found.left = Math.min(found.left, x);
+          found.right = Math.max(found.right, x);
+          found.top = Math.min(found.top, y);
+          found.bottom = Math.max(found.bottom, y);
+        }
+      }
+    }
+    if (found.right < 0) throw new Error("no magenta on this frame");
+    console.log(`${Math.round((found.left + found.right) / 2)},${Math.round((found.top + found.bottom) / 2)}`);
+    break;
+  }
   // Sends a click and keys through a stream, then reads what the focused page's input received.
   case "rfb-type": {
     const [cdpPort, vncPort] = args.map(Number);

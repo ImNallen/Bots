@@ -188,7 +188,7 @@ same "isolation: the same keys through a stream with input do reach the page, so
 same "isolation: a bot's window on this slot does not affect the other slot's stream size" "$(probe rfb-size "$OTHER_VNC" 2>&1)" 1280x800
 
 windows=$(probe windows "$CDP" 2>&1 | head -1)
-grep -q '"left":0,.*"width":1280,.*"windowState":"maximized"' <<<"$windows" && result true "desktop: the window fills the area below the panel" || result false "desktop: the window fills the area below the panel" "$windows"
+grep -q '"left":0,"top":27,"width":1280,"height":773,"windowState":"maximized"' <<<"$windows" && result true "desktop: the window fills the area below the panel, with no second title bar" || result false "desktop: the window fills the area below the panel, with no second title bar" "$windows"
 
 [ ! -e "$PROFILE.tmp" ] && result true "copy: a .tmp left by a kill is gone" || result false "copy: a .tmp left by a kill is gone"
 [ ! -e "$PROFILE/left-by-a-kill" ] && result true "copy: nothing from the .tmp reached the profile" || result false "copy: nothing from the .tmp reached the profile"

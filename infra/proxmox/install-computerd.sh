@@ -19,7 +19,7 @@ OLD_ROOT=/opt/computerd
 UNIT_DIR=/etc/systemd/system
 UNIT=$UNIT_DIR/computerd.service
 TOOLS="sudo procps ca-certificates curl git xz-utils"
-BROWSER_PACKAGES="chromium xvfb x11vnc dbus xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-terminal xfconf thunar fonts-liberation fonts-noto-color-emoji"
+BROWSER_PACKAGES="chromium xvfb x11vnc x11-utils dbus xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-terminal xfconf thunar fonts-liberation fonts-noto-color-emoji"
 
 ref=${1:?usage: install-computerd.sh GIT_REF [all|build|activate|force]}
 mode=${2:-all}
