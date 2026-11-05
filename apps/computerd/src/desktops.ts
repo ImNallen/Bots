@@ -37,17 +37,17 @@ const ALL_IN_USE = "every screen on this computer is in use, so try again in a f
 // A bot id becomes a path and an environment value.
 const SAFE_BOT_ID = /^[a-z0-9]+$/i;
 
-export type Claim = {
+type Claim = {
   slot: Slot;
   lastUsed: number;
   // Settles when the slot is dead and its holder file names this bot. Later acquires wait on the same promise.
   ready: Promise<void>;
 };
 
-export type SlotChoice = { kind: "free"; slot: Slot } | { kind: "evict"; botId: string; slot: Slot } | { kind: "full" };
+type SlotChoice = { kind: "free"; slot: Slot } | { kind: "evict"; botId: string; slot: Slot } | { kind: "full" };
 
 // A free slot if one exists, or else the claim with no holds that was used longest ago. A held claim is never chosen.
-export function pickSlot(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string, number>): SlotChoice {
+function pickSlot(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string, number>): SlotChoice {
   const taken = new Set([...claims.values()].map((claim) => claim.slot));
   const free = SLOTS.find((slot) => !taken.has(slot));
   if (free !== undefined) {
@@ -59,7 +59,7 @@ export function pickSlot(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<
   return oldest === undefined ? { kind: "full" } : { kind: "evict", botId: oldest[0], slot: oldest[1].slot };
 }
 
-export function idleBots(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string, number>, now: number): string[] {
+function idleBots(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string, number>, now: number): string[] {
   return [...claims.entries()]
     .filter(([botId, claim]) => !holds.has(botId) && now - claim.lastUsed >= IDLE_STOP_MS)
     .map(([botId]) => botId);

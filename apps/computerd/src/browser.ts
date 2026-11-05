@@ -97,7 +97,7 @@ type Connection = {
   sessions: Map<string, string>;
 };
 
-export type TargetInfo = { targetId: string; type: string; openerId?: string };
+type TargetInfo = { targetId: string; type: string; openerId?: string };
 
 // A closed page leaves the list, so the bot falls back to the page under it. A new page goes on the end, so a popup becomes the
 // current page. Pages seen for the first time together, as after a computerd restart, put the ones with an opener last, so a
