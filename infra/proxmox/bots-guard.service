@@ -1,0 +1,17 @@
+# No RequiredBy=pve-guests.service here. Restarting a required unit restarts what requires it, and stopping
+# pve-guests shuts down every guest on this host. pve-guests-bots-guard.conf gives the same protection at boot.
+[Unit]
+Description=Default-deny rules for the bots networks
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target pve-guests.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/bots/bots-guard.nft
+ExecStartPost=-/usr/local/sbin/bots-guard-public-ip --cached
+
+[Install]
+WantedBy=multi-user.target

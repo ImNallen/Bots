@@ -2,7 +2,7 @@
 
 A self-hosted agent platform. See the [architecture](docs/architecture.md) and the [roadmap](docs/roadmap.md).
 
-This repository is at roadmap step 2, and step 1b has run on Proxmox. The steps below run Convex and `computerd` in Docker, and the orchestrator in dev mode and the web app on one Mac. A user chats with a bot, and the bot runs shell and file tools in the `computerd` container. To deploy over Tailscale, see [the control VM guide](infra/control-vm/README.md).
+This repository is partway through roadmap step 3, and step 1b has run on Proxmox. The steps below run Convex and `computerd` in Docker, and the orchestrator in dev mode and the web app on one Mac. A user chats with a bot, and the bot runs shell and file tools in the `computerd` container. To deploy over Tailscale, see [the control VM guide](infra/control-vm/README.md).
 
 ## Requirements
 
@@ -44,6 +44,7 @@ The orchestrator reads these optional settings from `.env.local`:
 | `pnpm verify:auth` | Tokens, live queries, user isolation, the dev guard, the link listener's boundary, and file serving work against the real Convex backend and the real orchestrator |
 | `pnpm verify:agent` | Key handling, tools, crash recovery with no duplicate side effects, fencing, cancel, timeouts, link security, isolation, secret placement, the network rules, and the limit on attempts with no progress work against the real Convex backend, a real orchestrator process, and a real `computerd` container, with a scripted fake Mistral |
 | `pnpm verify:tailnet <address> <LAN address>` | Identity, a forged header, live queries through `tailscale serve`, and closed LAN ports work on a real deployment. Run it from a device on the tailnet |
+| `infra/proxmox/verify-network.sh <VM> <VM>` | A user VM reaches only the internet and the link port, and cannot claim another VM's addresses. Run it on the Proxmox host, as [the control VM guide](infra/control-vm/README.md) describes |
 
 CI runs `pnpm typecheck`, `pnpm test`, and `pnpm build` on every pull request and on pushes to `main`. Run the verify commands yourself before you merge a change to runs, the link, `computerd`, or auth.
 

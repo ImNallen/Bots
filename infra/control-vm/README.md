@@ -13,6 +13,16 @@ These steps put the orchestrator, Convex, and the web app on one Proxmox VM, rea
 
 The script creates VM 110, `bots-control`, from the Debian 13 cloud image. It refuses to touch a VM 110 with another name.
 
+## Create the networks
+
+Copy all of `infra/proxmox` to the Proxmox host, and run the network script there. It is safe to rerun, and it restarts no guest.
+
+```sh
+bash create-network.sh
+```
+
+The script creates the isolated networks for user VMs, loads the rules that hold them, and adds a second network interface to VM 110. The [architecture document](../../docs/architecture.md) explains the rules.
+
 ## Set up the machine
 
 1. Copy `infra/control-vm/setup.sh` to the VM, and run it as root. It installs Docker, Node, pnpm, and Tailscale, and it clones this repository to `/opt/bots`.
@@ -32,9 +42,11 @@ Run the deploy script as root on the VM, with the branch to deploy. Rerun it for
 sudo bash /opt/bots/infra/control-vm/deploy.sh main
 ```
 
-The script builds the app, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
+The script gives the VM its address on the control network, builds the app, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
 
 To read the orchestrator's logs, run `journalctl -u bots-orchestrator`. To open the Convex dashboard, forward ports 6791 and 3210, because the dashboard's page calls Convex directly: `ssh -L 6791:127.0.0.1:6791 -L 3210:127.0.0.1:3210 bots@<VM address>`. Then run `sudo cat /opt/bots/packages/convex/.env.local` on the VM to read the admin key.
+
+If a change edits `deploy.sh` itself, fetch and check out the branch before you run the script. Otherwise the old script keeps running after it updates the checkout, and it skips your new steps.
 
 ## Add a user
 
@@ -49,3 +61,13 @@ pnpm verify:tailnet https://bots-control.<tailnet>.ts.net 192.168.1.161
 ```
 
 Each run adds a bot named `verify-tailnet-*` to your list, because bots cannot be deleted yet.
+
+To prove what a user VM can reach, run these commands on the Proxmox host. The check reads the addresses of VM 110 through its guest agent. It scans every TCP port on eight machine addresses and the peer VM, and it runs packet captures on the host. The last full run took about 23 minutes.
+
+```sh
+bash create-probe-vms.sh
+bash verify-network.sh 901 902
+bash create-probe-vms.sh --remove
+```
+
+Set `QUICK=1` to scan a sample of ports. A check that a friend's access depends on must scan them all.

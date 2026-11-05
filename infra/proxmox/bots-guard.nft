@@ -1,0 +1,60 @@
+#!/usr/sbin/nft -f
+
+table inet bots_guard
+delete table inet bots_guard
+
+table inet bots_guard {
+	set not_public {
+		type ipv4_addr
+		flags interval
+		elements = {
+			0.0.0.0/8,
+			10.0.0.0/8,
+			100.64.0.0/10,
+			127.0.0.0/8,
+			169.254.0.0/16,
+			172.16.0.0/12,
+			192.0.0.0/24,
+			192.0.2.0/24,
+			192.168.0.0/16,
+			198.18.0.0/15,
+			198.51.100.0/24,
+			203.0.113.0/24,
+			224.0.0.0/4,
+			240.0.0.0/4,
+		}
+	}
+
+	set home_public {
+		type ipv4_addr
+	}
+
+	chain refuse {
+		reject with icmpx admin-prohibited
+	}
+
+	# A packet from a VM to any address of this host arrives here, not in forward. That includes the host's LAN address.
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		iifname { "botsvms", "botsctl" } jump refuse
+	}
+
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+		iifname { "botsvms", "botsctl" } jump leaving_bots_network
+		oifname { "botsvms", "botsctl" } jump entering_bots_network
+	}
+
+	chain leaving_bots_network {
+		iifname "botsvms" oifname "botsctl" ip saddr 10.77.0.0/24 ip daddr 10.78.0.2 tcp dport 8788 accept
+		ip daddr @home_public jump refuse
+		iifname "botsvms" oifname "vmbr0" ip saddr 10.77.0.0/24 ip daddr != @not_public accept
+		iifname "botsctl" oifname "botsvms" ct state established,related accept
+		jump refuse
+	}
+
+	chain entering_bots_network {
+		ct state established,related accept
+		jump refuse
+	}
+}

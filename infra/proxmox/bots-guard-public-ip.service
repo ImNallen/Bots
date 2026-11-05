@@ -1,0 +1,8 @@
+[Unit]
+Description=Keep the home public address in the bots guard
+After=network-online.target bots-guard.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bots-guard-public-ip

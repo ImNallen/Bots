@@ -24,7 +24,8 @@ Backups are deferred. Add off-server copies of Convex exports and the master key
 - The control VM is VM 110, `bots-control`, at `192.168.1.161`. Log in as `bots` over SSH, which has passwordless `sudo`. The app is in `/opt/bots`.
 - Run `sudo tailscale serve status` on the control VM to find its `https://bots-control.<tailnet>.ts.net` address.
 - The service runs as `bots-orchestrator`, which has no `sudo`. Keep it separate from the `bots` login: a process can take over another process of its own user, and `bots` has `sudo`.
-- The control VM deploys a branch until someone deploys another. After the first merge to `main`, run [the deploy script](../infra/control-vm/README.md) with `main`.
+- The control VM deploys a branch until someone deploys another. It runs `t3/step-3-proxmox` now, so run [the deploy script](../infra/control-vm/README.md) with `main` after that branch merges.
+- User VMs use the `botsvms` network, `10.77.0.0/24`, with the gateway at `10.77.0.1`. The control VM is `10.78.0.2` on `botsctl`, `10.78.0.0/30`. The link listens only on `10.78.0.2:8788`.
 - Your Mac has its own Convex data and its own Mistral key, separate from the control VM.
 
 ## Decisions for step 3
@@ -39,16 +40,20 @@ The user chose these:
 These are proposals, so change them if you find a better answer:
 
 - Give the owner's VM 12 vCPUs and 500 GB. Give each friend 6 vCPUs and 200 GB.
-- Put user VMs on a new isolated network, off the tailnet. Allow the internet and the orchestrator's link port. Block the LAN, the Proxmox UI, other users' VMs, and the tailnet. Add a second network interface to the control VM for this network.
-- Test the Proxmox VNet firewall first. It needs the nftables firewall, which Proxmox marks as a tech preview. Per-VM firewall rules are the fallback.
 - Give the orchestrator a Proxmox API token that can only clone, configure, power, and snapshot VMs in one resource pool.
 - Model each computer with desired and observed state, and converge them in a reconcile loop. Extend the `computers` table with those fields.
 - Call `computers.register` from the provisioner, with a separate link token for each VM. Bind the link listener to the private network address through `LINK_HOST`. The public listener stays on `127.0.0.1`.
 - Run `computerd` under systemd in the VM template, with the same `computerd` and `agent` users and sudoers rule as its Dockerfile. `netguard` is for Docker on a Mac and does not apply to VMs.
-- Write a network check like scenario O in `scripts/verify-agent.ts`, and run it from inside a real VM. Also test `192.0.0.0/24`, `198.18.0.0/15`, and `240.0.0.0/4`, which `netguard` does not block.
 - Keep the public listener away from VMs. In Tailscale mode, one header on that socket creates a token for any identity, so a VM that reaches it could act as any user. VMs reach only the link listener.
 
 Step 3 also has to decide how an update reaches `computerd` on existing VMs. Nothing does that yet.
+
+### Progress on step 3
+
+1. Done. The networks and their rules run on Proxmox, and `infra/proxmox/verify-network.sh` passes against the real control VM. That script still has to run from VMs that the template creates, because step 3's check is about those VMs.
+2. Next. Build the template, with `computerd` under systemd. The check is a hand-cloned VM that connects over the link and runs a tool from a real chat.
+3. Build the reconcile loop, with the scoped API token and pool, and call `computers.register` from it. The check is to kill it at each stage and confirm that it converges. The provisioner must set `firewall=1`, the MAC filter, and `ipfilter-net0` on every VM, as `infra/proxmox/create-probe-vms.sh` does.
+4. Decide how updates reach `computerd`, then run the full network check from template VMs.
 
 ## After step 3: deploy from `main`
 
@@ -83,7 +88,11 @@ These are open on purpose. Fix each one when the work reaches it.
 - The Docker tags `bots-computerd:dev` and `bots-netguard:dev` are shared, so `pnpm bootstrap` and `pnpm verify:agent` replace a developer's local images.
 - The runner does not cap the model name in a response. Scenario P in `scripts/verify-agent.ts` uses this as its trigger, so update that scenario if you add a cap.
 - A kill during the disk import of `infra/proxmox/create-control-vm.sh` leaves a locked stub VM. A rerun explains the fix instead of converging.
-- `pnpm verify:tailnet` does not check that `systemd-resolved` on port 5355 and SSH on port 22 stay private, and both answer on the VM's LAN address today.
+- `pnpm verify:tailnet` does not check that `systemd-resolved` on port 5355 and SSH on port 22 stay private, and both answer on the VM's LAN address today. User VMs cannot reach them, which `infra/proxmox/verify-network.sh` proves.
+- A host reboot loaded `bots-guard.service` before the guests and the rules held afterward. No reboot has tested the failure cases, which are an empty `home_public` set stopping autostart and a boot with no internet using the cached address.
+- A bot can reach the router's admin console after the home public address changes, until the next successful refresh. The refresh runs every minute but depends on `api.ipify.org`, so an outage of that site extends the gap. The owner accepted this risk and chose not to add a router rule. A rule would have to keep DNS open, because the Proxmox host uses the router for DNS.
+- VM 110 has no firewall of its own, and SSH and LLMNR listen on its `10.78.0.2` address. Only `bots_guard` stops a user VM from reaching them. `verify-network.sh` fails if that table is missing, and guests do not autostart without it.
+- The rules limit where a bot connects, not how much it sends. A bot can flood the link port, and it can connect to port 25 on any public address from the home IP address.
 - Bots cannot be deleted, so `pnpm verify:tailnet` leaves `verify-tailnet-*` bots in the user's list.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
