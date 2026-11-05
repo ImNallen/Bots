@@ -15,6 +15,7 @@ function fakeChromium() {
   let nextTarget = 1;
   let failing = false;
   let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
+  let sendHook: ((method: string) => void) | undefined;
 
   const emit = (method: string, params: Record<string, unknown>) => {
     for (const listener of listeners) {
@@ -37,6 +38,7 @@ function fakeChromium() {
       onEvent: (listener) => listeners.push(listener),
       send: async (method, params = {}, sessionId) => {
         sent.push({ method, params, sessionId });
+        sendHook?.(method);
         switch (method) {
           case "Target.getTargets":
             return { targetInfos: [...pages].map((targetId) => ({ targetId, type: "page" })) };
@@ -82,6 +84,9 @@ function fakeChromium() {
     sent,
     emit,
     openPopup,
+    onSend: (hook: (method: string) => void) => {
+      sendHook = hook;
+    },
     setFailing: (value: boolean) => {
       failing = value;
     },
@@ -242,6 +247,83 @@ describe("browser", () => {
     await new Promise((done) => setTimeout(done, 20));
     const result = await browser.execute({ botId: "a", tool: snapshot, signal });
     expect(result.outcome).toBe("ok");
+  });
+
+  describe("a cancelled call", () => {
+    const cancelled = () => {
+      const abort = new AbortController();
+      abort.abort(new Error("stopped"));
+      return abort.signal;
+    };
+    const inputSent = () => chromium.sent.filter((entry) => entry.method.startsWith("Input."));
+
+    it.each<BrowserInvocation>([
+      { name: "browser_click", args: { ref: 1 } },
+      { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
+      { name: "browser_press", args: { key: "Enter" } },
+      { name: "browser_navigate", args: { url: "https://example.com/" } },
+    ])("sends nothing to the page for $name", async (tool) => {
+      const result = await browserOf().execute({ botId: "a", tool, signal: cancelled() });
+      expect(result.outcome).toBe("cancelled");
+      expect(inputSent()).toEqual([]);
+      expect(chromium.sent.filter((entry) => entry.method === "Page.navigate")).toEqual([]);
+    });
+
+    it("sends nothing when the cancel arrives while the call waits in the queue", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      chromium.sent.length = 0;
+      const abort = new AbortController();
+      const earlier = browser.execute({ botId: "a", tool: snapshot, signal });
+      const queued = browser.execute({
+        botId: "a",
+        tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
+        signal: abort.signal,
+      });
+      abort.abort(new Error("stopped"));
+      await earlier;
+      expect((await queued).outcome).toBe("cancelled");
+      expect(inputSent()).toEqual([]);
+    });
+
+    it("does not press Enter when the cancel arrives after the text", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      const abort = new AbortController();
+      chromium.onSend((method) => {
+        if (method === "Input.insertText") {
+          abort.abort(new Error("stopped"));
+        }
+      });
+      const result = await browser.execute({
+        botId: "a",
+        tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
+        signal: abort.signal,
+      });
+      expect(result.outcome).toBe("cancelled");
+      expect(inputSent().some((entry) => entry.method === "Input.dispatchKeyEvent")).toBe(false);
+    });
+  });
+
+  it("reads the popup when an action opens one during the wait, so the next action matches the snapshot", async () => {
+    const browser = browserOf();
+    await browser.regionFor("a");
+    const opener = [...chromium.pages][0] as string;
+    let popup = "";
+    chromium.onSend((method) => {
+      if (method === "Input.dispatchMouseEvent" && popup === "") {
+        popup = "pending";
+        setTimeout(() => {
+          void chromium.openPopup(opener).then((id) => {
+            popup = id;
+          });
+        }, 50);
+      }
+    });
+    const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal });
+    expect(result.outcome).toBe("ok");
+    expect(popup).toMatch(/^target-/);
+    expect(result.output).toContain(`session-${popup}`);
   });
 
   it("returns a snapshot that names the screen", async () => {

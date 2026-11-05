@@ -8,6 +8,7 @@ const SCREEN_COUNT = 8;
 const CDP_CONNECT_TIMEOUT_MS = 5000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const SETTLE_MS = 400;
+const MAX_SETTLE_ROUNDS = 4;
 const POPUP_OFFSET = 60;
 
 const KEY_CODES: Record<string, number> = {
@@ -318,7 +319,10 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
   }
 
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<string> {
+    // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
+    signal.throwIfAborted();
     const { client, screen, sessionId } = await currentPage(botId);
+    signal.throwIfAborted();
     switch (tool.name) {
       case "browser_navigate": {
         const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
@@ -329,14 +333,19 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
       }
       case "browser_snapshot":
         break;
-      case "browser_click":
-        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
+      case "browser_click": {
+        const point = await locate(client, sessionId, tool.args.ref);
+        signal.throwIfAborted();
+        await click(client, sessionId, point);
         break;
+      }
       case "browser_type": {
         await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
         await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
+        signal.throwIfAborted();
         await client.send("Input.insertText", { text: tool.args.text }, sessionId);
         if (tool.args.submit) {
+          signal.throwIfAborted();
           await press(client, sessionId, "Enter");
         }
         break;
@@ -345,9 +354,17 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
         await press(client, sessionId, tool.args.key);
         break;
     }
-    // An action can open a popup, so the page to read may not be the page that was acted on.
-    const after = await currentPage(botId);
-    await settle(after.client, after.sessionId, signal);
+    // An action can open a popup at any time during the wait, and the next action goes to the newest page.
+    // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
+    let after = await currentPage(botId);
+    for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
+      await settle(after.client, after.sessionId, signal);
+      const latest = await currentPage(botId);
+      if (latest.targetId === after.targetId) {
+        break;
+      }
+      after = latest;
+    }
     const snapshot = String(await evaluate(after.client, after.sessionId, SNAPSHOT_SCRIPT));
     return `Screen ${screen.region + 1}\n${snapshot}`;
   }
