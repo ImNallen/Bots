@@ -5,6 +5,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
+import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
@@ -40,7 +41,11 @@ type Lease = {
   stop: () => void;
 };
 
+// A run that waits for a person does no work, so it gives up its slot. Otherwise unanswered approvals would stop every other bot.
+type Slot = { release: () => void; reclaim: () => void };
+
 export type RunnerDeps = {
+  slotFor: (runId: Id<"runs">) => Slot;
   service: Service;
   link: Link;
   masterKey: Buffer;
@@ -172,18 +177,50 @@ async function runTool(args: {
   call: ToolCall;
 }): Promise<RunEventBody> {
   const { deps, runId, claim, lease, call } = args;
+  const slot = deps.slotFor(runId);
   const base = { kind: "toolResult" as const, toolCallId: call.id, name: call.name };
   const parsed = parseToolCall(call);
   if (parsed.kind === "invalid") {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
+  const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
+  if (needsApproval({ level, toolName: parsed.invocation.name })) {
+    const decision = await waitForApproval({
+      request: () =>
+        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: parsed.invocation.name }),
+      read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
+      expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
+      now: Date.now,
+      signals: [lease.lost, lease.cancel],
+      onWait: () => {
+        deps.log({ level: "info", event: "tool-waiting-for-approval", runId, toolCallId: call.id });
+        slot.release();
+      },
+    }).finally(() => slot.reclaim());
+    lease.lost.throwIfAborted();
+    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision });
+    // This call was never sent, so these results can say so with certainty.
+    switch (decision) {
+      case "approved":
+        break;
+      case "aborted":
+        return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+      case "denied":
+        return { ...base, outcome: "denied", output: DENIED_OUTPUT, truncated: false };
+      case "expired":
+        return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
+    }
+  }
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),
     now: Date.now,
     signals: [lease.lost, lease.cancel],
-    onWait: () => deps.log({ level: "info", event: "tool-waiting-for-takeover", runId, toolCallId: call.id }),
-  });
+    onWait: () => {
+      deps.log({ level: "info", event: "tool-waiting-for-takeover", runId, toolCallId: call.id });
+      slot.release();
+    },
+  }).finally(() => slot.reclaim());
   lease.lost.throwIfAborted();
   const callId = makeCallId({ runId, toolCallId: call.id });
   deps.log({ level: "info", event: "tool-dispatch", callId, tool: parsed.invocation.name });
@@ -258,10 +295,23 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   }
 }
 
-export function startRunner(deps: RunnerDeps): void {
-  const { service, log, ownerScope } = deps;
+export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
+  const { service, log, ownerScope } = args;
   const active = new Set<Id<"runs">>();
+  const waiting = new Set<Id<"runs">>();
   let queued: Id<"runs">[] = [];
+  const deps: RunnerDeps = {
+    ...args,
+    slotFor: (runId) => ({
+      release: () => {
+        waiting.add(runId);
+        queued.forEach(consider);
+      },
+      reclaim: () => {
+        waiting.delete(runId);
+      },
+    }),
+  };
 
   async function attempt(runId: Id<"runs">): Promise<void> {
     const claim = await service.mutation(api.runs.claim, { runId });
@@ -279,7 +329,7 @@ export function startRunner(deps: RunnerDeps): void {
 
   // Any failure ends the attempt and leaves the lease to expire, so recovery takes the same path as a crash.
   function consider(runId: Id<"runs">): void {
-    if (active.has(runId) || active.size >= MAX_CONCURRENT_RUNS) {
+    if (active.has(runId) || active.size - waiting.size >= MAX_CONCURRENT_RUNS) {
       return;
     }
     active.add(runId);
@@ -295,6 +345,7 @@ export function startRunner(deps: RunnerDeps): void {
       })
       .finally(() => {
         active.delete(runId);
+        waiting.delete(runId);
         queued.forEach(consider);
       });
   }

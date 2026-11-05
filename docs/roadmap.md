@@ -28,6 +28,7 @@ Backups are deferred, and a computer is not a permanent store. A user will be ab
 - User VMs use the `botsvms` network, `10.77.0.0/24`, with the gateway at `10.77.0.1`. The control VM is `10.78.0.2` on `botsctl`, `10.78.0.0/30`. The link listens only on `10.78.0.2:8788`.
 - VM 9000, `bots-user-template`, is the template for user VMs. Its description names the commit of its `computerd`. A clone updates itself to the current commit, so the template can lag behind.
 - VM 201, `bots-user-201`, at `10.77.0.21`, is the owner's computer. The orchestrator's reconcile loop owns it, and it is in slot 1. Reach it with `qm guest exec` on the host, because it accepts no inbound connections and has no SSH keys.
+- VM 120, `huddle`, is on the same host and is not part of this system. It is not in the `bots` pool, so the reconcile loop does not touch it.
 - Your Mac has its own Convex data and its own Mistral key, separate from the control VM.
 
 ## Decisions for step 3
@@ -63,10 +64,55 @@ The user chose to update `computerd` in place, because bots and users install th
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
 4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
-5. Next. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
-6. Run the step's check, on a phone.
+5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
+6. Next. Build a desktop for each bot, as the next section describes, and then run the step's check on a real phone. Step 4 is not done until that check passes.
 
-After step 4, add a way for a user to reset a computer.
+## Next: a desktop for each bot
+
+The owner decided this after looking inside Grok Bot's VM, which runs a full Xfce desktop. Screens now show only a browser, in one wide display, and that design has limits the owner does not want. A test on a throwaway VM showed that a desktop for each bot works. `docs/spikes/desktop-per-bot` has its scripts.
+
+### What Grok Bot does
+
+These facts come from running commands in a terminal on its VM. Everything runs as one user, and that user is not isolated by bot.
+
+- Each bot has its own `Xvfb` display at 1920x1200, an Xfce desktop, and an `x11vnc` on loopback with no `-viewonly`. noVNC shows the stream, and a person's input goes through VNC.
+- Each display runs real Chrome with its own profile, such as `/home/box/chrome-profile/Fork-3`, with `--password-store=basic`. The name suggests that each profile starts as a copy of a base profile. How a new login reaches other bots is unknown.
+- Chrome runs with `--no-sandbox`. Keep the sandbox on here.
+
+### What the test showed
+
+| Test | Result |
+|---|---|
+| Typing through VNC while switching between 4 displays | No key reached another display and none were lost, in 80 rounds and 2,880 keys |
+| Other bots open windows or popups, or take focus, during that typing | No effect |
+| Delay | About 112 ms for each key, and about 0.7 s for a key right after a click |
+| Ctrl+L and the address bar, and a mouse click on a dropdown option | Both work, and CDP could do neither |
+| A second `x11vnc` with `-viewonly` on the same display | Types nothing, so input can stay off until a take-over |
+| A copied profile, with `--password-store=basic` and the sandbox on | Stays logged in, with HttpOnly cookies and localStorage |
+| A login moved to a running browser with `Storage.getCookies` and `Storage.setCookies` | Works with no restart, including GitHub's HttpOnly session cookie. localStorage does not move this way |
+| Start | About 2 s for a desktop, and a few seconds more for its browser |
+| Memory | About 250 MB for each idle desktop, and about 650 MB with a real page open |
+| Disk | About 1 GB of packages on each VM, and about 94 MB for each copy of a profile |
+| Real Chrome compared with Chromium at GitLab's Cloudflare check | Both stopped there, so stay with Chromium |
+
+### What to build
+
+1. Give each active bot a display, an Xfce desktop, and its own Chromium, started on demand and stopped when idle. Keep the sandbox on.
+2. Give each display a view-only stream for watching, and a separate input stream that opens only during a take-over.
+3. Make take-over the real desktop through noVNC, and remove the CDP input path, its custom touch controls, and the wide display with its regions. Check on a real phone whether noVNC's keyboard and touch are enough, and keep a key bar if they are not.
+4. Move logins. When the owner gives back a take-over, copy the bot's cookies to the base profile and to every running browser through CDP. Start a new bot from a copy of the base. A site that keeps its session in localStorage needs that bot's browser restarted from a new copy.
+5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
+6. Run the step's check on a real phone, with two bots, and then `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check, because a VM gains new services.
+
+### Follow-ups, in this order
+
+1. Let bots use the desktop as well as the user. The owner wants this. A bot needs tools for screenshots, the mouse, and the keyboard, and a model that can read images. These tools must go through approvals, and they count as actions that change something.
+2. Let a user reset a computer. A computer is not a permanent store, so a reset deletes its workspaces and browser logins, and the button must say so. It can reuse the removal path and clone a new VM into the same slot.
+3. Let a bot ask for a take-over, for example at a login page. Grok Bot calls this a secure handoff.
+4. Consider "Always allow" on an approval. Grok Bot has it. Always allowing shell would turn approvals off for that bot, so it needs care.
+
+The owner has not tried any of step 4 on a real phone yet. Typing on a phone keyboard and the size of a screen are the open questions.
+
 
 ## After step 3: deploy from `main`
 
@@ -83,7 +129,9 @@ These are open on purpose. Fix each one when the work reaches it.
 
 - The web UI shows raw markdown.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
-- A bot can reach the public internet with no approval step until step 4, so a prompt-injected bot could send out anything in its workspace.
+- Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
+- At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
+- An unanswered approval expires after 24 hours as a refusal. Until then, the run stays active, which holds back `computerd` updates on that VM.
 - A tool that calls `setsid` can survive a cancel or a timeout.
 - A bot with `sudo` can delete the journal, and the wiped call then runs again. Deleting the `computerd` journal volume has the same effect. Step 8 removes passwordless `sudo`.
 - A `sudo` child and a `setsid` child both outlive a cancel or a timeout, because `computerd` kills the process group as `agent`.

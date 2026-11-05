@@ -50,6 +50,7 @@ function CreateBotForm() {
 
 function BotList() {
   const bots = useQuery(api.bots.list);
+  const waiting = useQuery(api.approvals.pendingBots);
   if (bots === undefined) {
     return <p role="status">Loading bots.</p>;
   }
@@ -63,6 +64,7 @@ function BotList() {
           <Link to="/bots/$botId" params={{ botId: bot._id }}>
             {bot.name}
           </Link>
+          {waiting?.includes(bot._id) === true && <span className="bot-waiting"> needs your approval</span>}
         </li>
       ))}
     </ul>

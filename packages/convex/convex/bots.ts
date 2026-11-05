@@ -2,8 +2,10 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
+import { approvalLevel } from "./validators.js";
 
 const MAX_NAME_LENGTH = 64;
+const DEFAULT_APPROVAL_LEVEL = "outside";
 // Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
 const TAKEOVER_MS = 15 * 60 * 1000;
 
@@ -107,5 +109,21 @@ export const takeoverUntil = query({
   handler: async (ctx, { botId }) => {
     await requireService(ctx);
     return (await ctx.db.get(botId))?.takeoverUntil ?? 0;
+  },
+});
+
+export const setApprovalLevel = mutation({
+  args: { botId: v.id("bots"), level: approvalLevel },
+  handler: async (ctx, { botId, level }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, { approvalLevel: level });
+  },
+});
+
+export const approvalLevelFor = query({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    await requireService(ctx);
+    return (await ctx.db.get(botId))?.approvalLevel ?? DEFAULT_APPROVAL_LEVEL;
   },
 });

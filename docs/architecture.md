@@ -142,6 +142,8 @@ A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM st
 
 ## Why screens share one browser
 
+The roadmap replaces this design with a desktop for each bot, and its next section has the reasons and the test results. This section describes what runs today.
+
 Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.
 
 The design that works has one wide virtual display. Each bot gets one Chromium window in its own 1280x800 region of that display. A cropped `x11vnc` stream shows each region.
@@ -189,6 +191,23 @@ A VM accepts no inbound connections, so a stream is one more outbound connection
 During a take-over, the bot waits before its next tool. That state is in Convex, so a restarted orchestrator keeps waiting, and if it cannot read the state it waits too, because starting a tool while a person may be typing is the worse mistake. Input has its own WebSocket, separate from the stream. It takes only a short list of event kinds, and nothing that carries an event logs or stores it, because an event can hold a password. If the owner leaves without giving back, the take-over expires after 15 minutes and the bot carries on.
 
 Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
+
+## How approvals work
+
+The orchestrator decides on every tool call before it sends the call to a computer. A VM is untrusted, and it never takes part in this decision. Each bot has one level:
+
+| Level | What asks first |
+|---|---|
+| Everything | Every tool |
+| Outside, the default | Shell commands and browser actions that change something |
+| Shell | Shell commands |
+| Nothing | No tool |
+
+At the default level, a short list of tools runs without asking, and every other tool asks. So a tool added later asks until someone decides otherwise.
+
+A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
+
+Approvals are a check on what a bot asks to do, not a sandbox. An approved shell command runs as a user with `sudo`, and what it starts is not asked about again. The network rules still hold, and step 8 adds the independent reviewer.
 
 ## Where secrets live
 

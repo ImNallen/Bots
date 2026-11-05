@@ -454,10 +454,16 @@ type Chat = {
   settled: (runId: Id<"runs">, timeoutMs?: number) => Promise<TimelineRun>;
 };
 
-async function newChat(args: { client: ConvexHttpClient; name: string }): Promise<Chat> {
+async function newChat(args: {
+  client: ConvexHttpClient;
+  name: string;
+  level?: "everything" | "outside" | "shell" | "nothing";
+}): Promise<Chat> {
   const { client } = args;
   await client.mutation(api.users.ensureCurrent, {});
   const botId = await client.mutation(api.bots.create, { name: `${args.name}-${nonce}` });
+  // Most scenarios are about other things. The approvals scenario sets its own level.
+  await client.mutation(api.bots.setApprovalLevel, { botId, level: args.level ?? "nothing" });
   const threadId = await client.mutation(api.threads.ensureForBot, { botId });
   async function run(runId: Id<"runs">) {
     const timeline = await client.query(api.threads.timeline, { threadId });
@@ -1107,6 +1113,152 @@ try {
       direct.close();
       stopComputer(DIRECT_PROJECT);
     }
+  });
+
+  await scenario("approvals. the orchestrator asks, and only the owner answers", async () => {
+    const scriptedShell = (text: string, command: string) =>
+      fake.script(text, ({ toolResults }) =>
+        toolResults.length === 0
+          ? { kind: "tools", delivery: "whole", calls: [shellCall(command)] }
+          : { kind: "text", text: `finished ${JSON.stringify(toolResults[0]).includes("outcome: denied") ? "denied" : "ok"}` },
+      );
+    const pendingFor = async (chat: Chat) => await chat.client.query(api.approvals.pendingForThread, { threadId: chat.threadId });
+    const waitForPending = (chat: Chat) =>
+      waitFor({
+        description: "the call to wait for approval",
+        probe: async () => {
+          const rows = await pendingFor(chat);
+          return rows.length > 0 ? (rows[0] as (typeof rows)[number]) : null;
+        },
+      });
+
+    await check("a new bot defaults to asking before shell commands", async () => {
+      const botId = await first.mutation(api.bots.create, { name: `default-level-${nonce}` });
+      assert.equal(await service.query(api.bots.approvalLevelFor, { botId }), "outside");
+    });
+
+    const denied = await newChat({ client: first, name: "approval-denied", level: "outside" });
+    const deniedText = `approval deny ${nonce}`;
+    const deniedFile = workspaceFile(denied, "approval-denied.txt");
+    scriptedShell(deniedText, "echo ran >> approval-denied.txt");
+    const deniedRun = await denied.send(deniedText);
+    const deniedRow = await waitForPending(denied);
+    await sleep(1500);
+    await check("the call does not run while it waits", () => {
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: deniedFile }), []);
+    });
+    await check("the bot shows as waiting for its owner", async () => {
+      assert.ok((await first.query(api.approvals.pendingBots, {})).includes(denied.botId));
+    });
+    await check("another user cannot see or answer the request", async () => {
+      assert.deepEqual(await second.query(api.approvals.pendingBots, {}), []);
+      await assertRejected(second.mutation(api.approvals.decide, { approvalId: deniedRow._id, decision: "approved" }), /Approval not found/);
+    });
+    await check("the computer cannot answer, because only a user or the service can call this", async () => {
+      await assertRejected(anonymous.mutation(api.approvals.decide, { approvalId: deniedRow._id, decision: "approved" }), /Not authenticated/);
+      await assertRejected(first.mutation(api.approvals.request, { runId: deniedRun, toolCallId: "x", toolName: "shell" }), /Not authorized/);
+    });
+    await first.mutation(api.approvals.decide, { approvalId: deniedRow._id, decision: "denied" });
+    const deniedDone = await denied.settled(deniedRun);
+    await check("a denied call does not run, and the model is told", () => {
+      assert.equal(resultsOf(deniedDone)[0]?.outcome, "denied");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: deniedFile }), []);
+      assert.equal(turnsOf(deniedDone).at(-1)?.text, "finished denied");
+    });
+    await check("the first answer stands, so a later approval cannot run it", async () => {
+      await assertRejected(first.mutation(api.approvals.decide, { approvalId: deniedRow._id, decision: "approved" }), /already been answered/);
+    });
+
+    const approved = await newChat({ client: first, name: "approval-restart", level: "outside" });
+    const approvedText = `approval approve ${nonce}`;
+    const approvedFile = workspaceFile(approved, "approval-approved.txt");
+    scriptedShell(approvedText, "echo ran >> approval-approved.txt");
+    const approvedRun = await approved.send(approvedText);
+    await waitForPending(approved);
+    await killOrchestrator();
+    await startOrchestrator();
+    const afterRestart = await waitForPending(approved);
+    await check("a restarted orchestrator is still waiting, and has not run the call", () => {
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: approvedFile }), []);
+    });
+    await first.mutation(api.approvals.decide, { approvalId: afterRestart._id, decision: "approved" });
+    const approvedDone = await approved.settled(approvedRun, 180_000);
+    await check("an approved call runs exactly once after a restart", () => {
+      assert.equal(resultsOf(approvedDone)[0]?.outcome, "ok");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: approvedFile }), ["ran"]);
+    });
+
+    const cancelled = await newChat({ client: first, name: "approval-cancel", level: "outside" });
+    const cancelledText = `approval cancel ${nonce}`;
+    const cancelledFile = workspaceFile(cancelled, "approval-cancelled.txt");
+    scriptedShell(cancelledText, "echo ran >> approval-cancelled.txt");
+    const cancelledRun = await cancelled.send(cancelledText);
+    await waitForPending(cancelled);
+    await first.mutation(api.runs.requestCancel, { runId: cancelledRun });
+    const cancelledDone = await cancelled.settled(cancelledRun);
+    await check("cancelling a waiting call ends the run, and the call never runs", () => {
+      assert.equal(cancelledDone.state.kind, "cancelled");
+      assert.equal(resultsOf(cancelledDone)[0]?.outcome, "cancelled");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: cancelledFile }), []);
+    });
+    await check("a request on a cancelled run no longer shows as waiting", async () => {
+      assert.deepEqual(await pendingFor(cancelled), []);
+    });
+
+    // The runner starts 8 runs at a time, so 8 unanswered requests would stop every other bot if they held their slots.
+    const SLOTS = 8;
+    const waitingChats = await Promise.all(
+      Array.from({ length: SLOTS + 1 }, async (_, index) => {
+        const chat = await newChat({ client: first, name: `approval-slot-${index}`, level: "outside" });
+        const text = `approval slot ${index} ${nonce}`;
+        scriptedShell(text, "echo waiting");
+        const runId = await chat.send(text);
+        await waitForPending(chat);
+        return { chat, runId };
+      }),
+    );
+    const free = await newChat({ client: first, name: "approval-free", level: "nothing" });
+    const freeText = `approval free ${nonce}`;
+    scriptedShell(freeText, `echo free-${nonce}`);
+    const freeDone = await free.settled(await free.send(freeText));
+    await check("more unanswered requests than the runner has slots do not stop another bot", () => {
+      assert.equal(resultsOf(freeDone)[0]?.outcome, "ok");
+      assert.match(resultsOf(freeDone)[0]?.output ?? "", new RegExp(`free-${nonce}`));
+    });
+    await Promise.all(
+      waitingChats.map(async ({ chat, runId }) => {
+        await first.mutation(api.runs.requestCancel, { runId });
+        await chat.settled(runId);
+      }),
+    );
+
+    const everything = await newChat({ client: first, name: "approval-everything", level: "everything" });
+    const everythingText = `approval everything ${nonce}`;
+    fake.script(everythingText, ({ toolResults }) =>
+      toolResults.length === 0
+        ? { kind: "tools", delivery: "whole", calls: [{ name: "read_file", arguments: JSON.stringify({ path: "none" }) }] }
+        : { kind: "text", text: "done" },
+    );
+    const everythingRun = await everything.send(everythingText);
+    const everythingRow = await waitForPending(everything);
+    await check("at everything, even reading a file asks", () => {
+      assert.ok(everythingRow !== undefined);
+    });
+    await first.mutation(api.approvals.decide, { approvalId: everythingRow._id, decision: "approved" });
+    await everything.settled(everythingRun);
+
+    const outside = await newChat({ client: first, name: "approval-outside", level: "outside" });
+    const outsideText = `approval outside read ${nonce}`;
+    fake.script(outsideText, ({ toolResults }) =>
+      toolResults.length === 0
+        ? { kind: "tools", delivery: "whole", calls: [{ name: "read_file", arguments: JSON.stringify({ path: "none" }) }] }
+        : { kind: "text", text: "done" },
+    );
+    const outsideDone = await outside.settled(await outside.send(outsideText));
+    await check("at outside, reading a file runs without asking", () => {
+      assert.equal(resultsOf(outsideDone).length, 1);
+      assert.deepEqual(outsideDone.state.kind, "done");
+    });
   });
 
   await scenario("update fence. no run starts while computerd restarts", async () => {

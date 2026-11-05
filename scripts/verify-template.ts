@@ -30,6 +30,7 @@ if (!configured) {
 
 const nonce = randomBytes(6).toString("hex");
 const botId = await client.mutation(api.bots.create, { name: `verify-template-${nonce}` });
+await client.mutation(api.bots.setApprovalLevel, { botId, level: "nothing" });
 const threadId = await client.mutation(api.threads.ensureForBot, { botId });
 const runId = await client.mutation(api.threads.send, {
   threadId,

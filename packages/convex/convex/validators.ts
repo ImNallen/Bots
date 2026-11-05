@@ -28,6 +28,7 @@ export const runEventBody = v.union(
       v.literal("unavailable"),
       v.literal("invalid"),
       v.literal("cancelled"),
+      v.literal("denied"),
     ),
     output: v.string(),
     exitCode: v.optional(v.number()),
@@ -62,3 +63,8 @@ export const observedVm = v.object({
   detail: v.optional(v.string()),
   at: v.number(),
 });
+
+export const approvalLevel = v.union(v.literal("everything"), v.literal("outside"), v.literal("shell"), v.literal("nothing"));
+export type ApprovalLevel = Infer<typeof approvalLevel>;
+
+export const approvalState = v.union(v.literal("pending"), v.literal("approved"), v.literal("denied"), v.literal("expired"));
