@@ -1,0 +1,21 @@
+# The stream that accepts a person's input during a take-over. It exists only while someone is connected or about to connect.
+# computerd restarts it for each take-over, which also ends an older one. -once ends it when its viewer leaves, so anything that
+# closes the relay ends it, with no cleanup code. -timeout ends it when no viewer comes. So it must have no Restart=, and the
+# desktop target must not want it, or it would stay open with nobody there.
+[Unit]
+Description=Bots desktop %i input stream
+BindsTo=computerd-xvfb@%i.service
+After=computerd-xvfb@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=browser
+# A literal port, because a desktop that is already running has a holder file from before this unit. -clear_keys stops a key that
+# a viewer held as it left from staying down for the next one. -q stays, because x11vnc otherwise logs the keysyms it adds to the
+# display, and those are characters of what a person types.
+ExecStart=/usr/bin/x11vnc -display :%i -localhost -noipv6 -rfbportv6 -1 -rfbport 690%i -once -timeout 15 -nopw -noxdamage -skip_lockkeys -clear_keys -q
+ExecStartPost=/bin/bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/690%i) 2>/dev/null; do sleep 0.1; done'
+# x11vnc exits with 2 on SIGTERM, which a restart or a stop should not record as a failure.
+SuccessExitStatus=2
+TimeoutStartSec=15

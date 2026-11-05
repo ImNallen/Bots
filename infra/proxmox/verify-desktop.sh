@@ -40,10 +40,12 @@ DISPLAY_UNIT=computerd-xvfb@$SLOT.service
 BROWSER_UNIT=computerd-chromium@$SLOT.service
 STREAM_UNIT=computerd-vnc@$SLOT.service
 SESSION_UNIT=computerd-xfce@$SLOT.service
+INPUT_UNIT=computerd-input@$SLOT.service
+INPUT=6908
 PROFILE=/home/browser/profiles/$BOT
 BASE=/home/browser/profile
 SYSTEMCTL_TIMEOUT_SECONDS=75
-PARTS="$BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $DISPLAY_UNIT $TARGET"
+PARTS="$BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $INPUT_UNIT $DISPLAY_UNIT $TARGET"
 NODE=/opt/bots-computerd/current/.runtime/bin/node
 PROBE=$(mktemp --suffix=.mjs)
 base64 -d <<<"$1" >"$PROBE"
@@ -100,7 +102,7 @@ unit_processes() {
 }
 slot_processes() {
   local unit total=0
-  for unit in $BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $DISPLAY_UNIT; do
+  for unit in $BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $INPUT_UNIT $DISPLAY_UNIT; do
     total=$((total + $(unit_processes "$unit")))
   done
   echo "$total"
@@ -117,6 +119,13 @@ memory() { # the desktop's memory now, summed across its units. Page cache is co
     file=$((file + $(awk '$1 == "file" { print $2 }' "$group/memory.stat")))
   done
   echo "$((anon / 1024 / 1024)) MB anonymous, $((file / 1024 / 1024)) MB page cache"
+}
+input_listens() { ss -ltnH "sport = :$INPUT" | grep -q .; }
+input_closed() { ! input_listens; }
+open_input() { sudo -n -u computerd sudo -n /usr/bin/systemctl restart --quiet "$INPUT_UNIT"; }
+hold() { # port, seconds, file. Sets held to the viewer's own pid, so a kill reaches it and not a shell around it.
+  (exec "$NODE" "$PROBE" rfb-hold "$1" "$2") >"$3" 2>&1 &
+  held=$!
 }
 cleanup() {
   systemctl stop --quiet computerd-xvfb@$SLOT.service computerd-xvfb@$OTHER.service 2>/dev/null || true
@@ -136,7 +145,7 @@ base_before=$(base_hash)
 holder "$SLOT" "$BOT" "$CDP" "$VNC"
 holder "$OTHER" "$OTHER_BOT" "$OTHER_CDP" "$OTHER_VNC"
 
-for name in computerd-desktop@.target computerd-xvfb@.service computerd-xfce@.service computerd-chromium@.service computerd-vnc@.service; do
+for name in computerd-desktop@.target computerd-xvfb@.service computerd-xfce@.service computerd-chromium@.service computerd-vnc@.service computerd-input@.service; do
   check "installed: $name" test -f "/etc/systemd/system/$name"
 done
 for old in computerd-display computerd-browser computerd-screen-0 computerd-screen-7; do
@@ -146,6 +155,8 @@ check "migrated: the base profile remains" test -d "$BASE"
 listed=$(sudo -l -U computerd 2>/dev/null)
 grep -qF '/usr/bin/systemctl start --quiet computerd-desktop@[1-8].target' <<<"$listed" && result true "sudoers: computerd may start a desktop" || result false "sudoers: computerd may start a desktop"
 grep -qF '/usr/bin/systemctl stop --quiet computerd-xvfb@[1-8].service' <<<"$listed" && result true "sudoers: computerd may stop a desktop" || result false "sudoers: computerd may stop a desktop"
+grep -qF '/usr/bin/systemctl restart --quiet computerd-input@[1-8].service' <<<"$listed" && result true "sudoers: computerd may restart an input stream" || result false "sudoers: computerd may restart an input stream"
+! sudo -n -u computerd sudo -n /usr/bin/systemctl restart --quiet computerd-vnc@$SLOT.service 2>/dev/null && result true "sudoers: computerd may not restart the view-only stream" || result false "sudoers: computerd may not restart the view-only stream"
 ! sudo -n -u computerd sudo -n /usr/bin/systemctl stop --quiet computerd.service 2>/dev/null && result true "sudoers: computerd may not stop another unit" || result false "sudoers: computerd may not stop another unit"
 
 sudo -u browser mkdir -p "$PROFILE.tmp"
@@ -181,11 +192,107 @@ grep -q 'user-data-dir='"$PROFILE" <<<"$commands" && result true "isolation: the
 grep -q 'x11vnc -display :8 -viewonly' <<<"$commands" && result true "isolation: the stream is view-only" || result false "isolation: the stream is view-only"
 grep -q 'adequately sandboxed' <<<"$(probe sandbox "$CDP" 2>&1)" && result true "isolation: chrome://sandbox reports a working sandbox" || result false "isolation: chrome://sandbox reports a working sandbox"
 same "isolation: keys sent through the stream change nothing" "$(probe rfb-type "$CDP" "$VNC" 2>&1)" "value="
-sudo -u browser DISPLAY=:8 x11vnc -display :8 -localhost -rfbport 6908 -forever -shared -nopw -noxdamage -q -bg >/dev/null 2>&1
-wait_for 5 probe rfb-size 6908
-typed=$(probe rfb-type "$CDP" 6908 2>&1)
-pkill -u browser -f 'rfbport 6908' || true
-same "isolation: the same keys through a stream with input do reach the page, so the check above can fail" "$typed" "value=xyz"
+input_closed && result true "input: with no take-over, the input port is closed" || result false "input: with no take-over, the input port is closed"
+systemctl start --quiet "$TARGET"
+input_closed && result true "input: a start of the target does not open it" || result false "input: a start of the target does not open it"
+! grep -q computerd-input <<<"$(systemctl show -p Wants --value "$TARGET")" && result true "input: the target does not want it" || result false "input: the target does not want it"
+hold "$VNC" 600 /tmp/watch-$$.out
+watcher=$held
+sleep 1
+
+started=$(now_ms)
+open_input
+measure "restart of the input stream, as computerd: $(($(now_ms) - started)) ms"
+input_listens && result true "input: it listens when the restart returns" || result false "input: it listens when the restart returns"
+input_listeners=$(ss -ltnH "sport = :$INPUT" | awk '{ print $4 }')
+same "input: it listens on one address, on loopback" "$input_listeners" "127.0.0.1:$INPUT"
+input_args=$(tr '\0' ' ' <"/proc/$(pid "$INPUT_UNIT")/cmdline")
+! grep -qE -- '-viewonly|-forever|-shared' <<<"$input_args" && result true "input: it can end, and it takes input" || result false "input: it can end, and it takes input" "$input_args"
+same "input: keys and a click through it reach the page" "$(probe rfb-type "$CDP" "$INPUT" 2>&1)" "value=xyz"
+wait_for 3 input_closed && result true "input: it closes when its viewer leaves" || result false "input: it closes when its viewer leaves"
+same "input: a stream that ended records no failure" "$(state "$INPUT_UNIT")" inactive
+same "isolation: keys sent through the stream change nothing, with the input stream gone" "$(probe rfb-type "$CDP" "$VNC" 2>&1)" "value="
+
+open_input
+same "input: Ctrl+L and the address bar work" "$(probe rfb-address "$CDP" "$INPUT" 2>&1)" "title=reached by the address bar"
+wait_for 3 input_closed
+open_input
+same "input: a mouse click chooses a dropdown option" "$(probe rfb-dropdown "$CDP" "$INPUT" 2>&1)" "chosen=three"
+wait_for 3 input_closed
+
+started=$(now_ms)
+open_input
+sleep 10
+input_listens && result true "input: with no viewer, it is still open after 10 s" || result false "input: with no viewer, it is still open after 10 s"
+wait_for 12 input_closed && result true "input: with no viewer, it closes by itself" || result false "input: with no viewer, it closes by itself"
+measure "input stream with no viewer closes after: $(($(now_ms) - started)) ms"
+same "input: a timeout records no failure" "$(state "$INPUT_UNIT")" inactive
+sleep 3
+input_closed && result true "input: nothing brings it back after a timeout" || result false "input: nothing brings it back after a timeout"
+
+open_input
+sleep 12
+hold "$INPUT" 6 /tmp/viewer-$$.out
+viewer=$held
+wait "$viewer" || true
+grep -qx open /tmp/viewer-$$.out && result true "input: a viewer that comes before the timeout stays past it" || result false "input: a viewer that comes before the timeout stays past it" "$(cat /tmp/viewer-$$.out)"
+wait_for 3 input_closed
+
+open_input
+hold "$INPUT" 60 /tmp/viewer-$$.out
+viewer=$held
+sleep 1.5
+started=$(now_ms)
+kill -9 "$viewer"
+wait "$viewer" 2>/dev/null || true
+wait_for 3 input_closed && result true "input: a kill of the relay closes it" || result false "input: a kill of the relay closes it"
+measure "input stream closes after a kill of its viewer: $(($(now_ms) - started)) ms"
+
+open_input
+hold "$INPUT" 8 /tmp/viewer-$$.out
+viewer=$held
+sleep 1.5
+if timeout 5 "$NODE" "$PROBE" rfb-size "$INPUT" >/dev/null 2>&1; then result false "input: a second viewer is refused"; else result true "input: a second viewer is refused"; fi
+started=$(now_ms)
+open_input
+measure "a second take-over replaces the first: $(($(now_ms) - started)) ms"
+same "input: a second restart still gives a working stream" "$(probe rfb-type "$CDP" "$INPUT" 2>&1)" "value=xyz"
+wait "$viewer" || true
+grep -qx closed /tmp/viewer-$$.out && result true "input: a second restart ends the first viewer" || result false "input: a second restart ends the first viewer" "$(cat /tmp/viewer-$$.out)"
+wait_for 3 input_closed
+
+open_input
+probe rfb-leave-holding-control "$INPUT" >/dev/null 2>&1
+wait_for 3 input_closed
+open_input
+same "input: a key that a viewer held as it left does not stay down for the next viewer" "$(probe rfb-type "$CDP" "$INPUT" 2>&1)" "value=xyz"
+wait_for 3 input_closed
+
+logged_from=$(date +%s)
+open_input
+same "input: a character that the display's keyboard lacks reaches the page" "$(probe rfb-type "$CDP" "$INPUT" "$(printf 'p\xc3\xa5ss')" 2>&1)" "value=$(printf 'p\xc3\xa5ss')"
+wait_for 3 input_closed
+same "input: the journal shows no keysym of what a person typed" "$(journalctl -u "$INPUT_UNIT" --since "@$logged_from" -o cat | grep -ci -E 'keysym|keycode|aring')" 0
+
+open_input
+input_pid=$(pid "$INPUT_UNIT")
+kill -9 "$input_pid"
+sleep 3
+input_closed && result true "input: after a kill of x11vnc, nothing brings it back" || result false "input: after a kill of x11vnc, nothing brings it back"
+open_input
+input_listens && result true "input: the next take-over opens it again after that" || result false "input: the next take-over opens it again after that"
+hold "$INPUT" 2 /dev/null
+viewer=$held
+wait "$viewer" || true
+wait_for 3 input_closed
+systemctl reset-failed "$INPUT_UNIT" 2>/dev/null || true
+
+kill "$watcher" 2>/dev/null || true
+wait "$watcher" 2>/dev/null || true
+grep -qx open /tmp/watch-$$.out && result true "input: the watch stream stayed connected through all of this" || result false "input: the watch stream stayed connected through all of this" "$(cat /tmp/watch-$$.out)"
+rm -f /tmp/watch-$$.out /tmp/viewer-$$.out
+[ "$(getent passwd browser | cut -d: -f7)" = /bin/bash ] && result true "desktop: the browser user's shell is bash, so a terminal opens" || result false "desktop: the browser user's shell is bash, so a terminal opens"
+! sudo -n -u browser sudo -n true 2>/dev/null && result true "desktop: the browser user has no sudo" || result false "desktop: the browser user has no sudo"
 same "isolation: a bot's window on this slot does not affect the other slot's stream size" "$(probe rfb-size "$OTHER_VNC" 2>&1)" 1280x800
 
 windows=$(probe windows "$CDP" 2>&1 | head -1)
@@ -263,9 +370,17 @@ probe open "$CDP" "https://en.wikipedia.org/wiki/Linux" >/dev/null 2>&1 && resul
 sleep 5
 measure "desktop with a real page: $(memory)"
 
+open_input
+hold "$INPUT" 60 /tmp/viewer-$$.out
+viewer=$held
+sleep 1
 started=$(now_ms)
 systemctl stop --quiet "$DISPLAY_UNIT"
 measure "stop of a desktop: $(($(now_ms) - started)) ms"
+input_closed && result true "stop: the input stream ends with its display" || result false "stop: the input stream ends with its display"
+kill "$viewer" 2>/dev/null || true
+wait "$viewer" 2>/dev/null || true
+rm -f /tmp/viewer-$$.out
 same "stop: no process remains when the stop returns" "$(slot_processes)" 0
 ! cdp_up >/dev/null 2>&1 && result true "stop: CDP's port is closed" || result false "stop: CDP's port is closed"
 ! ss -ltnH | grep -q ':5908 ' && result true "stop: the stream's port is closed" || result false "stop: the stream's port is closed"

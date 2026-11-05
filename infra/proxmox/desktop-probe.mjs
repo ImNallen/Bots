@@ -6,6 +6,55 @@ import { crc32, deflateSync } from "node:zlib";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+const CONTROL_L = 0xffe3;
+const RETURN = 0xff0d;
+
+function keyMessage(keysym, down) {
+  const event = Buffer.alloc(8);
+  event[0] = 4;
+  event[1] = down ? 1 : 0;
+  event.writeUInt32BE(keysym, 4);
+  return event;
+}
+
+function pointerMessage(x, y, buttons) {
+  const event = Buffer.alloc(6);
+  event[0] = 5;
+  event[1] = buttons;
+  event.writeUInt16BE(x, 2);
+  event.writeUInt16BE(y, 4);
+  return event;
+}
+
+async function clickAt(session, x, y) {
+  session.socket.write(pointerMessage(x, y, 0));
+  await sleep(30);
+  session.socket.write(pointerMessage(x, y, 1));
+  await sleep(40);
+  session.socket.write(pointerMessage(x, y, 0));
+}
+
+async function tapKey(session, keysym) {
+  session.socket.write(keyMessage(keysym, true));
+  session.socket.write(keyMessage(keysym, false));
+  await sleep(40);
+}
+
+async function chord(session, modifier, keysym) {
+  session.socket.write(keyMessage(modifier, true));
+  await tapKey(session, keysym);
+  session.socket.write(keyMessage(modifier, false));
+}
+
+// The same mapping as noVNC's keysyms.lookup, for the characters it has no table entry for.
+const keysymOf = (codePoint) => (codePoint <= 0xff ? codePoint : (0x01000000 | codePoint) >>> 0);
+
+async function typeText(session, text) {
+  for (const character of text) {
+    await tapKey(session, keysymOf(character.codePointAt(0)));
+  }
+}
+
 function rfbSession(port) {
   return new Promise((resolve, reject) => {
     const socket = connect(port, "127.0.0.1");
@@ -145,16 +194,21 @@ switch (command) {
     console.log(`${session.width}x${session.height}`);
     break;
   }
-  // Prints "open" if the session lasts the whole time, so a parent can tell a stream that a viewer lost.
+  // Prints "open" if the session lasts the whole time, or until a SIGTERM, so a parent can tell a stream that a viewer lost.
   case "rfb-hold": {
     const session = await rfbSession(Number(args[0]));
     let open = true;
     session.socket.on("close", () => {
       open = false;
     });
+    const finish = () => {
+      console.log(open ? "open" : "closed");
+      process.exit(0);
+    };
+    process.on("SIGTERM", finish);
     console.log("connected");
     await sleep(Number(args[1]) * 1000);
-    console.log(open ? "open" : "closed");
+    finish();
     break;
   }
   case "rfb-frame": {
@@ -187,32 +241,59 @@ switch (command) {
   // Sends a click and keys through a stream, then reads what the focused page's input received.
   case "rfb-type": {
     const [cdpPort, vncPort] = args.map(Number);
+    const text = args[2] ?? "xyz";
     const { page } = await browser(cdpPort);
     const tab = await page("data:text/html,<input id=field autofocus style='width:100%25;height:100%25'>");
     await sleep(1000);
     const session = await rfbSession(vncPort);
-    const pointer = Buffer.alloc(6);
-    pointer[0] = 5;
-    pointer.writeUInt16BE(640, 2);
-    pointer.writeUInt16BE(400, 4);
-    session.socket.write(pointer);
-    pointer[1] = 1;
-    session.socket.write(pointer);
-    pointer[1] = 0;
-    session.socket.write(pointer);
+    await clickAt(session, 640, 400);
     await sleep(1000);
-    for (const key of "xyz") {
-      const event = Buffer.alloc(8);
-      event[0] = 4;
-      event.writeUInt32BE(key.charCodeAt(0), 4);
-      event[1] = 1;
-      session.socket.write(Buffer.from(event));
-      event[1] = 0;
-      session.socket.write(Buffer.from(event));
-      await sleep(200);
-    }
+    await typeText(session, text);
     await sleep(1500);
     console.log(`value=${await tab.evaluate("document.getElementById('field').value")}`);
+    break;
+  }
+  // Ctrl+L and the address bar sit outside the page, so only a person's desktop input can reach them.
+  case "rfb-address": {
+    const [cdpPort, vncPort] = args.map(Number);
+    const { page } = await browser(cdpPort);
+    const tab = await page("data:text/html,<title>before</title>");
+    await sleep(1000);
+    const session = await rfbSession(vncPort);
+    await clickAt(session, 640, 400);
+    await sleep(300);
+    await chord(session, CONTROL_L, "l".charCodeAt(0));
+    await sleep(300);
+    await typeText(session, "data:text/html,<title>reached by the address bar</title>");
+    await tapKey(session, RETURN);
+    await sleep(2000);
+    console.log(`title=${await tab.evaluate("document.title")}`);
+    break;
+  }
+  // A dropdown's menu is a window of its own, which is why a mouse click on an option does nothing through CDP.
+  case "rfb-dropdown": {
+    const [cdpPort, vncPort] = args.map(Number);
+    const { page } = await browser(cdpPort);
+    const tab = await page(
+      "data:text/html,<!doctype html><style>body{margin:40px}select{font:24px sans-serif;width:400px}</style><select id=s><option>one<option>two<option>three<option>four</select><div id=o>unchanged</div><script>s.onchange=()=>o.textContent=s.value</script>",
+    );
+    await sleep(1000);
+    const box = await tab.evaluate(
+      "(()=>{const b=document.getElementById('s').getBoundingClientRect();return {x:b.x+b.width/2+screenX,y:b.y+b.height/2+screenY+outerHeight-innerHeight,h:b.height}})()",
+    );
+    const session = await rfbSession(vncPort);
+    await clickAt(session, Math.round(box.x), Math.round(box.y));
+    await sleep(600);
+    await clickAt(session, Math.round(box.x), Math.round(box.y + box.h * 3));
+    await sleep(600);
+    console.log(`chosen=${await tab.evaluate("document.getElementById('o').textContent")}`);
+    break;
+  }
+  // Leaves a key pressed as the viewer goes, as a phone that loses its network would.
+  case "rfb-leave-holding-control": {
+    const session = await rfbSession(Number(args[0]));
+    session.socket.write(keyMessage(CONTROL_L, true));
+    await sleep(500);
     break;
   }
   case "sandbox": {

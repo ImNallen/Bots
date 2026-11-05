@@ -17,6 +17,7 @@ describe("the files a desktop runs from", () => {
   it("keeps every listener on loopback", async () => {
     expect(execStart(await read("computerd-chromium@.service"))).toContain("--remote-debugging-address=127.0.0.1");
     expect(execStart(await read("computerd-vnc@.service"))).toContain("-localhost -noipv6 -rfbportv6 -1");
+    expect(execStart(await read("computerd-input@.service"))).toContain("-localhost -noipv6 -rfbportv6 -1");
     expect(execStart(await read("computerd-xvfb@.service"))).toContain("-nolisten tcp");
   });
 
@@ -24,12 +25,28 @@ describe("the files a desktop runs from", () => {
     expect(execStart(await read("computerd-vnc@.service"))).toContain("-viewonly");
   });
 
+  it("lets the input stream end by itself, with nothing to bring it back", async () => {
+    const unit = await read("computerd-input@.service");
+    expect(execStart(unit)).toContain("-once");
+    expect(execStart(unit)).toContain("-timeout 15");
+    expect(execStart(unit)).not.toContain("-forever");
+    expect(execStart(unit)).not.toContain("-shared");
+    expect(execStart(unit)).not.toContain("-viewonly");
+    expect(unit).not.toMatch(/^Restart=/m);
+    expect(unit).not.toMatch(/^\[Install\]/m);
+    expect(await read("computerd-desktop@.target")).not.toContain("computerd-input");
+  });
+
+  it("keeps what a person types out of the journal", async () => {
+    expect(execStart(await read("computerd-input@.service"))).toContain(" -q");
+  });
+
   it("gives computerd exactly the commands it runs, for exactly the slots there are", async () => {
     const sudoers = await readFile(new URL("../sudoers", import.meta.url), "utf8");
     const first = Math.min(...SLOTS);
     const last = Math.max(...SLOTS);
     expect(sudoers).toContain(
-      `computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[${first}-${last}].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[${first}-${last}].service\n`,
+      `computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[${first}-${last}].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[${first}-${last}].service, /usr/bin/systemctl restart --quiet computerd-input@[${first}-${last}].service\n`,
     );
     expect(SLOTS).toEqual(Array.from({ length: last - first + 1 }, (_, index) => first + index));
   });

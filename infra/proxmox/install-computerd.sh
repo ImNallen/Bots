@@ -76,7 +76,9 @@ build() {
   id agent >/dev/null 2>&1 || useradd --create-home --shell /bin/bash agent
   install --directory --owner computerd --group computerd --mode 0700 /var/lib/computerd
   [ -d /workspace ] || install --directory --owner agent --group agent --mode 0755 /workspace
-  id browser >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin browser
+  id browser >/dev/null 2>&1 || useradd --create-home browser
+  # A terminal on the desktop opens this shell. The user has no sudo.
+  usermod --shell /bin/bash browser
 
   # Anything a killed run left is unfinished, and the selected release is never in this list.
   for candidate in "$ROOT"/build.* "$ROOT"/runtimes/*.tmp; do
