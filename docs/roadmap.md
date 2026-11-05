@@ -63,8 +63,8 @@ The user chose to update `computerd` in place, because bots and users install th
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
 4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
-5. Next. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
-6. Run the step's check, on a phone.
+5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
+6. Next. Run the step's check, on a phone.
 
 After step 4, add a way for a user to reset a computer.
 
@@ -83,7 +83,9 @@ These are open on purpose. Fix each one when the work reaches it.
 
 - The web UI shows raw markdown.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
-- A bot can reach the public internet with no approval step until step 4, so a prompt-injected bot could send out anything in its workspace.
+- Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
+- At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
+- An unanswered approval expires after 24 hours as a refusal. Until then, the run stays active, which holds back `computerd` updates on that VM.
 - A tool that calls `setsid` can survive a cancel or a timeout.
 - A bot with `sudo` can delete the journal, and the wiped call then runs again. Deleting the `computerd` journal volume has the same effect. Step 8 removes passwordless `sudo`.
 - A `sudo` child and a `setsid` child both outlive a cancel or a timeout, because `computerd` kills the process group as `agent`.

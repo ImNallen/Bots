@@ -5,6 +5,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
+import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
@@ -177,6 +178,30 @@ async function runTool(args: {
   if (parsed.kind === "invalid") {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
+  }
+  const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
+  if (needsApproval({ level, toolName: parsed.invocation.name })) {
+    const decision = await waitForApproval({
+      request: () =>
+        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: parsed.invocation.name }),
+      expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
+      now: Date.now,
+      signals: [lease.lost, lease.cancel],
+      onWait: () => deps.log({ level: "info", event: "tool-waiting-for-approval", runId, toolCallId: call.id }),
+    });
+    lease.lost.throwIfAborted();
+    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision });
+    // This call was never sent, so these results can say so with certainty.
+    switch (decision) {
+      case "approved":
+        break;
+      case "aborted":
+        return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+      case "denied":
+        return { ...base, outcome: "denied", output: DENIED_OUTPUT, truncated: false };
+      case "expired":
+        return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
+    }
   }
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),

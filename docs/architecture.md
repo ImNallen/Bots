@@ -190,6 +190,23 @@ During a take-over, the bot waits before its next tool. That state is in Convex,
 
 Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
 
+## How approvals work
+
+The orchestrator decides on every tool call before it sends the call to a computer. A VM is untrusted, and it never takes part in this decision. Each bot has one level:
+
+| Level | What asks first |
+|---|---|
+| Everything | Every tool |
+| Outside, the default | Shell commands and browser actions that change something |
+| Shell | Shell commands |
+| Nothing | No tool |
+
+At the default level, a short list of tools runs without asking, and every other tool asks. So a tool added later asks until someone decides otherwise.
+
+A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
+
+Approvals are a check on what a bot asks to do, not a sandbox. An approved shell command runs as a user with `sudo`, and what it starts is not asked about again. The network rules still hold, and step 8 adds the independent reviewer.
+
 ## Where secrets live
 
 The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.

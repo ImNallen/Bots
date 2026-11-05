@@ -46,6 +46,7 @@ type Chat = { botId: Id<"bots">; threadId: Id<"threads"> };
 
 async function newChat(name: string): Promise<Chat> {
   const botId = await client.mutation(api.bots.create, { name: `verify-takeover-${name}-${nonce}` });
+  await client.mutation(api.bots.setApprovalLevel, { botId, level: "nothing" });
   return { botId, threadId: await client.mutation(api.threads.ensureForBot, { botId }) };
 }
 

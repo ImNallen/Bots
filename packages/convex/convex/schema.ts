@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { desiredVm, observedVm, runEventBody, runState } from "./validators.js";
+import { approvalLevel, approvalState, desiredVm, observedVm, runEventBody, runState } from "./validators.js";
 
 export default defineSchema({
   users: defineTable({
@@ -14,7 +14,23 @@ export default defineSchema({
     name: v.string(),
     // While this is in the future, the owner controls the bot's screen and the bot starts no tool.
     takeoverUntil: v.optional(v.number()),
+    // A bot with no value uses the default, which is "outside".
+    approvalLevel: v.optional(approvalLevel),
   }).index("by_owner", ["ownerId"]),
+
+  approvals: defineTable({
+    ownerId: v.id("users"),
+    botId: v.id("bots"),
+    threadId: v.id("threads"),
+    runId: v.id("runs"),
+    toolCallId: v.string(),
+    toolName: v.string(),
+    state: approvalState,
+    requestedAt: v.number(),
+  })
+    .index("by_run_call", ["runId", "toolCallId"])
+    .index("by_owner_state", ["ownerId", "state"])
+    .index("by_thread_state", ["threadId", "state"]),
 
   computers: defineTable({
     ownerId: v.id("users"),

@@ -34,9 +34,38 @@ function argumentsSummary(raw: string): string {
   return raw;
 }
 
-function ToolCallView(props: { call: AssistantTurn["toolCalls"][number]; result: ToolResult | undefined; active: boolean }) {
-  const { call, result, active } = props;
-  const status = result?.outcome ?? (active ? "running" : "no result");
+function ApprovalButtons({ approvalId }: { approvalId: Id<"approvals"> }) {
+  const decide = useMutation(api.approvals.decide);
+  const [problem, setProblem] = useState<string | null>(null);
+  const answer = (decision: "approved" | "denied") => {
+    decide({ approvalId, decision }).catch((error: unknown) => setProblem(errorMessage(error)));
+  };
+  return (
+    <div className="tool-approval" role="group" aria-label="This call needs your approval">
+      <button type="button" onClick={() => answer("approved")}>
+        Approve
+      </button>
+      <button type="button" className="secondary" onClick={() => answer("denied")}>
+        Deny
+      </button>
+      {problem !== null && (
+        <span className="error" role="alert">
+          {problem}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ToolCallView(props: {
+  call: AssistantTurn["toolCalls"][number];
+  result: ToolResult | undefined;
+  active: boolean;
+  approvalId: Id<"approvals"> | undefined;
+}) {
+  const { call, result, active, approvalId } = props;
+  const waiting = result === undefined && approvalId !== undefined;
+  const status = result?.outcome ?? (waiting ? "needs approval" : active ? "running" : "no result");
   return (
     <div className="tool-call" data-outcome={status}>
       <div className="tool-call-head">
@@ -46,6 +75,7 @@ function ToolCallView(props: { call: AssistantTurn["toolCalls"][number]; result:
           {status}
         </span>
       </div>
+      {waiting && <ApprovalButtons approvalId={approvalId} />}
       {result !== undefined && (
         <details>
           <summary>
@@ -69,7 +99,7 @@ function Reasoning({ text }: { text: string }) {
   );
 }
 
-function RunView({ run }: { run: TimelineRun }) {
+function RunView({ run, approvals }: { run: TimelineRun; approvals: Map<string, Id<"approvals">> }) {
   const active = isActive(run);
   const results = new Map(
     run.events
@@ -94,7 +124,13 @@ function RunView({ run }: { run: TimelineRun }) {
                 {body.reasoning !== undefined && <Reasoning text={body.reasoning} />}
                 {body.text !== "" && <p className="message-text">{body.text}</p>}
                 {body.toolCalls.map((call) => (
-                  <ToolCallView key={call.id} call={call} result={results.get(call.id)} active={active} />
+                  <ToolCallView
+                    key={call.id}
+                    call={call}
+                    result={results.get(call.id)}
+                    active={active}
+                    approvalId={approvals.get(`${run._id}:${call.id}`)}
+                  />
                 ))}
               </div>
             );
@@ -231,6 +267,8 @@ function useStickToBottom(content: unknown): void {
 
 function Conversation({ threadId }: { threadId: Id<"threads"> }) {
   const timeline = useQuery(api.threads.timeline, { threadId });
+  const pending = useQuery(api.approvals.pendingForThread, { threadId });
+  const approvals = new Map((pending ?? []).map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
   useStickToBottom(timeline);
   if (timeline === undefined) {
     return <p role="status">Loading the conversation.</p>;
@@ -242,7 +280,7 @@ function Conversation({ threadId }: { threadId: Id<"threads"> }) {
         {timeline.omittedOlder && <p className="muted">Older messages are not shown.</p>}
         {timeline.runs.length === 0 && <p className="muted">Send a message to start.</p>}
         {timeline.runs.map((run) => (
-          <RunView key={run._id} run={run} />
+          <RunView key={run._id} run={run} approvals={approvals} />
         ))}
       </section>
       <Composer threadId={threadId} activeRun={activeRun} />
@@ -285,6 +323,42 @@ function BotThread({ botId }: { botId: Id<"bots"> }) {
   }
 }
 
+const APPROVAL_LEVELS = [
+  ["outside", "Ask before shell commands and browser actions that change something"],
+  ["everything", "Ask before everything"],
+  ["shell", "Ask before shell commands only"],
+  ["nothing", "Never ask"],
+] as const;
+
+function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof APPROVAL_LEVELS)[number][0] }) {
+  const setLevel = useMutation(api.bots.setApprovalLevel);
+  const [problem, setProblem] = useState<string | null>(null);
+  return (
+    <label className="approval-setting">
+      <span>Approvals</span>
+      <select
+        value={level}
+        onChange={(event) => {
+          const next = event.target.value as typeof level;
+          setProblem(null);
+          setLevel({ botId, level: next }).catch((error: unknown) => setProblem(errorMessage(error)));
+        }}
+      >
+        {APPROVAL_LEVELS.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {problem !== null && (
+        <span className="error" role="alert">
+          {problem}
+        </span>
+      )}
+    </label>
+  );
+}
+
 function BotChat({ botId }: { botId: string }) {
   const bot = useQuery(api.bots.get, { botId });
   if (bot === undefined) {
@@ -306,6 +380,7 @@ function BotChat({ botId }: { botId: string }) {
         <Link to="/">Your bots</Link>
         <h2>{bot.name}</h2>
       </nav>
+      <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
       <ScreenPanel botId={bot._id} />
       <BotThread botId={bot._id} />
     </>
