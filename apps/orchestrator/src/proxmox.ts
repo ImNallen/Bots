@@ -3,7 +3,6 @@ import { request } from "node:https";
 const TASK_POLL_MS = 1000;
 const TASK_TIMEOUT_MS = 15 * 60 * 1000;
 const EXEC_POLL_MS = 500;
-const EXEC_TIMEOUT_MS = 30 * 1000;
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 const POOL = "bots";
 const IPSET = "ipfilter-net0";
@@ -32,7 +31,7 @@ export type Proxmox = {
   stop: (vmid: number) => Promise<void>;
   destroy: (vmid: number) => Promise<void>;
   agentResponds: (vmid: number) => Promise<boolean>;
-  exec: (vmid: number, command: string[]) => Promise<ExecResult>;
+  exec: (vmid: number, command: string[], timeoutMs: number) => Promise<ExecResult>;
 };
 
 export class ProxmoxError extends Error {
@@ -176,9 +175,9 @@ export function createProxmox(args: { url: string; node: string; token: string; 
         throw error;
       }
     },
-    exec: async (vmid, command) => {
+    exec: async (vmid, command, timeoutMs) => {
       const { pid } = await call<{ pid: number }>("POST", `${vmPath(vmid)}/agent/exec`, { command });
-      const deadline = Date.now() + EXEC_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         const status = await call<{ exited: number; exitcode?: number; "out-data"?: string }>(
           "GET",
@@ -189,7 +188,7 @@ export function createProxmox(args: { url: string; node: string; token: string; 
         }
         await new Promise((done) => setTimeout(done, EXEC_POLL_MS));
       }
-      throw new Error(`a command in VM ${vmid} did not end in ${EXEC_TIMEOUT_MS / 1000} seconds`);
+      throw new Error(`a command in VM ${vmid} did not end in ${timeoutMs / 1000} seconds`);
     },
   };
 }

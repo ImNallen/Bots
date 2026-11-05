@@ -14,14 +14,15 @@ export function startReconciler(args: {
   link: Link;
   proxmox: Proxmox;
   linkUrl: string;
+  install: { commit: string; script: string };
   log: (fields: LogFields) => void;
 }): void {
-  const { service, link, proxmox, linkUrl, log } = args;
+  const { service, link, proxmox, linkUrl, install, log } = args;
 
   async function pass(): Promise<void> {
     const computers = await service.query(api.computers.desiredVms, {});
     for (const computer of computers) {
-      const { computerId, ownerId, tokenHash, desiredVm, observedVm } = computer;
+      const { computerId, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun } = computer;
       let reported = observedVm?.stage;
       const record = async (stage: string, detail?: string) => {
         if (stage !== reported || detail !== undefined) {
@@ -36,7 +37,19 @@ export function startReconciler(args: {
           desired: desiredVm,
           linkUrl,
           tokenHash,
+          install,
+          installedCommit: computerdCommit,
+          observed: observedVm,
+          now: Date.now(),
+          busy: hasActiveRun,
           report: record,
+          fence: async () => (await service.mutation(api.computers.fenceForUpdate, { computerId })).fenced,
+          releaseFence: async () => {
+            await service.mutation(api.computers.releaseUpdateFence, { computerId });
+          },
+          recordCommit: async (commit) => {
+            await service.mutation(api.computers.recordComputerdCommit, { computerId, commit });
+          },
           recordToken: async (hash) => {
             await service.mutation(api.computers.recordVmToken, { computerId, tokenHash: hash });
           },

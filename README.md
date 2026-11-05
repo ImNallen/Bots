@@ -48,6 +48,8 @@ The orchestrator reads these optional settings from `.env.local`:
 | `node --env-file=.env.local scripts/verify-reconcile.ts` | The real orchestrator converges a test VM after a kill at each provisioning stage, the VM has its firewall filters, removal leaves nothing behind, and the Proxmox token cannot touch the control VM. Run it as root on the control VM, from `/opt/bots` |
 | `infra/proxmox/verify-network.sh <VM> <VM>` | A user VM reaches only the internet and the link port, and cannot claim another VM's addresses. Run it on the Proxmox host, as [the control VM guide](infra/control-vm/README.md) describes |
 
+`verify:auth` and `verify:agent` use the Convex functions from your last `pnpm bootstrap`, so run it first after you change anything in `packages/convex`. Otherwise they test the old functions, and they can still pass.
+
 CI runs `pnpm typecheck`, `pnpm test`, and `pnpm build` on every pull request and on pushes to `main`. Run the verify commands yourself before you merge a change to runs, the link, `computerd`, or auth.
 
 `pnpm verify:auth` and `pnpm verify:agent` need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about seven minutes. To run some scenarios, set `VERIFY_SCENARIOS`, as in `VERIFY_SCENARIOS=A,P pnpm verify:agent`. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.

@@ -15,7 +15,7 @@ import { createTokenIssuer } from "../apps/orchestrator/src/tokens.ts";
 
 const TEMPLATE_VMID = 9000;
 const CONTROL_VMID = 110;
-const KILL_STAGES = ["cloning", "configuring", "filtering", "starting", "making-token", "registering", "connecting"];
+const KILL_STAGES = ["cloning", "configuring", "filtering", "starting", "updating", "making-token", "registering", "connecting"];
 const POLL_MS = 100;
 const STAGE_TIMEOUT_MS = 5 * 60 * 1000;
 

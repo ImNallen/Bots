@@ -61,6 +61,10 @@ if (config.proxmox !== null) {
     link,
     proxmox: createProxmox({ url, node, token, caPem: await readFile(caFile, "utf8") }),
     linkUrl: `ws://${config.link.host}:${config.link.port}`,
+    install: {
+      commit: (await readFile(new URL("../../../.computerd-commit", import.meta.url), "utf8")).trim(),
+      script: await readFile(new URL("../../../infra/proxmox/install-computerd.sh", import.meta.url), "utf8"),
+    },
     log,
   });
 }
