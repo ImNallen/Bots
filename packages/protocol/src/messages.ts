@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { OUTPUT_CAP_BYTES } from "./output.ts";
-import { BROWSER_KEYS, toolInvocation } from "./tools.ts";
+import { toolInvocation } from "./tools.ts";
 
 // JSON escaping can expand each output byte to six, so these limits sit above the output cap.
 export const MAX_COMPUTER_MESSAGE_BYTES = OUTPUT_CAP_BYTES * 8;
@@ -34,38 +34,6 @@ export const toolResult = z.strictObject({
 
 export type ToolResult = z.infer<typeof toolResult>;
 
-const SCREEN_WIDTH = 1280;
-const SCREEN_HEIGHT = 800;
-const MAX_INPUT_TEXT = 4096;
-const MAX_INPUT_URL = 8192;
-const screenX = z.number().min(0).max(SCREEN_WIDTH);
-const screenY = z.number().min(0).max(SCREEN_HEIGHT);
-
-// A person's input during a take-over. It can hold a password, so nothing that carries it may log it or store it.
-export const browserInputEvent = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("pointer"), x: screenX, y: screenY, action: z.enum(["move", "down", "up"]) }),
-  z.strictObject({
-    kind: z.literal("scroll"),
-    x: screenX,
-    y: screenY,
-    dx: z.number().min(-5000).max(5000),
-    dy: z.number().min(-5000).max(5000),
-  }),
-  z.strictObject({ kind: z.literal("text"), text: z.string().min(1).max(MAX_INPUT_TEXT) }),
-  z.strictObject({ kind: z.literal("key"), key: z.enum(BROWSER_KEYS) }),
-  z.strictObject({
-    kind: z.literal("navigate"),
-    url: z
-      .string()
-      .max(MAX_INPUT_URL)
-      .refine((url) => /^https?:\/\//i.test(url) && URL.canParse(url), "must be an http or https URL"),
-  }),
-]);
-
-export type BrowserInputEvent = z.infer<typeof browserInputEvent>;
-
-export const MAX_INPUT_MESSAGE_BYTES = 16 * 1024;
-
 export const computerMessage = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("hello"), token: z.string().min(1).max(512) }),
   z.strictObject({ kind: z.literal("toolResult"), callId, result: toolResult }),
@@ -84,7 +52,6 @@ export const orchestratorMessage = z.discriminatedUnion("kind", [
   // Only control carries a mode. A computerd closes its link on a field it does not know, and a VM updates after its orchestrator,
   // so a watch stream's message must stay what it was before modes.
   z.strictObject({ kind: z.literal("screenOpen"), streamId, botId, mode: z.literal("control").optional() }),
-  z.strictObject({ kind: z.literal("screenInput"), botId, event: browserInputEvent }),
 ]);
 
 export type OrchestratorMessage = z.infer<typeof orchestratorMessage>;

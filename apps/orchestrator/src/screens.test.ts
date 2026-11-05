@@ -1,12 +1,13 @@
 import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import type { Id } from "@bots/convex/dataModel";
-import { LINK_CLOSE, type BrowserInputEvent } from "@bots/protocol";
+import { LINK_CLOSE, type StreamMode } from "@bots/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { attachScreens, isSameOrigin } from "./screens.ts";
 
 const OWNER = "owner" as Id<"users">;
+const TAKEOVER_CHECK_MS = 20;
 
 describe("isSameOrigin", () => {
   it.each([
@@ -31,9 +32,8 @@ describe("attachScreens", () => {
   let ownerDelayMs: number;
   let logged: string[];
   let takeoverUntil: number;
-  let inputs: Array<{ botId: string; event: BrowserInputEvent }>;
   let loggedFields: unknown[];
-  let opened: Array<{ ownerId: Id<"users">; botId: string }>;
+  let opened: Array<{ ownerId: Id<"users">; botId: string; mode: StreamMode }>;
 
   beforeEach(async () => {
     computerSide = [];
@@ -43,7 +43,6 @@ describe("attachScreens", () => {
     ownerDelayMs = 0;
     logged = [];
     takeoverUntil = 0;
-    inputs = [];
     loggedFields = [];
     server = createServer();
     const fakeComputer = new WebSocketServer({ noServer: true });
@@ -58,11 +57,8 @@ describe("attachScreens", () => {
         logged.push(fields.event);
         loggedFields.push(fields);
       },
+      takeoverCheckMs: TAKEOVER_CHECK_MS,
       link: {
-        sendInput: ({ botId, event }) => {
-          inputs.push({ botId, event });
-          return true;
-        },
         openStream: async (args) => {
           opened.push(args);
           await new Promise((done) => setTimeout(done, openDelayMs));
@@ -140,7 +136,7 @@ describe("attachScreens", () => {
     const socket = viewer();
     await new Promise((resolve) => socket.once("open", resolve));
     await until(() => computerSide.length === 1);
-    expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot" }]);
+    expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot", mode: "watch" }]);
     const near = computerSide[0] as WebSocket;
 
     const toViewer = new Promise<Buffer>((resolve) => socket.once("message", (data: Buffer) => resolve(data)));
@@ -184,49 +180,74 @@ describe("attachScreens", () => {
       expect(await rejection(viewer({ path: inputPath, login: "other@example" }))).toBe(403);
     });
 
-    it("reaches the bot's computer during a take-over, and nothing logs its content", async () => {
+    async function takenOver() {
       takeoverUntil = Date.now() + 60_000;
       const socket = viewer({ path: inputPath });
       await open(socket);
-      socket.send(JSON.stringify({ kind: "text", text: "hunter2-secret" }));
-      socket.send(JSON.stringify({ kind: "pointer", x: 10, y: 20, action: "down" }));
-      await until(() => inputs.length === 2);
-      expect(inputs[0]).toEqual({ botId: "my-bot", event: { kind: "text", text: "hunter2-secret" } });
+      await until(() => computerSide.length === 1);
+      return { socket, near: computerSide[0] as WebSocket };
+    }
+
+    it("opens a control stream during a take-over, and relays bytes both ways", async () => {
+      const { socket, near } = await takenOver();
+      expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot", mode: "control" }]);
+
+      const toViewer = new Promise<Buffer>((resolve) => socket.once("message", (data: Buffer) => resolve(data)));
+      near.send(Buffer.from([1, 2, 3]));
+      expect([...(await toViewer)]).toEqual([1, 2, 3]);
+
+      const toComputer = new Promise<Buffer>((resolve) => near.once("message", (data: Buffer) => resolve(data)));
+      socket.send(Buffer.from([4, 5]));
+      expect([...(await toComputer)]).toEqual([4, 5]);
+      socket.close();
+    });
+
+    it("logs nothing of what a person types", async () => {
+      const { socket, near } = await takenOver();
+      const toComputer = new Promise<Buffer>((resolve) => near.once("message", (data: Buffer) => resolve(data)));
+      socket.send(Buffer.from("hunter2-secret"));
+      expect((await toComputer).toString()).toBe("hunter2-secret");
       expect(JSON.stringify(loggedFields)).not.toContain("hunter2");
       socket.close();
     });
 
-    it.each([
-      ["a kind that does not exist", { kind: "shell", command: "id" }],
-      ["a point off the screen", { kind: "pointer", x: 5000, y: 1, action: "down" }],
-      ["a key outside the list", { kind: "key", key: "F12" }],
-      ["a URL that is not http", { kind: "navigate", url: "file:///etc/passwd" }],
-    ])("closes on %s and sends nothing", async (_name, event) => {
-      takeoverUntil = Date.now() + 60_000;
-      const socket = viewer({ path: inputPath });
-      await open(socket);
-      const closed = closeCode(socket);
-      socket.send(JSON.stringify(event));
-      expect(await closed).toBe(LINK_CLOSE.invalidMessage);
-      expect(inputs).toEqual([]);
-    });
-
-    it("does not repeat a bad message's content in the log", async () => {
-      takeoverUntil = Date.now() + 60_000;
-      const socket = viewer({ path: inputPath });
-      await open(socket);
-      const closed = closeCode(socket);
-      socket.send(JSON.stringify({ kind: "text", text: "hunter2-secret", extra: true }));
-      await closed;
-      expect(JSON.stringify(loggedFields)).not.toContain("hunter2");
-    });
-
-    it("does not open a stream", async () => {
-      takeoverUntil = Date.now() + 60_000;
-      const socket = viewer({ path: inputPath });
-      await open(socket);
-      expect(opened).toEqual([]);
+    it("stays open while the take-over holds", async () => {
+      const { socket } = await takenOver();
+      await new Promise((done) => setTimeout(done, TAKEOVER_CHECK_MS * 4));
+      expect(socket.readyState).toBe(WebSocket.OPEN);
       socket.close();
+    });
+
+    it("closes both ends when the take-over ends", async () => {
+      const { socket, near } = await takenOver();
+      const viewerClosed = closeCode(socket);
+      const computerClosed = closeCode(near);
+      takeoverUntil = 0;
+      expect(await viewerClosed).toBe(LINK_CLOSE.takeoverEnded);
+      await computerClosed;
+    });
+
+    it("cuts the computer off at once from a viewer that never answers the close", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      const client = await new Promise<Socket>((resolve) => {
+        const raw = connect(port, "127.0.0.1", () => resolve(raw));
+        raw.on("error", () => {});
+      });
+      client.write(
+        `GET ${inputPath} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: http://127.0.0.1:${port}\r\nTailscale-User-Login: me@example\r\n` +
+          "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      );
+      await until(() => computerSide.length === 1);
+      const computerClosed = closeCode(computerSide[0] as WebSocket);
+      takeoverUntil = 0;
+      await computerClosed;
+      client.destroy();
+    });
+
+    it("tells the owner when no computer is connected", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      stream = "no-computer";
+      expect(await closeCode(viewer({ path: inputPath }))).toBe(LINK_CLOSE.noComputer);
     });
   });
 
