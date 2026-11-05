@@ -17,7 +17,13 @@ REPO_URL=https://github.com/ImNallen/Bots.git
 ROOT=/opt/bots-computerd
 OLD_ROOT=/opt/computerd
 UNIT=/etc/systemd/system/computerd.service
+DISPLAY_UNIT=/etc/systemd/system/computerd-display.service
+BROWSER_UNIT=/etc/systemd/system/computerd-browser.service
 TOOLS="sudo procps ca-certificates curl git xz-utils"
+BROWSER_PACKAGES="chromium xvfb x11vnc fonts-liberation fonts-noto-color-emoji"
+# One wide display, with one 1280x800 region for each screen and one more for the blank window that keeps Chromium alive.
+DISPLAY_NUMBER=7
+SCREEN_COUNT=8
 
 ref=${1:?usage: install-computerd.sh GIT_REF [all|build|activate|force]}
 mode=${2:-all}
@@ -54,10 +60,18 @@ build() {
     apt-get install -y -qq --no-install-recommends $TOOLS >/dev/null
   fi
 
+  # shellcheck disable=SC2086
+  if ! dpkg -s $BROWSER_PACKAGES >/dev/null 2>&1; then
+    apt-get update -qq
+    # shellcheck disable=SC2086
+    apt-get install -y -qq --no-install-recommends $BROWSER_PACKAGES >/dev/null
+  fi
+
   id computerd >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin computerd
   id agent >/dev/null 2>&1 || useradd --create-home --shell /bin/bash agent
   install --directory --owner computerd --group computerd --mode 0700 /var/lib/computerd
   [ -d /workspace ] || install --directory --owner agent --group agent --mode 0755 /workspace
+  id browser >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin browser
 
   # Anything a killed run left is unfinished, and the selected release is never in this list.
   for candidate in "$ROOT"/build.* "$ROOT"/runtimes/*.tmp; do
@@ -132,11 +146,41 @@ activate() {
   install --mode 0440 "$release/apps/computerd/sudoers" /etc/sudoers.d/computerd
   visudo --check --quiet
 
+  cat > "$DISPLAY_UNIT.tmp" <<EOF
+[Unit]
+Description=Bots screens display
+ConditionPathExists=/etc/computerd/env
+
+[Service]
+User=browser
+ExecStart=/usr/bin/Xvfb :$DISPLAY_NUMBER -screen 0 $(( (SCREEN_COUNT + 1) * 1280 ))x800x24 -nolisten tcp
+Restart=always
+RestartSec=2
+EOF
+  mv "$DISPLAY_UNIT.tmp" "$DISPLAY_UNIT"
+
+  # CDP listens on loopback, and a bot already shares this profile. The sandbox stays on, so a page cannot reach the VM.
+  cat > "$BROWSER_UNIT.tmp" <<EOF
+[Unit]
+Description=Bots shared browser
+After=computerd-display.service
+Requires=computerd-display.service
+ConditionPathExists=/etc/computerd/env
+
+[Service]
+User=browser
+Environment=DISPLAY=:$DISPLAY_NUMBER
+ExecStart=/usr/bin/chromium --user-data-dir=/home/browser/profile --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --disable-gpu --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --window-position=$(( SCREEN_COUNT * 1280 )),0 --window-size=1280,800 about:blank
+Restart=always
+RestartSec=2
+EOF
+  mv "$BROWSER_UNIT.tmp" "$BROWSER_UNIT"
+
   cat > "$UNIT.tmp" <<EOF
 [Unit]
 Description=Bots computerd
-After=network-online.target
-Wants=network-online.target
+After=network-online.target computerd-browser.service
+Wants=network-online.target computerd-browser.service
 # The template has no token. A clone starts this unit after it writes one.
 ConditionPathExists=/etc/computerd/env
 

@@ -23,14 +23,44 @@ const writeFileArgs = z.strictObject({
   content: z.string().max(MAX_FILE_CONTENT_BYTES),
 });
 
+const MAX_URL_LENGTH = 8192;
+const MAX_TYPED_TEXT = 16 * 1024;
+
+export const BROWSER_KEYS = ["Enter", "Tab", "Escape", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] as const;
+
+const browserNavigateArgs = z.strictObject({
+  url: z
+    .string()
+    .max(MAX_URL_LENGTH)
+    .refine((url) => /^https?:\/\//i.test(url) && URL.canParse(url), "must be an http or https URL"),
+});
+const browserSnapshotArgs = z.strictObject({});
+const browserClickArgs = z.strictObject({ ref: z.number().int().min(1) });
+const browserTypeArgs = z.strictObject({
+  ref: z.number().int().min(1),
+  text: z.string().max(MAX_TYPED_TEXT),
+  submit: z.boolean().default(false),
+});
+const browserPressArgs = z.strictObject({ key: z.enum(BROWSER_KEYS) });
+
 export const toolInvocation = z.discriminatedUnion("name", [
   z.strictObject({ name: z.literal("shell"), args: shellArgs }),
   z.strictObject({ name: z.literal("read_file"), args: readFileArgs }),
   z.strictObject({ name: z.literal("write_file"), args: writeFileArgs }),
+  z.strictObject({ name: z.literal("browser_navigate"), args: browserNavigateArgs }),
+  z.strictObject({ name: z.literal("browser_snapshot"), args: browserSnapshotArgs }),
+  z.strictObject({ name: z.literal("browser_click"), args: browserClickArgs }),
+  z.strictObject({ name: z.literal("browser_type"), args: browserTypeArgs }),
+  z.strictObject({ name: z.literal("browser_press"), args: browserPressArgs }),
 ]);
 
 export type ToolInvocation = z.infer<typeof toolInvocation>;
 export type ToolName = ToolInvocation["name"];
+export type BrowserInvocation = Extract<ToolInvocation, { name: `browser_${string}` }>;
+
+export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvocation {
+  return tool.name.startsWith("browser_");
+}
 
 const TOOLS = {
   shell: {
@@ -46,6 +76,29 @@ const TOOLS = {
     description:
       "Write a text file, replacing any existing content and creating parent directories. A relative path resolves against the bot's workspace.",
     args: writeFileArgs,
+  },
+  browser_navigate: {
+    description:
+      "Open a URL on this bot's screen, in a browser that all of this user's bots share logins with. Returns a snapshot of the page. The user can watch this screen and take it over. If a page needs a login, ask the user to take over the screen and log in. Never ask for a password in the chat.",
+    args: browserNavigateArgs,
+  },
+  browser_snapshot: {
+    description:
+      "Read this bot's current page as text. Each element you can act on has a number in brackets, for use as the ref of browser_click and browser_type. A ref holds until the page changes, so take a new snapshot after any action that changes the page. Password values are never shown.",
+    args: browserSnapshotArgs,
+  },
+  browser_click: {
+    description: "Click an element from the latest snapshot. Returns a new snapshot.",
+    args: browserClickArgs,
+  },
+  browser_type: {
+    description:
+      "Replace the text in a field from the latest snapshot. Set submit to press Enter afterward. Returns a new snapshot.",
+    args: browserTypeArgs,
+  },
+  browser_press: {
+    description: "Press one key on this bot's current page. Use the arrow keys and Enter to choose from a dropdown. Returns a new snapshot.",
+    args: browserPressArgs,
   },
 } as const satisfies Record<ToolName, { description: string; args: z.ZodType }>;
 

@@ -158,13 +158,31 @@ We tested this in an arm64 Debian container against a local page:
 | Bot B opens a popup | The popup opened on screen A until CDP moved it to screen B |
 | One VNC stream per region | Each stream returned 1280x800 and the correct page color |
 
-The results set three rules:
+A second test on a real user VM covered four screens, real websites, input through a VNC stream, and Chromium with its sandbox on:
+
+| Test | Result |
+|---|---|
+| Chromium under its own user, with its sandbox on | `chrome://sandbox` reports that it is adequately sandboxed |
+| Four 1280x800 regions in one display, each with its own VNC stream | Each stream returned 1280x800 and the correct page |
+| Real websites on all four screens | Wikipedia, Hacker News, GitHub, and MDN loaded and showed on their streams. GitLab stopped at a Cloudflare check |
+| Type through a VNC stream right after a click on another screen | The first keys reached the previous screen's window, even after a 200 ms wait |
+| Type through CDP with X focus on another window | Every key reached its page, on every target |
+| Another bot navigates, opens a window, opens a popup, or brings itself to front during that typing | Nothing changed, although X focus moved |
+| Send keys and clicks through a VNC stream started with `-viewonly` | No screen received any input |
+| Change a dropdown through CDP | The menu appeared on the stream. The keyboard changed the value, and a mouse click on an option did not |
+| Type into the real login forms of GitHub and Wikipedia through CDP | The fields took the text, and `navigator.webdriver` was false |
+| Close every window | Chromium exited |
+
+The results set these rules:
 
 - Bots drive the browser through CDP, not through desktop input.
+- A person's input also goes through CDP, to one page. Every VNC stream is view-only, so no path through X can type into another bot's window. X focus lags behind a click, so a person typing through VNC could put the start of a password into the wrong bot's page.
+- Take-over has a key bar for arrows, Enter, Esc, and Tab, because a phone has no such keys and dropdowns need them.
 - `computerd` moves each popup to the screen of the bot that opened it.
+- `computerd` keeps one blank window open, because Chromium exits when its last window closes.
 - Screens show the browser only until desktop apps get an input lock.
 
-The test did not cover real websites, more than two screens, input through a VNC stream, noVNC on a phone, or Chromium with its sandbox on. Step 4 of the roadmap covers these.
+The tests did not cover noVNC on a phone. The step 4 check does.
 
 ## Where secrets live
 

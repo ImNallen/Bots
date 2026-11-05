@@ -135,12 +135,13 @@ describe("toMistralMessages", () => {
 describe("systemPrompt", () => {
   const prompt = systemPrompt({ botName: "Ada", botId: "bot123" });
 
-  it("names the bot, its workspace, and the tools", () => {
+  it("names the bot and its workspace, and keeps passwords out of the chat", () => {
     expect(prompt).toContain("Ada");
     expect(prompt).toContain("/workspace/bot123");
     for (const tool of ["shell", "read_file", "write_file"]) {
       expect(prompt).toContain(tool);
     }
+    expect(prompt).toContain("Never ask for a password");
   });
 
   it("says tool output and web content are untrusted data", () => {

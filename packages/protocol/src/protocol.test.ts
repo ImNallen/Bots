@@ -7,6 +7,7 @@ import {
   createOutputCollector,
   orchestratorMessage,
   parseJsonMessage,
+  isBrowserInvocation,
   parseToolCall,
   toolDefinitions,
 } from "./index.ts";
@@ -76,6 +77,43 @@ describe("output cap", () => {
   });
 });
 
+describe("browser tools", () => {
+  const parse = (name: string, args: unknown) => parseToolCall({ name, arguments: JSON.stringify(args) });
+
+  it.each(["https://example.com/", "http://example.com/a?b=c"])("accepts the URL %s", (url) => {
+    expect(parse("browser_navigate", { url }).kind).toBe("ok");
+  });
+
+  it.each(["file:///etc/passwd", "chrome://settings", "javascript:alert(1)", "about:blank", "example.com"])(
+    "rejects the URL %s",
+    (url) => {
+      expect(parse("browser_navigate", { url }).kind).toBe("invalid");
+    },
+  );
+
+  it("takes only the keys that the browser knows", () => {
+    expect(parse("browser_press", { key: "ArrowDown" }).kind).toBe("ok");
+    expect(parse("browser_press", { key: "F12" }).kind).toBe("invalid");
+  });
+
+  it("rejects a ref that is not a positive whole number", () => {
+    expect(parse("browser_click", { ref: 0 }).kind).toBe("invalid");
+    expect(parse("browser_click", { ref: 1.5 }).kind).toBe("invalid");
+  });
+
+  it("defaults submit to false", () => {
+    expect(parse("browser_type", { ref: 1, text: "x" })).toEqual({
+      kind: "ok",
+      invocation: { name: "browser_type", args: { ref: 1, text: "x", submit: false } },
+    });
+  });
+
+  it("marks only browser tools as browser invocations", () => {
+    expect(isBrowserInvocation({ name: "browser_snapshot", args: {} })).toBe(true);
+    expect(isBrowserInvocation({ name: "read_file", args: { path: "a" } })).toBe(false);
+  });
+});
+
 describe("parseToolCall", () => {
   it("applies the shell default timeout", () => {
     expect(parseToolCall({ name: "shell", arguments: '{"command":"ls"}' })).toEqual({
@@ -99,7 +137,16 @@ describe("parseToolCall", () => {
   });
 
   it("publishes a JSON schema for each tool without the $schema key", () => {
-    expect(toolDefinitions.map((tool) => tool.function.name)).toEqual(["shell", "read_file", "write_file"]);
+    expect(toolDefinitions.map((tool) => tool.function.name)).toEqual([
+      "shell",
+      "read_file",
+      "write_file",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_click",
+      "browser_type",
+      "browser_press",
+    ]);
     for (const tool of toolDefinitions) {
       expect(tool.function.parameters).toMatchObject({ type: "object" });
       expect(tool.function.parameters).not.toHaveProperty("$schema");

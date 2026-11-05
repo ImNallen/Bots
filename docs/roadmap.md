@@ -16,7 +16,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 
 Step 3 isolates bots from the LAN. Friends join through the invites in step 6, and until then an operator declares each computer by hand.
 
-Backups are deferred. Add off-server copies of Convex exports and the master key before anyone depends on this system.
+Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Add off-server copies of Convex exports and the master key before anyone depends on this system.
 
 ## Where things run
 
@@ -109,4 +109,4 @@ These are open on purpose. Fix each one when the work reaches it.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.
-- Step 4 must test what the screen tests did not cover. The architecture document lists these.
+- No test has used noVNC on a phone. The step 4 check does.
