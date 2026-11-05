@@ -6,7 +6,7 @@
 #   activate  swap to the built release and restart computerd. This is the part that interrupts a tool.
 #   force     build a fresh copy of everything, then activate. This is the repair for a VM that may be damaged.
 #
-# A bot has root here and can install anything, so this touches only its own directory, a sudoers file, and a unit file.
+# A bot has root here and can install anything, so this touches only its own directory, a sudoers file, and its unit files.
 # Node lives in the release, so a bot that changes the system's Node cannot break computerd. Everything new gets a new
 # directory, and one symlink selects a release, so a kill or a failed download never damages the selected release.
 set -euo pipefail
@@ -16,15 +16,10 @@ PNPM_VERSION=11.23.0
 REPO_URL=https://github.com/ImNallen/Bots.git
 ROOT=/opt/bots-computerd
 OLD_ROOT=/opt/computerd
-UNIT=/etc/systemd/system/computerd.service
-DISPLAY_UNIT=/etc/systemd/system/computerd-display.service
-BROWSER_UNIT=/etc/systemd/system/computerd-browser.service
-SCREEN_UNIT_PREFIX=/etc/systemd/system/computerd-screen
+UNIT_DIR=/etc/systemd/system
+UNIT=$UNIT_DIR/computerd.service
 TOOLS="sudo procps ca-certificates curl git xz-utils"
-BROWSER_PACKAGES="chromium xvfb x11vnc fonts-liberation fonts-noto-color-emoji"
-# One wide display, with one 1280x800 region for each screen and one more for the blank window that keeps Chromium alive.
-DISPLAY_NUMBER=7
-SCREEN_COUNT=8
+BROWSER_PACKAGES="chromium xvfb x11vnc dbus xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-terminal xfconf thunar fonts-liberation fonts-noto-color-emoji"
 
 ref=${1:?usage: install-computerd.sh GIT_REF [all|build|activate|force]}
 mode=${2:-all}
@@ -49,6 +44,14 @@ release_is_whole() {
   [ -f "$1/.complete" ] && "$1/.runtime/bin/node" --version >/dev/null 2>&1 && [ -x "$1/.runtime/bin/pnpm" ]
 }
 
+# A kill during an install leaves packages half set up, and a later apt-get then refuses to run until dpkg finishes them.
+browser_packages_are_whole() {
+  local states
+  # shellcheck disable=SC2086
+  states=$(dpkg-query --show --showformat='${db:Status-Status}\n' $BROWSER_PACKAGES 2>/dev/null) || return 1
+  [ "$(sort -u <<<"$states")" = installed ] && [ -z "$(dpkg --audit)" ]
+}
+
 build() {
   local missing="" tool candidate runtime="" work tarball
   # A bot can remove these, and computerd needs them, so put back any that are missing.
@@ -61,11 +64,12 @@ build() {
     apt-get install -y -qq --no-install-recommends $TOOLS >/dev/null
   fi
 
-  # shellcheck disable=SC2086
-  if ! dpkg -s $BROWSER_PACKAGES >/dev/null 2>&1; then
+  if ! browser_packages_are_whole; then
+    dpkg --configure -a
     apt-get update -qq
+    # Tools keep running during a build, so this must not replace the Chromium that a bot is using.
     # shellcheck disable=SC2086
-    apt-get install -y -qq --no-install-recommends $BROWSER_PACKAGES >/dev/null
+    apt-get install -y -qq --no-install-recommends --no-upgrade $BROWSER_PACKAGES >/dev/null
   fi
 
   id computerd >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin computerd
@@ -130,7 +134,7 @@ build() {
 }
 
 activate() {
-  local release candidate keep_runtime
+  local release candidate keep_runtime file unit screen
   release=$(readlink -f "$ROOT/next" 2>/dev/null || true)
   if [ -z "$release" ] || ! release_is_whole "$release"; then
     echo "there is no whole release to activate" >&2
@@ -147,61 +151,18 @@ activate() {
   install --mode 0440 "$release/apps/computerd/sudoers" /etc/sudoers.d/computerd
   visudo --check --quiet
 
-  cat > "$DISPLAY_UNIT.tmp" <<EOF
-[Unit]
-Description=Bots screens display
-ConditionPathExists=/etc/computerd/env
-
-[Service]
-User=browser
-ExecStart=/usr/bin/Xvfb :$DISPLAY_NUMBER -screen 0 $(( (SCREEN_COUNT + 1) * 1280 ))x800x24 -nolisten tcp
-Restart=always
-RestartSec=2
-EOF
-  mv "$DISPLAY_UNIT.tmp" "$DISPLAY_UNIT"
-
-  # CDP listens on loopback, and a bot already shares this profile. The sandbox stays on, so a page cannot reach the VM.
-  cat > "$BROWSER_UNIT.tmp" <<EOF
-[Unit]
-Description=Bots shared browser
-After=computerd-display.service
-Requires=computerd-display.service
-ConditionPathExists=/etc/computerd/env
-
-[Service]
-User=browser
-Environment=DISPLAY=:$DISPLAY_NUMBER
-ExecStart=/usr/bin/chromium --user-data-dir=/home/browser/profile --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --disable-gpu --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --window-position=$(( SCREEN_COUNT * 1280 )),0 --window-size=1280,800 about:blank
-Restart=always
-RestartSec=2
-EOF
-  mv "$BROWSER_UNIT.tmp" "$BROWSER_UNIT"
-
-  # Every stream is view-only, so nothing through X can type into a window. A person's input goes through CDP to one page.
-  local screen screen_units=""
-  for screen in $(seq 0 $(( SCREEN_COUNT - 1 ))); do
-    cat > "$SCREEN_UNIT_PREFIX-$screen.service.tmp" <<EOF
-[Unit]
-Description=Bots screen stream $screen
-After=computerd-display.service
-Requires=computerd-display.service
-ConditionPathExists=/etc/computerd/env
-
-[Service]
-User=browser
-ExecStart=/usr/bin/x11vnc -display :$DISPLAY_NUMBER -clip 1280x800+$(( screen * 1280 ))+0 -viewonly -localhost -rfbport $(( 5900 + screen )) -forever -shared -nopw -noxdamage -q
-Restart=always
-RestartSec=2
-EOF
-    mv "$SCREEN_UNIT_PREFIX-$screen.service.tmp" "$SCREEN_UNIT_PREFIX-$screen.service"
-    screen_units="$screen_units computerd-screen-$screen.service"
+  # mv replaces whatever is at the path, so this also undoes a mask or an edit by a bot.
+  for file in "$release"/apps/computerd/desktop/computerd-*; do
+    unit=$(basename "$file")
+    install --mode 0644 "$file" "$UNIT_DIR/$unit.tmp"
+    mv "$UNIT_DIR/$unit.tmp" "$UNIT_DIR/$unit"
   done
 
   cat > "$UNIT.tmp" <<EOF
 [Unit]
 Description=Bots computerd
-After=network-online.target computerd-browser.service
-Wants=network-online.target computerd-browser.service$screen_units
+After=network-online.target
+Wants=network-online.target
 # The template has no token. A clone starts this unit after it writes one.
 ConditionPathExists=/etc/computerd/env
 
@@ -209,6 +170,10 @@ ConditionPathExists=/etc/computerd/env
 User=computerd
 WorkingDirectory=$ROOT/current
 EnvironmentFile=/etc/computerd/env
+# Who holds each desktop. This outlives computerd, because the desktops do, and it ends at a reboot, because they do.
+RuntimeDirectory=computerd
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 ExecStart=$ROOT/current/.runtime/bin/node apps/computerd/src/main.ts
 Restart=always
 RestartSec=2
@@ -217,6 +182,22 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
   mv "$UNIT.tmp" "$UNIT"
+  systemctl daemon-reload
+
+  # The new computerd.service no longer wants these, so a computerd that crashes here cannot bring them back. The old browser
+  # stops before the symlink moves, so no new computerd can copy a base that a browser still has open. The file goes only
+  # after its stop returns, so a kill between the two repeats the stop on the next run, and a clean VM skips all of it.
+  local old_units="computerd-display.service computerd-browser.service"
+  for screen in 0 1 2 3 4 5 6 7; do
+    old_units="$old_units computerd-screen-$screen.service"
+  done
+  for unit in $old_units; do
+    if [ -f "$UNIT_DIR/$unit" ]; then
+      systemctl stop --quiet "$unit"
+      rm -f "$UNIT_DIR/$unit"
+    fi
+  done
+  rm -f /var/lib/computerd/screens.json /var/lib/computerd/screens.json.tmp
 
   ln -sfn "$release" "$ROOT/current.tmp"
   mv -T "$ROOT/current.tmp" "$ROOT/current"

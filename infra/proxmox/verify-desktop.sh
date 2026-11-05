@@ -346,9 +346,17 @@ check "computerd restarted: the holder file stays" test -f /run/computerd/deskto
 
 same "base: nothing changed the base profile" "$(base_hash)" "$base_before"
 
+systemctl stop --quiet computerd-xvfb@$SLOT.service computerd-xvfb@$OTHER.service
+if sudo -u computerd --chdir /opt/bots-computerd/current "$NODE" scripts/verify-desktops.ts; then
+  result true "computerd's own code runs two bots at once, as the computerd user"
+else
+  result false "computerd's own code runs two bots at once, as the computerd user"
+fi
+rm -rf /home/browser/profiles/verifydesktopsa /home/browser/profiles/verifydesktopsb
+same "base: nothing changed the base profile after that" "$(base_hash)" "$base_before"
+
 # The reboot below looks for this profile, so it stays until the last step.
 trap - EXIT
-systemctl stop --quiet computerd-xvfb@$SLOT.service computerd-xvfb@$OTHER.service
 systemctl reset-failed 'computerd-*@'$SLOT'*' 'computerd-*@'$OTHER'*' 2>/dev/null || true
 rm -f "$PROBE"
 echo "---"
