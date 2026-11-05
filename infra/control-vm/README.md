@@ -52,6 +52,37 @@ If a change edits `deploy.sh` itself, fetch and check out the branch before you 
 
 In the Tailscale admin console, open the `bots-control` machine and select **Share**. Share only this machine. A friend's tailnet then reaches this one machine, and this machine cannot start connections to it.
 
+## Create a user VM by hand
+
+The reconcile loop does not exist yet, so these steps create a user's VM. Each user has one computer, so registering a new VM makes the link refuse that user's old VM.
+
+1. On the Proxmox host, build the template from a Git ref. The template is VM 9000. User VMs are full clones, so you can rebuild it at any time.
+
+	```sh
+	bash create-user-template.sh main
+	```
+
+2. On the host, clone the template with a VM ID, an address on `10.77.0.0/24`, the CPU cores, the memory in MB, and the disk in GB. The script prints the hash of the link token. The VM makes the token itself, and the token stays in the VM.
+
+	```sh
+	bash clone-user-vm.sh 201 10.77.0.21 2 2048 16
+	```
+
+3. On the control VM, register the hash for the user. Use the value of `JWT_ISSUER` from `/opt/bots/.env.local` as the issuer. Pass the user's current email and display name, because this call overwrites them.
+
+	```sh
+	cd /opt/bots/packages/convex
+	sudo pnpm exec convex run computers:register \
+	  '{"ownerSubject":"tailscale:<login>","email":"<login>","displayName":"<login>","tokenHash":"<hash>"}' \
+	  --identity '{"subject":"service:orchestrator","issuer":"<JWT_ISSUER>"}'
+	```
+
+4. From a device on the tailnet, signed in as that user, run the check with the VM's name. The account needs a Mistral key, and each run adds a bot named `verify-template-*` to the list.
+
+	```sh
+	pnpm verify:template https://bots-control.<tailnet>.ts.net bots-user-201
+	```
+
 ## Check it
 
 From a device on the tailnet, run the check with the VM's address and its LAN address:

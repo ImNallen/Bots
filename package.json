@@ -16,7 +16,8 @@
     "test": "pnpm --recursive run test",
     "verify:auth": "pnpm build && node scripts/verify-auth.ts",
     "verify:agent": "pnpm build && node scripts/verify-agent.ts",
-    "verify:tailnet": "node scripts/verify-tailnet.ts"
+    "verify:tailnet": "node scripts/verify-tailnet.ts",
+    "verify:template": "node scripts/verify-template.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",
