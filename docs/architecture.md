@@ -142,6 +142,8 @@ A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM st
 
 ## Why screens share one browser
 
+The roadmap replaces this design with a desktop for each bot, and its next section has the reasons and the test results. This section describes what runs today.
+
 Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.
 
 The design that works has one wide virtual display. Each bot gets one Chromium window in its own 1280x800 region of that display. A cropped `x11vnc` stream shows each region.
