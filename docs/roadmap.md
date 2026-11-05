@@ -65,7 +65,7 @@ The user chose to update `computerd` in place, because bots and users install th
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
 4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
 5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
-6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. Items 3 and 4 of the next section's list come next, and then the step's check on a real phone. Step 4 is not done until that check passes.
+6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 3 and 4 of the next section's list come next, and then the step's check on a real phone. Step 4 is not done until that check passes.
 
 ## Next: a desktop for each bot
 
@@ -102,7 +102,7 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 3. Make take-over the real desktop through noVNC, and remove the CDP input path and its custom touch controls. Check on a real phone whether noVNC's keyboard and touch are enough, and keep a key bar if they are not.
 4. Half done. A new bot starts from a copy of the base, `/home/browser/profile`. Next, move logins. When the owner gives back a take-over, copy the bot's cookies to the base profile and to every running browser through CDP. A site that keeps its session in localStorage needs that bot's browser restarted from a new copy.
 5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
-6. Deploy the desktops, and run `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check, because a VM gains new services. None of these has run against desktops yet. Then run the step's check on a real phone, with two bots.
+6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed against desktops. Run them again after items 3 and 4, because take-over adds an input stream. Then run the step's check on a real phone, with two bots.
 
 ### Follow-ups, in this order
 
