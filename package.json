@@ -18,7 +18,8 @@
     "verify:agent": "pnpm build && node scripts/verify-agent.ts",
     "verify:tailnet": "node scripts/verify-tailnet.ts",
     "verify:template": "node scripts/verify-template.ts",
-    "verify:browser": "node scripts/verify-browser.ts"
+    "verify:browser": "node scripts/verify-browser.ts",
+    "verify:screen": "node scripts/verify-screen.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",

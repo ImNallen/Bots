@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Id } from "@bots/convex/dataModel";
 import {
   LINK_CLOSE,
@@ -19,6 +20,8 @@ const CANCEL_GRACE_MS = 10_000;
 const RESPONSE_MARGIN_MS = 60_000;
 const FILE_TOOL_DEADLINE_MS = 60_000;
 const MAX_ISSUED_PER_SOCKET = 4096;
+const STREAM_ATTACH_TIMEOUT_MS = 10_000;
+const MAX_STREAMS_PER_OWNER = 8;
 
 export type Computer = { computerId: Id<"computers">; ownerId: Id<"users"> };
 
@@ -28,6 +31,7 @@ export type LinkOutcome =
 
 export type Link = {
   isConnected: (ownerId: Id<"users">) => boolean;
+  openStream: (args: { ownerId: Id<"users">; botId: string }) => Promise<WebSocket | "no-computer" | "too-many">;
   disconnect: (ownerId: Id<"users">) => void;
   call: (args: {
     ownerId: Id<"users">;
@@ -50,7 +54,10 @@ type Connection = {
 type SocketState =
   | { kind: "awaitingHello" }
   | { kind: "authenticating" }
-  | { kind: "ready"; connection: Connection };
+  | { kind: "ready"; connection: Connection }
+  | { kind: "stream" };
+
+type PendingStream = { ownerId: Id<"users">; attach: (socket: WebSocket) => void };
 
 type Step =
   | { kind: "result"; result: ToolResult }
@@ -78,6 +85,8 @@ export function startLink(args: {
   const { log } = args;
   const connections = new Map<Id<"users">, Connection>();
   const onConnect = new Set<() => void>();
+  const pendingStreams = new Map<string, PendingStream>();
+  const openStreams = new Map<Id<"users">, number>();
 
   function dropConnection(connection: Connection): void {
     if (connections.get(connection.computer.ownerId) === connection) {
@@ -171,7 +180,32 @@ export function startLink(args: {
       log({ level: "info", event: "computer-connected", computerId: computer.computerId });
     }
 
+    // Only a stream this link asked for can attach, and only with the token of a computer that the stream's owner holds.
+    async function attachStream(token: string, streamId: string): Promise<void> {
+      const pending = pendingStreams.get(streamId);
+      if (pending === undefined) {
+        closeInvalid(socket, "unknown-stream");
+        return;
+      }
+      const computer = await args.authenticate(token);
+      if (socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (computer === null || computer.ownerId !== pending.ownerId || !pendingStreams.delete(streamId)) {
+        log({ level: "warn", event: "link-rejected", reason: "stream-not-for-this-computer" });
+        socket.close(LINK_CLOSE.unauthorized);
+        return;
+      }
+      state = { kind: "stream" };
+      pending.attach(socket);
+      send(socket, { kind: "welcome" });
+    }
+
     socket.on("message", (raw: Buffer) => {
+      // Once attached, the relay owns every byte on this socket.
+      if (state.kind === "stream") {
+        return;
+      }
       const message = parseJsonMessage({ raw: raw.toString("utf8"), schema: computerMessage });
       if (message === null) {
         closeInvalid(socket, "invalid-message");
@@ -186,6 +220,22 @@ export function startLink(args: {
           clearTimeout(helloTimer);
           state = { kind: "authenticating" };
           authenticate(message.token).catch((error: unknown) => {
+            log({
+              level: "error",
+              event: "link-auth-failed",
+              message: error instanceof Error ? error.message : "unknown error",
+            });
+            socket.close(LINK_CLOSE.internalError);
+          });
+          return;
+        case "streamHello":
+          if (state.kind !== "awaitingHello") {
+            closeInvalid(socket, "unexpected-hello");
+            return;
+          }
+          clearTimeout(helloTimer);
+          state = { kind: "authenticating" };
+          attachStream(message.token, message.streamId).catch((error: unknown) => {
             log({
               level: "error",
               event: "link-auth-failed",
@@ -299,6 +349,42 @@ export function startLink(args: {
 
   return {
     isConnected: (ownerId) => connections.has(ownerId),
+    openStream: ({ ownerId, botId }) => {
+      const connection = connections.get(ownerId);
+      if (connection === undefined) {
+        return Promise.resolve("no-computer");
+      }
+      const open = openStreams.get(ownerId) ?? 0;
+      if (open >= MAX_STREAMS_PER_OWNER) {
+        return Promise.resolve("too-many");
+      }
+      openStreams.set(ownerId, open + 1);
+      const release = () => {
+        const count = (openStreams.get(ownerId) ?? 1) - 1;
+        if (count <= 0) {
+          openStreams.delete(ownerId);
+        } else {
+          openStreams.set(ownerId, count);
+        }
+      };
+      return new Promise((resolve) => {
+        const streamId = randomUUID();
+        const timeout = setTimeout(() => {
+          pendingStreams.delete(streamId);
+          release();
+          resolve("no-computer");
+        }, STREAM_ATTACH_TIMEOUT_MS);
+        pendingStreams.set(streamId, {
+          ownerId,
+          attach: (socket) => {
+            clearTimeout(timeout);
+            socket.once("close", release);
+            resolve(socket);
+          },
+        });
+        send(connection.socket, { kind: "screenOpen", streamId, botId });
+      });
+    },
     // Authentication happens only at hello, so a revoked token keeps working on a live socket until this closes it.
     disconnect: (ownerId) => {
       const connection = connections.get(ownerId);

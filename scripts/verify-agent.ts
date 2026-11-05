@@ -597,6 +597,9 @@ function startDirectLink(port: number) {
         socket.send(JSON.stringify({ kind: "welcome" } satisfies OrchestratorMessage));
         return;
       }
+      if (message.kind !== "toolResult") {
+        return;
+      }
       const waiting = waiters.get(message.callId) ?? [];
       waiters.delete(message.callId);
       waiting.forEach((resolve) => resolve(message.result));
@@ -624,7 +627,7 @@ function startDirectLink(port: number) {
       server.close();
     },
     // docker calls here block the event loop, so a close can still be queued. Like the runner, this asks again.
-    async ask(message: Exclude<OrchestratorMessage, { kind: "welcome" }>): Promise<ToolResult> {
+    async ask(message: Extract<OrchestratorMessage, { kind: "toolCall" | "cancelTool" }>): Promise<ToolResult> {
       const deadline = Date.now() + 30_000;
       const { promise, resolve } = Promise.withResolvers<ToolResult>();
       waiters.set(message.callId, [...(waiters.get(message.callId) ?? []), resolve]);

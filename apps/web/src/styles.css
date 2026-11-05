@@ -359,3 +359,30 @@ textarea:disabled {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.screen-panel {
+  margin: 0 0 1rem;
+}
+
+.screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.screen-status {
+  color: var(--muted, #666);
+  font-size: 0.875rem;
+}
+
+.screen-view {
+  margin-top: 0.5rem;
+  width: 100%;
+  aspect-ratio: 1280 / 800;
+  max-height: 75vh;
+  background: #111;
+  border-radius: 6px;
+  overflow: hidden;
+}
+

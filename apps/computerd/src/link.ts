@@ -22,8 +22,13 @@ function failureResult(callId: string, error: unknown): ToolResult {
   return { outcome: "error", output: `computerd could not complete the call: ${message}`, truncated: false };
 }
 
-export function connectLink(args: { url: string; token: string; calls: Calls }): void {
-  const { url, token, calls } = args;
+export function connectLink(args: {
+  url: string;
+  token: string;
+  calls: Calls;
+  openScreen: (streamId: string, botId: string) => void;
+}): void {
+  const { url, token, calls, openScreen } = args;
   let retryMs = FIRST_RETRY_MS;
 
   function connect(): void {
@@ -72,6 +77,10 @@ export function connectLink(args: { url: string; token: string; calls: Calls }):
         case "toolCall":
           log({ level: "info", event: "tool-call", callId: message.callId, tool: message.tool.name });
           answer(message.callId, calls.call(message));
+          return;
+        case "screenOpen":
+          log({ level: "info", event: "screen-open", botId: message.botId });
+          openScreen(message.streamId, message.botId);
           return;
         case "cancelTool":
           log({ level: "info", event: "tool-cancel", callId: message.callId });

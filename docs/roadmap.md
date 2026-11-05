@@ -63,7 +63,7 @@ The user chose to update `computerd` in place, because bots and users install th
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
 3. Next. Stream each screen to the web app, view-only, over the link port.
 4. Let a user take over a screen, with input through CDP, while the bot waits.
-5. Add approvals. The user decides what asks for one.
+5. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
 6. Run the step's check, on a phone.
 
 After step 4, add a way for a user to reset a computer.

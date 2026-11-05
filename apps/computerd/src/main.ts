@@ -6,6 +6,7 @@ import { executeSystemTool } from "./execute.ts";
 import { openJournal } from "./journal.ts";
 import { connectLink } from "./link.ts";
 import { log } from "./log.ts";
+import { relayScreen } from "./screens.ts";
 
 const JOURNAL_DIR = "/var/lib/computerd/journal";
 const SCREENS_FILE = "/var/lib/computerd/screens.json";
@@ -34,7 +35,14 @@ const calls = createCalls({
       ? browser.execute({ botId, tool, signal })
       : executeSystemTool({ botId, tool, signal }),
 });
-connectLink({ url: config.linkUrl, token: config.token, calls });
+connectLink({
+  url: config.linkUrl,
+  token: config.token,
+  calls,
+  openScreen: (streamId, botId) => {
+    relayScreen({ linkUrl: config.linkUrl, token: config.token, streamId, regionFor: () => browser.regionFor(botId) });
+  },
+});
 
 // Exiting leaves any tool's journal entry as "started", which reads as interrupted.
 process.on("SIGTERM", () => process.exit(0));

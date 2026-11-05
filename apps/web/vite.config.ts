@@ -16,7 +16,10 @@ export default defineConfig(({ mode }) => {
         // changeOrigin stays false and xfwd stays off, so the orchestrator's dev guard sees a loopback Host and no forwarding headers.
         "/auth": { target, changeOrigin: false },
         "/api": { target, changeOrigin: false },
+        "/screens": { target, changeOrigin: false, ws: true },
       },
     },
+    // noVNC uses top-level await.
+    build: { target: "esnext" },
   };
 });
