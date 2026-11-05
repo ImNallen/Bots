@@ -61,8 +61,8 @@ The user chose to update `computerd` in place, because bots and users install th
 
 1. Done. A test on a real VM settled how screens and input work. The architecture document has the results.
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
-3. Next. Stream each screen to the web app, view-only, over the link port.
-4. Let a user take over a screen, with input through CDP, while the bot waits.
+3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
+4. Next. Let a user take over a screen, with input through CDP, while the bot waits.
 5. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
 6. Run the step's check, on a phone.
 
@@ -124,4 +124,6 @@ These are open on purpose. Fix each one when the work reaches it.
 - Any bot can reach CDP on loopback, so it can drive another bot's window on the same computer. Those bots have one owner and already share logins, so this crosses no user's boundary.
 - A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
 - A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
+- A viewer whose bot loses its screen to another bot keeps the stream of that region, so it shows the other bot. Both bots have one owner, and this needs more than 8 active bots.
+- Streams carry no limit on bandwidth, and a bot that reads its own link token can send its owner false video.
 - A site can block the browser. GitLab stopped it at a Cloudflare check during testing.
