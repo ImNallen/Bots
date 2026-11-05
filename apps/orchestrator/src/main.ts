@@ -1,5 +1,6 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
+import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { readFile } from "node:fs/promises";
@@ -11,6 +12,7 @@ import { log } from "./log.ts";
 import { createProxmox } from "./proxmox.ts";
 import { startReconciler } from "./reconciler.ts";
 import { startRunner } from "./runner.ts";
+import { attachScreens } from "./screens.ts";
 import { hashComputerToken } from "./secrets.ts";
 import { createService } from "./service.ts";
 import { loadStaticFiles, resolveStaticFile } from "./static.ts";
@@ -114,6 +116,15 @@ app.get("*", (c) => {
   });
 });
 
-serve({ fetch: app.fetch, hostname: HOST, port: config.port }, ({ port }) => {
+const server = serve({ fetch: app.fetch, hostname: HOST, port: config.port }, ({ port }) => {
   log({ level: "info", event: "listening", host: HOST, port, authMode: config.authMode.kind });
+});
+
+attachScreens({
+  // This serve call has no TLS or HTTP/2 options, so it returns a plain HTTP server.
+  server: server as Server,
+  authMode: config.authMode,
+  link,
+  ownerForViewer: (botId, viewerSubject) => service.query(api.bots.ownerForViewer, { botId, viewerSubject }),
+  log,
 });

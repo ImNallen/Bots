@@ -216,3 +216,64 @@ describe("disconnect", () => {
     expect(() => link.disconnect("nobody" as Id<"users">)).not.toThrow();
   });
 });
+
+describe("streams", () => {
+  const openSocket = async () => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise((resolve) => socket.once("open", resolve));
+    return socket;
+  };
+  const closeCode = (socket: WebSocket) => new Promise<number>((resolve) => socket.once("close", resolve));
+  const screenOpenFrom = (computer: Computer) => computer.received.filter((message) => message.kind === "screenOpen");
+
+  it("opens a stream only when the computer dials back with its token", async () => {
+    const computer = await connectComputer();
+    const pending = link.openStream({ ownerId: OWNER, botId: "bot" });
+    await until(() => screenOpenFrom(computer).length === 1);
+    const opened = screenOpenFrom(computer)[0];
+    if (opened?.kind !== "screenOpen") {
+      throw new Error("no screenOpen");
+    }
+    expect(opened.botId).toBe("bot");
+    const dial = await openSocket();
+    const welcome = new Promise((resolve) => dial.once("message", resolve));
+    dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId: opened.streamId }));
+    await welcome;
+    const stream = await pending;
+    expect(stream).toBeInstanceOf(WebSocket);
+    dial.close();
+    computer.socket.close();
+    await computer.closed;
+  });
+
+  it("refuses a stream nobody asked for", async () => {
+    const dial = await openSocket();
+    dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId: "made-up" }));
+    expect(await closeCode(dial)).toBe(LINK_CLOSE.invalidMessage);
+  });
+
+  it("refuses the right stream with a wrong token, and keeps it open for the real computer", async () => {
+    const computer = await connectComputer();
+    const pending = link.openStream({ ownerId: OWNER, botId: "bot" });
+    await until(() => screenOpenFrom(computer).length === 1);
+    const opened = screenOpenFrom(computer)[0];
+    if (opened?.kind !== "screenOpen") {
+      throw new Error("no screenOpen");
+    }
+    const impostor = await openSocket();
+    impostor.send(JSON.stringify({ kind: "streamHello", token: "wrong", streamId: opened.streamId }));
+    expect(await closeCode(impostor)).toBe(LINK_CLOSE.unauthorized);
+
+    const dial = await openSocket();
+    dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId: opened.streamId }));
+    expect(await pending).toBeInstanceOf(WebSocket);
+    dial.close();
+    computer.socket.close();
+    await computer.closed;
+  });
+
+  it("reports no computer for an owner with none", async () => {
+    expect(await link.openStream({ ownerId: "nobody" as Id<"users">, botId: "bot" })).toBe("no-computer");
+  });
+});
+

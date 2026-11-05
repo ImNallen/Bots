@@ -4,6 +4,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ScreenPanel } from "./ScreenPanel.tsx";
 import { ProblemNotice, SignedIn, errorMessage } from "./session.tsx";
 
 type Timeline = FunctionReturnType<typeof api.threads.timeline>;
@@ -305,6 +306,7 @@ function BotChat({ botId }: { botId: string }) {
         <Link to="/">Your bots</Link>
         <h2>{bot.name}</h2>
       </nav>
+      <ScreenPanel botId={bot._id} />
       <BotThread botId={bot._id} />
     </>
   );

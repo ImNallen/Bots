@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@bots/convex": "workspace:*",
+    "@novnc/novnc": "1.7.0",
     "@tanstack/react-router": "1.170.46",
     "convex": "catalog:",
     "react": "19.3.1",

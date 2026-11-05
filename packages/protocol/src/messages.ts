@@ -11,6 +11,8 @@ export const LINK_CLOSE = {
   internalError: 1011,
   replaced: 4000,
   unauthorized: 4001,
+  noComputer: 4002,
+  tooManyStreams: 4003,
 } as const;
 
 const SAFE_ID = "[A-Za-z0-9_-]{1,64}";
@@ -19,6 +21,7 @@ export const TOOL_CALL_ID = /^[A-Za-z0-9]{9}$/;
 
 const callId = z.string().regex(new RegExp(`^${SAFE_ID}:${SAFE_ID}$`));
 const botId = z.string().regex(new RegExp(`^${SAFE_ID}$`));
+const streamId = z.string().regex(new RegExp(`^${SAFE_ID}$`));
 
 // computerd only reports what it can observe. The orchestrator alone records "unavailable" and "invalid".
 export const toolResult = z.strictObject({
@@ -33,6 +36,7 @@ export type ToolResult = z.infer<typeof toolResult>;
 export const computerMessage = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("hello"), token: z.string().min(1).max(512) }),
   z.strictObject({ kind: z.literal("toolResult"), callId, result: toolResult }),
+  z.strictObject({ kind: z.literal("streamHello"), token: z.string().min(1).max(512), streamId }),
 ]);
 
 export type ComputerMessage = z.infer<typeof computerMessage>;
@@ -41,6 +45,7 @@ export const orchestratorMessage = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("welcome") }),
   z.strictObject({ kind: z.literal("toolCall"), callId, botId, tool: toolInvocation }),
   z.strictObject({ kind: z.literal("cancelTool"), callId }),
+  z.strictObject({ kind: z.literal("screenOpen"), streamId, botId }),
 ]);
 
 export type OrchestratorMessage = z.infer<typeof orchestratorMessage>;

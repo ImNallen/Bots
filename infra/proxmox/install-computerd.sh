@@ -19,6 +19,7 @@ OLD_ROOT=/opt/computerd
 UNIT=/etc/systemd/system/computerd.service
 DISPLAY_UNIT=/etc/systemd/system/computerd-display.service
 BROWSER_UNIT=/etc/systemd/system/computerd-browser.service
+SCREEN_UNIT_PREFIX=/etc/systemd/system/computerd-screen
 TOOLS="sudo procps ca-certificates curl git xz-utils"
 BROWSER_PACKAGES="chromium xvfb x11vnc fonts-liberation fonts-noto-color-emoji"
 # One wide display, with one 1280x800 region for each screen and one more for the blank window that keeps Chromium alive.
@@ -176,11 +177,31 @@ RestartSec=2
 EOF
   mv "$BROWSER_UNIT.tmp" "$BROWSER_UNIT"
 
+  # Every stream is view-only, so nothing through X can type into a window. A person's input goes through CDP to one page.
+  local screen screen_units=""
+  for screen in $(seq 0 $(( SCREEN_COUNT - 1 ))); do
+    cat > "$SCREEN_UNIT_PREFIX-$screen.service.tmp" <<EOF
+[Unit]
+Description=Bots screen stream $screen
+After=computerd-display.service
+Requires=computerd-display.service
+ConditionPathExists=/etc/computerd/env
+
+[Service]
+User=browser
+ExecStart=/usr/bin/x11vnc -display :$DISPLAY_NUMBER -clip 1280x800+$(( screen * 1280 ))+0 -viewonly -localhost -rfbport $(( 5900 + screen )) -forever -shared -nopw -noxdamage -q
+Restart=always
+RestartSec=2
+EOF
+    mv "$SCREEN_UNIT_PREFIX-$screen.service.tmp" "$SCREEN_UNIT_PREFIX-$screen.service"
+    screen_units="$screen_units computerd-screen-$screen.service"
+  done
+
   cat > "$UNIT.tmp" <<EOF
 [Unit]
 Description=Bots computerd
 After=network-online.target computerd-browser.service
-Wants=network-online.target computerd-browser.service
+Wants=network-online.target computerd-browser.service$screen_units
 # The template has no token. A clone starts this unit after it writes one.
 ConditionPathExists=/etc/computerd/env
 
