@@ -174,6 +174,7 @@ other_display=$(pid computerd-xvfb@$OTHER.service)
 listeners=$(ss -ltnH)
 ! grep -E ":(9308|5908) " <<<"$listeners" | awk '{ print $4 }' | grep -vE '^(127\.0\.0\.1|\[::1\]):' >/dev/null && result true "isolation: CDP and the stream listen on loopback only" || result false "isolation: CDP and the stream listen on loopback only" "$listeners"
 ! grep -qE ':6008 ' <<<"$listeners" && result true "isolation: the display has no TCP listener" || result false "isolation: the display has no TCP listener"
+same "isolation: a stream has one listener" "$(ss -ltnpH | grep -c "pid=$(pid "$STREAM_UNIT")," )" 1
 commands=$(ps -u browser -o args= | tr '\n' ' ')
 ! grep -q 'no-sandbox' <<<"$commands" && result true "isolation: no browser process runs without its sandbox" || result false "isolation: no browser process runs without its sandbox"
 grep -q 'user-data-dir='"$PROFILE" <<<"$commands" && result true "isolation: the browser uses this bot's profile" || result false "isolation: the browser uses this bot's profile"

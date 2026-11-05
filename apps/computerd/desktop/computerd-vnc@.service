@@ -8,8 +8,9 @@ StartLimitIntervalSec=0
 Type=exec
 User=browser
 EnvironmentFile=/run/computerd/desktop-%i.env
-# This stream reaches the web app, so -viewonly must stay. No input can reach a window through it.
-ExecStart=/usr/bin/x11vnc -display :%i -viewonly -localhost -rfbport ${VNC_PORT} -forever -shared -nopw -noxdamage -skip_lockkeys -q
+# This stream reaches the web app, so -viewonly must stay. No input can reach a window through it. Without -noipv6, x11vnc also
+# listens on [::1]:5900, whatever -rfbport says.
+ExecStart=/usr/bin/x11vnc -display :%i -viewonly -localhost -noipv6 -rfbport ${VNC_PORT} -forever -shared -nopw -noxdamage -skip_lockkeys -q
 ExecStartPost=/bin/bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/${VNC_PORT}) 2>/dev/null; do sleep 0.1; done'
 # x11vnc exits with 2 on SIGTERM, which a stop should not record as a failure.
 SuccessExitStatus=2

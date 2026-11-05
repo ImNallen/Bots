@@ -17,7 +17,7 @@ describe("the files a desktop runs from", () => {
 
   it("keeps every listener on loopback", async () => {
     expect(execStart(await read("computerd-chromium@.service"))).toContain("--remote-debugging-address=127.0.0.1");
-    expect(execStart(await read("computerd-vnc@.service"))).toContain("-localhost");
+    expect(execStart(await read("computerd-vnc@.service"))).toContain("-localhost -noipv6");
     expect(execStart(await read("computerd-xvfb@.service"))).toContain("-nolisten tcp");
   });
 
