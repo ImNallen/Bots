@@ -2,6 +2,10 @@ import type { Proxmox, VmConfig } from "./proxmox.ts";
 
 const TEMPLATE_VMID = 9000;
 const VM_TAG = "bots-user";
+const TOKEN_TIMEOUT_MS = 30 * 1000;
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+// Longer than a VM takes to boot and connect, so a slow start is not mistaken for a broken computerd.
+const REPAIR_AFTER_MS = 2 * 60 * 1000;
 const FIREWALL_OPTIONS = {
   enable: 1,
   ipfilter: 1,
@@ -44,6 +48,8 @@ export type Stage =
   | "restarting"
   | "waiting-for-lock"
   | "waiting-for-agent"
+  | "updating"
+  | "repairing"
   | "making-token"
   | "registering"
   | "connecting"
@@ -150,13 +156,20 @@ export async function reconcileVm(args: {
   desired: DesiredVm;
   linkUrl: string;
   tokenHash: string | undefined;
+  install: { commit: string; script: string };
+  installedCommit: string | undefined;
+  observed: { stage: string; at: number } | undefined;
+  now: number;
   report: (stage: Stage) => Promise<void>;
   recordToken: (tokenHash: string) => Promise<void>;
+  recordCommit: (commit: string) => Promise<void>;
   forget: () => Promise<void>;
   isConnected: () => boolean;
+  isBusy: () => boolean;
   disconnect: () => void;
 }): Promise<Stage> {
-  const { proxmox, desired, linkUrl, tokenHash, report, recordToken, forget, isConnected, disconnect } = args;
+  const { proxmox, desired, linkUrl, tokenHash, install, installedCommit, observed, now } = args;
+  const { report, recordToken, recordCommit, forget, isConnected, isBusy, disconnect } = args;
   const vmid = vmidFor(desired.slot);
   const address = addressFor(desired.slot);
 
@@ -214,8 +227,13 @@ export async function reconcileVm(args: {
     await proxmox.reboot(vmid);
   }
 
-  // A connected computer proved its token to the link, so the VM has nothing to do on this pass.
-  if (tokenHash !== undefined && isConnected()) {
+  const needsUpdate = installedCommit !== install.commit;
+  // A connected computer proved its token to the link, so a VM on the right version has nothing to do on this pass.
+  if (tokenHash !== undefined && isConnected() && !needsUpdate) {
+    return stopAt("ready");
+  }
+  // An update restarts computerd, which interrupts a running tool. The computer works meanwhile, so this waits for a quiet pass.
+  if (isConnected() && isBusy()) {
     return stopAt("ready");
   }
 
@@ -223,8 +241,30 @@ export async function reconcileVm(args: {
     return stopAt("waiting-for-agent");
   }
 
+  async function runInstall(force: boolean): Promise<void> {
+    const installed = await proxmox.exec(
+      vmid,
+      ["bash", "-c", install.script, "install-computerd", install.commit, ...(force ? ["force"] : [])],
+      INSTALL_TIMEOUT_MS,
+    );
+    const lastLine = installed.stdout.trim().split("\n").at(-1);
+    if (installed.exitCode !== 0 || lastLine !== install.commit) {
+      throw new Error(`VM ${vmid} could not install computerd ${install.commit}, and the script exited with ${installed.exitCode}`);
+    }
+    await recordCommit(install.commit);
+  }
+
+  if (needsUpdate) {
+    await report("updating");
+    await runInstall(false);
+  } else if (!isConnected() && observed?.stage === "connecting" && now - observed.at > REPAIR_AFTER_MS) {
+    // A user has no SSH, and a bot cannot help once computerd is down, so only this can bring a broken computer back.
+    await report("repairing");
+    await runInstall(true);
+  }
+
   await report("making-token");
-  const result = await proxmox.exec(vmid, ["bash", "-c", TOKEN_SCRIPT, "make-token", linkUrl]);
+  const result = await proxmox.exec(vmid, ["bash", "-c", TOKEN_SCRIPT, "make-token", linkUrl], TOKEN_TIMEOUT_MS);
   const hash = result.stdout.trim();
   if (result.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(hash)) {
     throw new Error(`VM ${vmid} could not make its token, and the script exited with ${result.exitCode}`);

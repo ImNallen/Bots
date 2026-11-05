@@ -28,6 +28,7 @@ export type LinkOutcome =
 
 export type Link = {
   isConnected: (ownerId: Id<"users">) => boolean;
+  isBusy: (ownerId: Id<"users">) => boolean;
   disconnect: (ownerId: Id<"users">) => void;
   call: (args: {
     ownerId: Id<"users">;
@@ -299,6 +300,7 @@ export function startLink(args: {
 
   return {
     isConnected: (ownerId) => connections.has(ownerId),
+    isBusy: (ownerId) => (connections.get(ownerId)?.waiters.size ?? 0) > 0,
     // Authentication happens only at hello, so a revoked token keeps working on a live socket until this closes it.
     disconnect: (ownerId) => {
       const connection = connections.get(ownerId);

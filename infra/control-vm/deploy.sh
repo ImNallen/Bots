@@ -26,6 +26,11 @@ git fetch --quiet origin
 git checkout --quiet "$BRANCH"
 git reset --quiet --hard "origin/$BRANCH"
 
+# User VMs follow the last commit that changed computerd, so a deploy that leaves it alone restarts nothing on them.
+git log -1 --format=%H -- apps/computerd packages/protocol pnpm-lock.yaml pnpm-workspace.yaml package.json \
+  infra/proxmox/install-computerd.sh > .computerd-commit
+chmod 0644 .computerd-commit
+
 install -m 0644 infra/control-vm/20-bots-link.network /etc/systemd/network/20-bots-link.network
 networkctl reload
 for _ in $(seq 1 15); do

@@ -123,8 +123,8 @@ export const desiredVms = query({
   handler: async (ctx) => {
     await requireService(ctx);
     const computers = await ctx.db.query("computers").collect();
-    return computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm }) =>
-      desiredVm === undefined ? [] : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm }],
+    return computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }) =>
+      desiredVm === undefined ? [] : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }],
     );
   },
 });
@@ -156,6 +156,14 @@ export const recordVmToken = mutation({
       throw new ConvexError("This computer token belongs to another computer");
     }
     await ctx.db.patch(computerId, { tokenHash });
+  },
+});
+
+export const recordComputerdCommit = mutation({
+  args: { computerId: v.id("computers"), commit: v.string() },
+  handler: async (ctx, { computerId, commit }) => {
+    await requireService(ctx);
+    await ctx.db.patch(computerId, { computerdCommit: commit });
   },
 });
 

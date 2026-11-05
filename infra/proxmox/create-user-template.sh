@@ -48,15 +48,28 @@ for _ in $(seq 1 80); do
 done
 qm guest cmd "$VMID" ping >/dev/null
 
-result=$(qm guest exec "$VMID" --pass-stdin 1 --timeout "$BUILD_TIMEOUT_SECONDS" -- bash -s -- "$ref" < "$here/user-vm-setup.sh")
-report() { python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2], ""))' "$result" "$1"; }
-if [ "$(report exitcode)" != 0 ]; then
-  echo "The build failed inside VM $VMID:" >&2
-  report err-data >&2
-  report out-data >&2
-  exit 1
-fi
-commit=$(report out-data | grep -Ex '[0-9a-f]{40}')
+run_in_vm() { # a script file, then its arguments
+  local script=$1
+  shift
+  local result
+  result=$(qm guest exec "$VMID" --pass-stdin 1 --timeout "$BUILD_TIMEOUT_SECONDS" -- bash -s -- "$@" < "$script")
+  if [ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("exitcode"))' "$result")" != 0 ]; then
+    echo "The build failed inside VM $VMID:" >&2
+    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("err-data","")); print(d.get("out-data",""))' "$result" >&2
+    exit 1
+  fi
+  python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("out-data",""))' "$result"
+}
+
+run_in_vm "$here/user-vm-setup.sh" >/dev/null
+commit=$(run_in_vm "$here/install-computerd.sh" "$ref" | grep -Ex '[0-9a-f]{40}')
+# Each clone must get its own machine ID and SSH host keys, and cloud-init must run again to set its name and address.
+run_in_vm /dev/stdin >/dev/null <<'GUEST'
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+apt-get clean
+cloud-init clean --logs --machine-id
+fstrim --all
+GUEST
 
 qm shutdown "$VMID" --timeout 120 >/dev/null
 # The image now holds the guest agent. A clone must not spend its first boot on the snippet's package update.

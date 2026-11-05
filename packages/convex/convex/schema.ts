@@ -21,6 +21,7 @@ export default defineSchema({
     // Only provisioned computers have these. A dev computer is a local container.
     desiredVm: v.optional(desiredVm),
     observedVm: v.optional(observedVm),
+    computerdCommit: v.optional(v.string()),
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_owner", ["ownerId"]),
