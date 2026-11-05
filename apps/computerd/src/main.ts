@@ -25,5 +25,5 @@ setInterval(() => {
 const calls = createCalls({ journal, execute: executeTool });
 connectLink({ url: config.linkUrl, token: config.token, calls });
 
-// tini is PID 1 and forwards this. Exiting leaves any tool's journal entry as "started", which reads as interrupted.
+// Exiting leaves any tool's journal entry as "started", which reads as interrupted.
 process.on("SIGTERM", () => process.exit(0));
