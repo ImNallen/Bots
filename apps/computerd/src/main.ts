@@ -42,6 +42,12 @@ connectLink({
   openScreen: (streamId, botId) => {
     relayScreen({ linkUrl: config.linkUrl, token: config.token, streamId, regionFor: () => browser.regionFor(botId) });
   },
+  // The event can hold a password, so only the error's message reaches the log.
+  onInput: (botId, event) => {
+    browser.input(botId, event).catch((error: unknown) => {
+      log({ level: "warn", event: "screen-input-failed", message: error instanceof Error ? error.message : "unknown error" });
+    });
+  },
 });
 
 // Exiting leaves any tool's journal entry as "started", which reads as interrupted.

@@ -1,5 +1,5 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { capText, type BrowserInvocation, type ToolResult } from "@bots/protocol";
+import { capText, type BrowserInputEvent, type BrowserInvocation, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
 
 const REGION_WIDTH = 1280;
@@ -91,12 +91,6 @@ const CLEAR_SCRIPT = (ref: number) => `(() => {
 })()`;
 
 type Screen = { region: number; pages: string[]; lastUsed: number };
-
-export type BrowserInputEvent =
-  | { kind: "pointer"; x: number; y: number; action: "move" | "down" | "up" }
-  | { kind: "text"; text: string }
-  | { kind: "key"; key: string }
-  | { kind: "navigate"; url: string };
 
 export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
@@ -369,6 +363,24 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
     return `Screen ${screen.region + 1}\n${snapshot}`;
   }
 
+  // A viewer sees the whole 1280x800 region, and CDP wants a point inside the page, below the window's own bars.
+  async function toViewport(args: {
+    client: Cdp;
+    sessionId: string;
+    targetId: string;
+    region: number;
+    x: number;
+    y: number;
+  }): Promise<{ x: number; y: number } | null> {
+    const { client, sessionId, targetId, region, x, y } = args;
+    const { bounds } = (await client.send("Browser.getWindowForTarget", { targetId })) as {
+      bounds: { left: number; top: number };
+    };
+    const barHeight = Number(await evaluate(client, sessionId, "outerHeight - innerHeight"));
+    const point = { x: x - (bounds.left - region * REGION_WIDTH), y: y - bounds.top - barHeight };
+    return point.x < 0 || point.y < 0 ? null : point;
+  }
+
   function inOrder<T>(botId: string, step: () => Promise<T>): Promise<T> {
     const previous = queues.get(botId) ?? Promise.resolve();
     const next = previous.then(step, step);
@@ -393,15 +405,32 @@ export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; co
     regionFor: (botId) => inOrder(botId, async () => (await currentPage(botId)).screen.region),
     input: (botId, event) =>
       inOrder(botId, async () => {
-        const { client, sessionId } = await currentPage(botId);
+        const { client, sessionId, targetId, screen } = await currentPage(botId);
         switch (event.kind) {
           case "pointer": {
+            const point = await toViewport({ client, sessionId, targetId, region: screen.region, x: event.x, y: event.y });
+            // The tab strip and the address bar are outside the page, and CDP input cannot reach them.
+            if (point === null) {
+              return;
+            }
             const type = { move: "mouseMoved", down: "mousePressed", up: "mouseReleased" }[event.action];
             const held = event.action === "down" ? 1 : 0;
             const button = event.action === "move" ? "none" : "left";
             await client.send(
               "Input.dispatchMouseEvent",
-              { type, x: event.x, y: event.y, button, buttons: held, clickCount: event.action === "move" ? 0 : 1 },
+              { type, x: point.x, y: point.y, button, buttons: held, clickCount: event.action === "move" ? 0 : 1 },
+              sessionId,
+            );
+            return;
+          }
+          case "scroll": {
+            const point = await toViewport({ client, sessionId, targetId, region: screen.region, x: event.x, y: event.y });
+            if (point === null) {
+              return;
+            }
+            await client.send(
+              "Input.dispatchMouseEvent",
+              { type: "mouseWheel", x: point.x, y: point.y, deltaX: event.dx, deltaY: event.dy },
               sessionId,
             );
             return;

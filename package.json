@@ -19,7 +19,8 @@
     "verify:tailnet": "node scripts/verify-tailnet.ts",
     "verify:template": "node scripts/verify-template.ts",
     "verify:browser": "node scripts/verify-browser.ts",
-    "verify:screen": "node scripts/verify-screen.ts"
+    "verify:screen": "node scripts/verify-screen.ts",
+    "verify:takeover": "node scripts/verify-takeover.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",

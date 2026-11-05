@@ -1,8 +1,11 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
+import { mutation, query, type MutationCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 
 const MAX_NAME_LENGTH = 64;
+// Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
+const TAKEOVER_MS = 15 * 60 * 1000;
 
 export const list = query({
   args: {},
@@ -67,6 +70,42 @@ export const ownerForViewer = query({
       .query("users")
       .withIndex("by_auth_subject", (q) => q.eq("authSubject", viewerSubject))
       .unique();
-    return viewer?._id === bot.ownerId ? { ownerId: bot.ownerId } : null;
+    return viewer?._id === bot.ownerId ? { ownerId: bot.ownerId, takeoverUntil: bot.takeoverUntil ?? 0 } : null;
+  },
+});
+
+async function requireOwnedBot(ctx: MutationCtx, botId: Id<"bots">) {
+  const { user } = await requireIdentity(ctx);
+  const bot = await ctx.db.get(botId);
+  if (user === null || bot === null || bot.ownerId !== user._id) {
+    throw new ConvexError("Bot not found");
+  }
+  return bot;
+}
+
+// The web app calls this to start and then to renew, so a renewal is the same call.
+export const takeOver = mutation({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    await requireOwnedBot(ctx, botId);
+    const takeoverUntil = Date.now() + TAKEOVER_MS;
+    await ctx.db.patch(botId, { takeoverUntil });
+    return takeoverUntil;
+  },
+});
+
+export const releaseTakeover = mutation({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, { takeoverUntil: undefined });
+  },
+});
+
+export const takeoverUntil = query({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    await requireService(ctx);
+    return (await ctx.db.get(botId))?.takeoverUntil ?? 0;
   },
 });

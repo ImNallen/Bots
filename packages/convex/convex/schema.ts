@@ -12,6 +12,8 @@ export default defineSchema({
   bots: defineTable({
     ownerId: v.id("users"),
     name: v.string(),
+    // While this is in the future, the owner controls the bot's screen and the bot starts no tool.
+    takeoverUntil: v.optional(v.number()),
   }).index("by_owner", ["ownerId"]),
 
   computers: defineTable({

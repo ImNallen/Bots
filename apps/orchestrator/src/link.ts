@@ -6,6 +6,7 @@ import {
   capText,
   computerMessage,
   parseJsonMessage,
+  type BrowserInputEvent,
   type OrchestratorMessage,
   type ToolInvocation,
   type ToolResult,
@@ -32,6 +33,7 @@ export type LinkOutcome =
 export type Link = {
   isConnected: (ownerId: Id<"users">) => boolean;
   openStream: (args: { ownerId: Id<"users">; botId: string }) => Promise<WebSocket | "no-computer" | "too-many">;
+  sendInput: (args: { ownerId: Id<"users">; botId: string; event: BrowserInputEvent }) => boolean;
   disconnect: (ownerId: Id<"users">) => void;
   call: (args: {
     ownerId: Id<"users">;
@@ -349,6 +351,14 @@ export function startLink(args: {
 
   return {
     isConnected: (ownerId) => connections.has(ownerId),
+    sendInput: ({ ownerId, botId, event }) => {
+      const connection = connections.get(ownerId);
+      if (connection === undefined) {
+        return false;
+      }
+      send(connection.socket, { kind: "screenInput", botId, event });
+      return true;
+    },
     openStream: ({ ownerId, botId }) => {
       const connection = connections.get(ownerId);
       if (connection === undefined) {

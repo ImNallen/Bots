@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import type { Id } from "@bots/convex/dataModel";
-import { LINK_CLOSE } from "@bots/protocol";
+import { LINK_CLOSE, type BrowserInputEvent } from "@bots/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { attachScreens, isSameOrigin } from "./screens.ts";
@@ -30,6 +30,9 @@ describe("attachScreens", () => {
   let openDelayMs: number;
   let ownerDelayMs: number;
   let logged: string[];
+  let takeoverUntil: number;
+  let inputs: Array<{ botId: string; event: BrowserInputEvent }>;
+  let loggedFields: unknown[];
   let opened: Array<{ ownerId: Id<"users">; botId: string }>;
 
   beforeEach(async () => {
@@ -39,6 +42,9 @@ describe("attachScreens", () => {
     openDelayMs = 0;
     ownerDelayMs = 0;
     logged = [];
+    takeoverUntil = 0;
+    inputs = [];
+    loggedFields = [];
     server = createServer();
     const fakeComputer = new WebSocketServer({ noServer: true });
     attachScreens({
@@ -46,10 +52,17 @@ describe("attachScreens", () => {
       authMode: { kind: "tailscale" },
       ownerForViewer: async (botId, subject) => {
         await new Promise((done) => setTimeout(done, ownerDelayMs));
-        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER } : null;
+        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER, takeoverUntil } : null;
       },
-      log: (fields) => logged.push(fields.event),
+      log: (fields) => {
+        logged.push(fields.event);
+        loggedFields.push(fields);
+      },
       link: {
+        sendInput: ({ botId, event }) => {
+          inputs.push({ botId, event });
+          return true;
+        },
         openStream: async (args) => {
           opened.push(args);
           await new Promise((done) => setTimeout(done, openDelayMs));
@@ -151,6 +164,70 @@ describe("attachScreens", () => {
   it("tells the viewer when no computer is connected", async () => {
     stream = "no-computer";
     expect(await closeCode(viewer())).toBe(LINK_CLOSE.noComputer);
+  });
+
+  describe("input", () => {
+    const inputPath = "/screens/my-bot/input";
+    const open = (socket: WebSocket) => new Promise((resolve) => socket.once("open", resolve));
+
+    it("is refused when the owner has not taken over", async () => {
+      expect(await rejection(viewer({ path: inputPath }))).toBe(403);
+    });
+
+    it("is refused from another site during a take-over", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      expect(await rejection(viewer({ path: inputPath, origin: "https://evil.example" }))).toBe(403);
+    });
+
+    it("is refused for a user who does not own the bot during a take-over", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      expect(await rejection(viewer({ path: inputPath, login: "other@example" }))).toBe(403);
+    });
+
+    it("reaches the bot's computer during a take-over, and nothing logs its content", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      const socket = viewer({ path: inputPath });
+      await open(socket);
+      socket.send(JSON.stringify({ kind: "text", text: "hunter2-secret" }));
+      socket.send(JSON.stringify({ kind: "pointer", x: 10, y: 20, action: "down" }));
+      await until(() => inputs.length === 2);
+      expect(inputs[0]).toEqual({ botId: "my-bot", event: { kind: "text", text: "hunter2-secret" } });
+      expect(JSON.stringify(loggedFields)).not.toContain("hunter2");
+      socket.close();
+    });
+
+    it.each([
+      ["a kind that does not exist", { kind: "shell", command: "id" }],
+      ["a point off the screen", { kind: "pointer", x: 5000, y: 1, action: "down" }],
+      ["a key outside the list", { kind: "key", key: "F12" }],
+      ["a URL that is not http", { kind: "navigate", url: "file:///etc/passwd" }],
+    ])("closes on %s and sends nothing", async (_name, event) => {
+      takeoverUntil = Date.now() + 60_000;
+      const socket = viewer({ path: inputPath });
+      await open(socket);
+      const closed = closeCode(socket);
+      socket.send(JSON.stringify(event));
+      expect(await closed).toBe(LINK_CLOSE.invalidMessage);
+      expect(inputs).toEqual([]);
+    });
+
+    it("does not repeat a bad message's content in the log", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      const socket = viewer({ path: inputPath });
+      await open(socket);
+      const closed = closeCode(socket);
+      socket.send(JSON.stringify({ kind: "text", text: "hunter2-secret", extra: true }));
+      await closed;
+      expect(JSON.stringify(loggedFields)).not.toContain("hunter2");
+    });
+
+    it("does not open a stream", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      const socket = viewer({ path: inputPath });
+      await open(socket);
+      expect(opened).toEqual([]);
+      socket.close();
+    });
   });
 
   describe("a viewer that misbehaves ends only itself", () => {
