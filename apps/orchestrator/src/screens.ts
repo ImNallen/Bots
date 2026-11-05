@@ -39,7 +39,10 @@ function relay(viewer: WebSocket, computer: WebSocket): void {
       to.send(data, { binary: isBinary });
     });
     from.on("close", () => to.close());
-    from.on("error", () => to.terminate());
+    from.on("error", () => {
+      from.terminate();
+      to.terminate();
+    });
   };
   pipe(viewer, computer);
   pipe(computer, viewer);
@@ -87,6 +90,11 @@ export function attachScreens(args: {
       return;
     }
     sockets.handleUpgrade(request, socket, head, (viewer) => {
+      // An unhandled error here would stop the whole orchestrator, so a bad frame from one viewer must end only that viewer.
+      viewer.on("error", (error) => {
+        log({ level: "warn", event: "screen-viewer-error", message: error.message });
+        viewer.terminate();
+      });
       // Input that arrives before the computer attaches would be lost, so the relay starts only once both ends exist.
       viewer.pause();
       link
@@ -114,6 +122,10 @@ export function attachScreens(args: {
   }
 
   server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // Node removes its own handler before this event, and the checks above wait on Convex, so a client can reset during them.
+    socket.on("error", (error) => {
+      log({ level: "warn", event: "screen-socket-error", message: error.message });
+    });
     handle(request, socket, head).catch((error: unknown) => {
       log({ level: "error", event: "screen-failed", message: error instanceof Error ? error.message : "unknown error" });
       reject(socket, 403);

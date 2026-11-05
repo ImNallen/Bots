@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo, type Socket } from "node:net";
 import type { Id } from "@bots/convex/dataModel";
 import { LINK_CLOSE } from "@bots/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -27,22 +27,32 @@ describe("attachScreens", () => {
   let port: number;
   let computerSide: WebSocket[];
   let stream: "computer" | "no-computer" | "too-many";
+  let openDelayMs: number;
+  let ownerDelayMs: number;
+  let logged: string[];
   let opened: Array<{ ownerId: Id<"users">; botId: string }>;
 
   beforeEach(async () => {
     computerSide = [];
     opened = [];
     stream = "computer";
+    openDelayMs = 0;
+    ownerDelayMs = 0;
+    logged = [];
     server = createServer();
     const fakeComputer = new WebSocketServer({ noServer: true });
     attachScreens({
       server,
       authMode: { kind: "tailscale" },
-      ownerForViewer: async (botId, subject) => (botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER } : null),
-      log: () => {},
+      ownerForViewer: async (botId, subject) => {
+        await new Promise((done) => setTimeout(done, ownerDelayMs));
+        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER } : null;
+      },
+      log: (fields) => logged.push(fields.event),
       link: {
         openStream: async (args) => {
           opened.push(args);
+          await new Promise((done) => setTimeout(done, openDelayMs));
           if (stream !== "computer") {
             return stream;
           }
@@ -141,6 +151,65 @@ describe("attachScreens", () => {
   it("tells the viewer when no computer is connected", async () => {
     stream = "no-computer";
     expect(await closeCode(viewer())).toBe(LINK_CLOSE.noComputer);
+  });
+
+  describe("a viewer that misbehaves ends only itself", () => {
+    const INVALID_FRAME = Buffer.from([0xff, 0xff, 0xff, 0xff]);
+    const handshake = (client: Socket) =>
+      client.write(
+        `GET /screens/my-bot HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: http://127.0.0.1:${port}\r\nTailscale-User-Login: me@example\r\n` +
+          "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      );
+    const rawClient = () =>
+      new Promise<Socket>((resolve) => {
+        const client = connect(port, "127.0.0.1", () => resolve(client));
+        client.on("error", () => {});
+      });
+    const stillServes = async () => {
+      stream = "no-computer";
+      expect(await closeCode(viewer())).toBe(LINK_CLOSE.noComputer);
+    };
+
+    it.each(["no-computer", "too-many", "computer"] as const)("when a bad frame arrives while the stream is %s", async (result) => {
+      stream = result;
+      openDelayMs = 30;
+      const client = await rawClient();
+      const upgraded = new Promise<void>((resolve) => client.once("data", () => resolve()));
+      handshake(client);
+      await upgraded;
+      client.write(INVALID_FRAME);
+      await until(() => logged.includes("screen-viewer-error"));
+      openDelayMs = 0;
+      await stillServes();
+      client.destroy();
+    });
+
+    it("when a frame is larger than the limit", async () => {
+      stream = "no-computer";
+      openDelayMs = 30;
+      const client = await rawClient();
+      const upgraded = new Promise<void>((resolve) => client.once("data", () => resolve()));
+      handshake(client);
+      await upgraded;
+      // A masked binary frame that claims 1 MiB, past the 64 KiB limit.
+      const header = Buffer.from([0x82, 0xff, 0, 0, 0, 0, 0, 0x10, 0, 0, 1, 2, 3, 4]);
+      client.write(header);
+      await until(() => logged.includes("screen-viewer-error"));
+      client.destroy();
+      openDelayMs = 0;
+      await stillServes();
+    });
+
+    it("when the client resets the connection during the identity check", async () => {
+      ownerDelayMs = 50;
+      const client = await rawClient();
+      handshake(client);
+      await new Promise((done) => setTimeout(done, 10));
+      client.resetAndDestroy();
+      await new Promise((done) => setTimeout(done, 80));
+      ownerDelayMs = 0;
+      await stillServes();
+    });
   });
 
   it("tells the viewer when there are too many streams", async () => {

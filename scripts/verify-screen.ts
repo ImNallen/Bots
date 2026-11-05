@@ -112,5 +112,20 @@ report(header !== null && header[0] === 0, "a frame update arrives over the stre
 session.socket.removeAllListeners("close");
 session.socket.close();
 
+// A viewer that sends a malformed frame must end only itself, because the orchestrator serves every user.
+const attacker = new WebSocket(`${wsOrigin}${path}`, { headers: { Origin: origin } });
+await new Promise((resolve, reject) => {
+  attacker.once("open", resolve);
+  attacker.once("error", reject);
+});
+attacker.on("error", () => {});
+(attacker as unknown as { _socket: { write: (data: Buffer) => void } })._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff]));
+await sleep(1500);
+const health = await fetch(`${origin}/healthz`);
+const after = await rfbSession();
+report(health.status === 200 && after.width === 1280, "a malformed frame from one viewer leaves the orchestrator serving others", `healthz ${health.status}`);
+after.socket.removeAllListeners("close");
+after.socket.close();
+
 console.log(failures === 0 ? "verify:screen passed" : `verify:screen failed with ${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
