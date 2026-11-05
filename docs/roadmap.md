@@ -62,8 +62,8 @@ The user chose to update `computerd` in place, because bots and users install th
 1. Done. A test on a real VM settled how screens and input work. The architecture document has the results.
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
-4. Next. Let a user take over a screen, with input through CDP, while the bot waits.
-5. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
+4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
+5. Next. Add approvals. The user chose one setting for each bot, which defaults to asking before shell commands and browser actions that change something. Everything, shell only, and nothing are the other choices.
 6. Run the step's check, on a phone.
 
 After step 4, add a way for a user to reset a computer.
@@ -125,5 +125,9 @@ These are open on purpose. Fix each one when the work reaches it.
 - A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
 - A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
 - A viewer whose bot loses its screen to another bot keeps the stream of that region, so it shows the other bot. Both bots have one owner, and this needs more than 8 active bots.
+- A tool that is running when the owner takes over keeps running. The bot waits only before its next tool.
+- A closed tab or a sleeping phone leaves the bot waiting for up to 15 minutes, because only the renewal stopping can show that the owner left.
+- The keys that a person can send are text and the key bar, so no shortcut with Ctrl or Cmd reaches the page. The address bar and tabs of the window cannot be clicked, so take-over has its own address box.
+- A screen on a phone is small, and take-over uses touch for taps and scrolling, so pinch zoom does not work on it.
 - Streams carry no limit on bandwidth, and a bot that reads its own link token can send its owner false video.
 - A site can block the browser. GitLab stopped it at a Cloudflare check during testing.
