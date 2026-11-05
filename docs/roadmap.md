@@ -16,7 +16,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 
 Step 3 isolates bots from the LAN. Friends join through the invites in step 6, and until then an operator declares each computer by hand.
 
-Backups are deferred. Add off-server copies of Convex exports and the master key before anyone depends on this system.
+Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Add off-server copies of Convex exports and the master key before anyone depends on this system.
 
 ## Where things run
 
@@ -56,6 +56,17 @@ The user chose to update `computerd` in place, because bots and users install th
 2. Done. VM 9000 is the template, with `computerd` under systemd. A hand-cloned VM connects over the link, and `pnpm verify:template` runs a tool on it from a real chat.
 3. Done. The orchestrator converges each computer from its desired state in Convex, using a Proxmox token scoped to one pool. `scripts/verify-reconcile.ts` kills it at each stage, and `pnpm test` kills it between every pair of calls against a fake Proxmox.
 4. Done. The reconcile loop updates and repairs `computerd` in place, and `infra/proxmox/verify-network.sh` scanned every port from two template clones.
+
+### Progress on step 4
+
+1. Done. A test on a real VM settled how screens and input work. The architecture document has the results.
+2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
+3. Next. Stream each screen to the web app, view-only, over the link port.
+4. Let a user take over a screen, with input through CDP, while the bot waits.
+5. Add approvals. The user decides what asks for one.
+6. Run the step's check, on a phone.
+
+After step 4, add a way for a user to reset a computer.
 
 ## After step 3: deploy from `main`
 
@@ -109,4 +120,8 @@ These are open on purpose. Fix each one when the work reaches it.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.
-- Step 4 must test what the screen tests did not cover. The architecture document lists these.
+- No test has used noVNC on a phone. The step 4 check does.
+- Any bot can reach CDP on loopback, so it can drive another bot's window on the same computer. Those bots have one owner and already share logins, so this crosses no user's boundary.
+- A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
+- A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
+- A site can block the browser. GitLab stopped it at a Cloudflare check during testing.

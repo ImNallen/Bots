@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { WORKSPACE_ROOT, createOutputCollector, type ToolInvocation, type ToolResult } from "@bots/protocol";
-import type { ExecuteTool } from "./calls.ts";
+import { WORKSPACE_ROOT, createOutputCollector, type BrowserInvocation, type ToolInvocation, type ToolResult } from "@bots/protocol";
 
 const FILE_TOOL_TIMEOUT_SECONDS = 60;
 // Output printed just before the exit is still in the pipe, but a surviving background child may hold the pipe open forever.
@@ -10,7 +9,9 @@ const EXIT_AFTER_KILL_MS = 5000;
 // The workspace is created on demand and the path never touches a shell string, so a path needs no quoting.
 const PREPARE = 'mkdir -p -- "$1" && cd -- "$1"';
 
-const SCRIPTS: Record<ToolInvocation["name"], string> = {
+type SystemInvocation = Exclude<ToolInvocation, BrowserInvocation>;
+
+const SCRIPTS: Record<SystemInvocation["name"], string> = {
   shell: `${PREPARE} && exec bash -c "$2"`,
   read_file: `${PREPARE} && exec cat -- "$2"`,
   write_file: `${PREPARE} && mkdir -p -- "$(dirname -- "$2")" && exec cat > "$2"`,
@@ -18,7 +19,7 @@ const SCRIPTS: Record<ToolInvocation["name"], string> = {
 
 type Plan = { operand: string; stdin: string | null; timeoutSeconds: number };
 
-function planFor(tool: ToolInvocation): Plan {
+function planFor(tool: SystemInvocation): Plan {
   switch (tool.name) {
     case "shell":
       return { operand: tool.args.command, stdin: null, timeoutSeconds: tool.args.timeoutSeconds };
@@ -41,7 +42,15 @@ function killGroup(pgid: number): void {
   killer.on("error", () => {});
 }
 
-export const executeTool: ExecuteTool = async ({ botId, tool, signal }) => {
+export const executeSystemTool = async ({
+  botId,
+  tool,
+  signal,
+}: {
+  botId: string;
+  tool: SystemInvocation;
+  signal: AbortSignal;
+}): Promise<ToolResult> => {
   if (signal.aborted) {
     return { outcome: "cancelled", output: "The call was cancelled before it started.", truncated: false };
   }
@@ -94,7 +103,7 @@ export const executeTool: ExecuteTool = async ({ botId, tool, signal }) => {
 };
 
 function resultFor(args: {
-  tool: ToolInvocation;
+  tool: SystemInvocation;
   stopped: "timeout" | "cancelled" | null;
   exitCode: number | null;
   collected: { output: string; truncated: boolean };
