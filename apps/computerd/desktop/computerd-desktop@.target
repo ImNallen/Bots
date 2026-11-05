@@ -1,0 +1,8 @@
+# One bot's desktop. computerd starts this, and starting it is safe at any time. It returns when each part has finished its
+# start, and it brings back a part that is down. Wants, not Requires, because Requires would carry a Chromium restart to this
+# target and from there to the stream, and a person watching must keep the stream.
+[Unit]
+Description=Bots desktop %i
+BindsTo=computerd-xvfb@%i.service
+Wants=computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service
+After=computerd-xvfb@%i.service computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service

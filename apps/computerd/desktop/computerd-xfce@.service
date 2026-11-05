@@ -1,0 +1,16 @@
+# Nothing depends on the panel or the wallpaper, so these share one unit. If the panel ends, the session ends and restarts.
+[Unit]
+Description=Bots desktop %i Xfce
+BindsTo=computerd-xvfb@%i.service
+After=computerd-xvfb@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=browser
+Environment=DISPLAY=:%i XDG_RUNTIME_DIR=/run/computerd-xfce-%i
+RuntimeDirectory=computerd-xfce-%i
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/dbus-run-session -- /bin/sh -c 'xfwm4 --compositor=off & xfdesktop & exec xfce4-panel'
+Restart=always
+RestartSec=2
