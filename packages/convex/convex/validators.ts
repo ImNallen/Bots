@@ -48,3 +48,17 @@ export const runState = v.union(
 );
 
 export type RunState = Infer<typeof runState>;
+
+export const desiredVm = v.object({
+  slot: v.number(),
+  cores: v.number(),
+  memoryMb: v.number(),
+  diskGb: v.number(),
+  removing: v.boolean(),
+});
+
+export const observedVm = v.object({
+  stage: v.string(),
+  detail: v.optional(v.string()),
+  at: v.number(),
+});

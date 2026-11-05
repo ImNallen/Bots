@@ -13,7 +13,10 @@ export type Config = {
   convexUrl: string;
   mistral: { baseUrl: string; model: string };
   webDistDir: string;
+  proxmox: ProxmoxConfig | null;
 };
+
+export type ProxmoxConfig = { url: string; node: string; token: string; caFile: string };
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_LINK_HOST = "127.0.0.1";
@@ -127,6 +130,24 @@ function parseSigningKey(env: Env): Config["signingKey"] {
   return { kid, jwk: { kty, crv, x, y, d, kid } };
 }
 
+// Provisioning needs all of these or none, so a half-configured machine fails at startup instead of at the first VM.
+function parseProxmox(env: Env): ProxmoxConfig | null {
+  const names = ["PROXMOX_URL", "PROXMOX_NODE", "PROXMOX_TOKEN", "PROXMOX_CA_FILE"];
+  if (names.every((name) => !env[name])) {
+    return null;
+  }
+  const url = required({ env, name: "PROXMOX_URL" });
+  if (!url.startsWith("https://") || !URL.canParse(url)) {
+    throw new Error(`PROXMOX_URL must be an https:// URL, got "${url}"`);
+  }
+  return {
+    url,
+    node: required({ env, name: "PROXMOX_NODE" }),
+    token: required({ env, name: "PROXMOX_TOKEN" }),
+    caFile: required({ env, name: "PROXMOX_CA_FILE" }),
+  };
+}
+
 export function parseConfig(env: Env): Config {
   return {
     authMode: parseAuthMode(env),
@@ -145,5 +166,6 @@ export function parseConfig(env: Env): Config {
       model: env.MISTRAL_MODEL || DEFAULT_MISTRAL_MODEL,
     },
     webDistDir: WEB_DIST_DIR,
+    proxmox: parseProxmox(env),
   };
 }

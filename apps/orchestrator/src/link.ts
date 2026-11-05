@@ -27,6 +27,8 @@ export type LinkOutcome =
   | { outcome: "unavailable"; output: string; truncated: false };
 
 export type Link = {
+  isConnected: (ownerId: Id<"users">) => boolean;
+  disconnect: (ownerId: Id<"users">) => void;
   call: (args: {
     ownerId: Id<"users">;
     callId: string;
@@ -296,6 +298,16 @@ export function startLink(args: {
   }
 
   return {
+    isConnected: (ownerId) => connections.has(ownerId),
+    // Authentication happens only at hello, so a revoked token keeps working on a live socket until this closes it.
+    disconnect: (ownerId) => {
+      const connection = connections.get(ownerId);
+      if (connection === undefined) {
+        return;
+      }
+      dropConnection(connection);
+      connection.socket.close(LINK_CLOSE.unauthorized);
+    },
     async call(call) {
       for (;;) {
         const connection = connections.get(call.ownerId);

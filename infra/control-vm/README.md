@@ -52,9 +52,9 @@ If a change edits `deploy.sh` itself, fetch and check out the branch before you 
 
 In the Tailscale admin console, open the `bots-control` machine and select **Share**. Share only this machine. A friend's tailnet then reaches this one machine, and this machine cannot start connections to it.
 
-## Create a user VM by hand
+## Give a user a computer
 
-The reconcile loop does not exist yet, so these steps create a user's VM. Each user has one computer, so registering a new VM makes the link refuse that user's old VM.
+The orchestrator creates and repairs user VMs in a loop, from what Convex says each user should have. These steps set that up once and then declare a computer.
 
 1. On the Proxmox host, build the template from a Git ref. The template is VM 9000. User VMs are full clones, so you can rebuild it at any time.
 
@@ -62,26 +62,32 @@ The reconcile loop does not exist yet, so these steps create a user's VM. Each u
 	bash create-user-template.sh main
 	```
 
-2. On the host, clone the template with a VM ID, an address on `10.77.0.0/24`, the CPU cores, the memory in MB, and the disk in GB. The script prints the hash of the link token. The VM makes the token itself, and the token stays in the VM.
+2. On the host, create the scoped Proxmox token. The script writes the token and the host's CA certificate straight to the control VM and never prints the token. The token can act only on the VMs in the `bots` pool. It also adds VMs tagged `bots-user` to that pool, so that the loop adopts them.
 
 	```sh
-	bash clone-user-vm.sh 201 10.77.0.21 2 2048 16
+	bash create-provisioner-token.sh
 	```
 
-3. On the control VM, register the hash for the user. Use the value of `JWT_ISSUER` from `/opt/bots/.env.local` as the issuer. Pass the user's current email and display name, because this call overwrites them.
+3. On the control VM, restart the service to load the token: `sudo systemctl restart bots-orchestrator`.
+
+4. On the control VM, declare the computer. Use the value of `JWT_ISSUER` from `/opt/bots/.env.local` as the issuer. Pass the user's current email and display name, because this call overwrites them. To change a computer's size, run this again. A size change restarts a running VM once, and a disk only grows.
 
 	```sh
 	cd /opt/bots/packages/convex
-	sudo pnpm exec convex run computers:register \
-	  '{"ownerSubject":"tailscale:<login>","email":"<login>","displayName":"<login>","tokenHash":"<hash>"}' \
+	sudo pnpm exec convex run computers:declareVm \
+	  '{"ownerSubject":"tailscale:<login>","email":"<login>","displayName":"<login>","cores":6,"memoryMb":8192,"diskGb":200}' \
 	  --identity '{"subject":"service:orchestrator","issuer":"<JWT_ISSUER>"}'
 	```
 
-4. From a device on the tailnet, signed in as that user, run the check with the VM's name. The account needs a Mistral key, and each run adds a bot named `verify-template-*` to the list.
+5. To see the result, run `computers:desiredVms` the same way, with `'{}'` as its argument. The computer is ready when its stage is `ready`. Each computer takes the lowest free slot, and slot n is VM 200 + n at `10.77.0.(20 + n)`. Declare the owner of any VM already in the pool first, because a new computer adopts a VM in its slot.
+
+6. From a device on the tailnet, signed in as that user, run the check with the VM's name. The account needs a Mistral key, and each run adds a bot named `verify-template-*` to the list.
 
 	```sh
 	pnpm verify:template https://bots-control.<tailnet>.ts.net bots-user-201
 	```
+
+To remove a computer, run `computers:removeVm` the same way, with `'{"ownerSubject":"tailscale:<login>"}'`. The link refuses a new connection from the VM at once. Within about 15 seconds, the loop closes the live connection and then destroys the VM and its workspace. You cannot undo this.
 
 ## Check it
 
@@ -99,6 +105,14 @@ To prove what a user VM can reach, run these commands on the Proxmox host. The c
 bash create-probe-vms.sh
 bash verify-network.sh 901 902
 bash create-probe-vms.sh --remove
+```
+
+To run the network check from VMs that the template creates, run `bash clone-user-vm.sh <VM> <address> 2 2048 16` twice in place of `create-probe-vms.sh`, and wait until `cloud-init status` in each VM says `done`. A clone is tagged `bots-user`, so remove both before you next run `create-provisioner-token.sh`.
+
+To prove that provisioning survives a kill, run this as root on the control VM, from `/opt/bots`. It kills the real orchestrator once for each stage, and it takes about 10 minutes. It refuses to run if the pool holds a VM with no computer.
+
+```sh
+node --env-file=.env.local scripts/verify-reconcile.ts
 ```
 
 Set `QUICK=1` to scan a sample of ports. A check that a friend's access depends on must scan them all.
