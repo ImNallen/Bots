@@ -7,7 +7,6 @@ const DESKTOP_DIR = new URL("../desktop/", import.meta.url);
 const read = (name: string) => readFile(new URL(name, DESKTOP_DIR), "utf8");
 const execStart = (unit: string) => /^ExecStart=(.*)$/m.exec(unit)?.[1] ?? "";
 
-// sudoers and unit files are static, so they cannot derive from SLOTS or holderText. These fail the build when a list drifts.
 describe("the files a desktop runs from", () => {
   it("keeps the sandbox on in every file", async () => {
     for (const name of await readdir(fileURLToPath(DESKTOP_DIR))) {

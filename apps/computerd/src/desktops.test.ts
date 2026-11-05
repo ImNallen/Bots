@@ -17,8 +17,6 @@ import {
 
 class Killed extends Error {}
 
-// Stands for PID 1. A start reads the holder file only when the slot was dead, as a unit reads its environment file, so `live`
-// says whose browser really runs on a slot. A job that was sent finishes even if the client dies.
 function fakeSystemd(runtimeDir: string) {
   const live = new Map<Slot, string>();
   const calls: string[] = [];
@@ -414,7 +412,6 @@ describe("a desktop for each bot", () => {
   });
 
   describe("when computerd dies at any call", () => {
-    // A death before a call means the job never reached PID 1. A death after it means PID 1 finishes the job with no one watching.
     type Moment = "before" | "after";
 
     function dyingSystemd(moment: Moment, dieAt: number): { systemd: Systemd; died: () => boolean } {
@@ -442,7 +439,6 @@ describe("a desktop for each bot", () => {
       };
     }
 
-    // Walks through every kind of work: first claims, a kept slot, an eviction, an idle stop, and a bot that returns.
     async function scenario(desktops: Desktops): Promise<void> {
       const a = await desktops.acquire("a");
       const b = await desktops.acquire("b");
@@ -499,7 +495,6 @@ describe("a desktop for each bot", () => {
         await second.sweep();
         expect(pid1.live.size, `${moment} call ${dieAt}: everything idle stops`).toBe(0);
       }
-      // The scenario makes about 30 calls, so a low count means the kill stopped reaching them.
       expect(reached).toBeGreaterThan(25);
     });
   });

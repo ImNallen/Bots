@@ -3,7 +3,7 @@
 # nothing once the profile exists. A kill midway leaves only the .tmp directory, which the next start replaces. A bot id cannot
 # contain a dot, so that name never collides with a bot.
 #
-# The base is /home/browser/profile, which is where VM 201's logins already are. Nothing opens or moves it.
+# The base is /home/browser/profile, where the shared browser kept its logins. Nothing opens or moves it.
 set -eu
 base=${BASE_PROFILE:-/home/browser/profile}
 profiles=${PROFILES_DIR:-/home/browser/profiles}

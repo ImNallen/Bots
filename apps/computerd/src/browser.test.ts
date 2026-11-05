@@ -5,7 +5,6 @@ import { desktopOf, type Desktops, type Slot } from "./desktops.ts";
 
 type Sent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
-// One bot's Chromium, as a real one looks: it starts with a blank page and has targets that are not pages.
 function fakeChromium() {
   const pages = new Map<string, { openerId?: string }>([["target-0", {}]]);
   const bounds = new Map<string, Record<string, unknown>>();
@@ -78,7 +77,6 @@ function fakeChromium() {
 
 type FakeChromium = ReturnType<typeof fakeChromium>;
 
-// Each bot has a fixed slot here. The real policy is in desktops.test.ts.
 function world() {
   const slots = new Map<string, Slot>([
     ["a", 1],

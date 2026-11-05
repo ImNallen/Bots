@@ -1,4 +1,3 @@
-# Nothing depends on the panel or the wallpaper, so these share one unit. If the panel ends, the session ends and restarts.
 [Unit]
 Description=Bots desktop %i Xfce
 BindsTo=computerd-xvfb@%i.service

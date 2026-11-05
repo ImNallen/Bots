@@ -7,7 +7,6 @@ import { log } from "./log.ts";
 export const SLOTS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 export type Slot = (typeof SLOTS)[number];
 
-// Everything about a slot derives from its number, here. The display number is the unit's %i, and computerd never needs it.
 export type Desktop = { slot: Slot; cdpPort: number; vncPort: number };
 
 export function desktopOf(slot: Slot): Desktop {
@@ -24,7 +23,6 @@ export type Desktops = {
   acquire: (botId: string) => Promise<DesktopLease>;
   // Keeps a bot's desktop alive and never starts one, so a long shell tool cannot lose the page it left open. Returns release.
   hold: (botId: string) => () => void;
-  // Stops every desktop that has been idle too long. main.ts calls this on a timer, as it does journal pruning.
   sweep: () => Promise<void>;
 };
 
@@ -46,7 +44,6 @@ type Claim = {
 
 type SlotChoice = { kind: "free"; slot: Slot } | { kind: "evict"; botId: string; slot: Slot } | { kind: "full" };
 
-// A free slot if one exists, or else the claim with no holds that was used longest ago. A held claim is never chosen.
 function pickSlot(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string, number>): SlotChoice {
   const taken = new Set([...claims.values()].map((claim) => claim.slot));
   const free = SLOTS.find((slot) => !taken.has(slot));
@@ -214,16 +211,14 @@ function warn(event: string, error: unknown): void {
   log({ level: "warn", event, message: error instanceof Error ? error.message : "unknown error" });
 }
 
-// The only code that knows unit names or how to reach systemd. Tests replace it with a fake.
 export type Systemd = {
-  // Starts the target. Returns when each part has finished its start, and a part's own readiness check is in its unit.
   start: (slot: Slot) => Promise<void>;
   // Stops the display. Everything is bound to it, and a stop returns after Chromium has exited, so its profile and ports are free.
   stop: (slot: Slot) => Promise<void>;
   liveSlots: () => Promise<Slot[]>;
 };
 
-// A client that outlives this has lost PID 1, or a part is stuck. Longer than a part's own start timeout.
+// Longer than a part's own start timeout.
 const SYSTEMCTL_TIMEOUT_MS = 75_000;
 const run = promisify(execFile);
 

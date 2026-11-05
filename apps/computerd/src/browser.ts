@@ -23,7 +23,6 @@ type Cdp = {
   onClose: (listener: () => void) => void;
 };
 
-// Answers "this computer has no running browser" when nothing listens on the port.
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
 // This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
@@ -87,7 +86,6 @@ const CLEAR_SCRIPT = (ref: number) => `(() => {
   else document.execCommand('selectAll');
 })()`;
 
-// One socket to one bot's whole browser. It holds nothing that must survive a restart, so there is no state file.
 // Every page target on this browser belongs to this bot.
 type Connection = {
   cdpPort: number;
