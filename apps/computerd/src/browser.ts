@@ -104,30 +104,33 @@ export type Browser = {
 
 export function createBrowser(args: { cdpBaseUrl?: string; stateFile: string; connector?: CdpConnector }): Browser {
   const connector = args.connector ?? webSocketConnector(args.cdpBaseUrl ?? "");
-  let screens: Map<string, Screen> | null = null;
+  let screens: Promise<Map<string, Screen>> | null = null;
+  let saving: Promise<unknown> = Promise.resolve();
   let connection: Promise<Cdp> | null = null;
   const sessions = new Map<string, string>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
   const queues = new Map<string, Promise<unknown>>();
 
-  async function loadScreens(): Promise<Map<string, Screen>> {
-    if (screens !== null) {
-      return screens;
-    }
-    try {
-      const saved = JSON.parse(await readFile(args.stateFile, "utf8")) as Record<string, Screen>;
-      screens = new Map(Object.entries(saved));
-    } catch {
-      screens = new Map();
-    }
+  // Callers share one promise, so two bots that start together cannot each read their own copy of the map.
+  function loadScreens(): Promise<Map<string, Screen>> {
+    screens ??= readFile(args.stateFile, "utf8").then(
+      (raw) => new Map(Object.entries(JSON.parse(raw) as Record<string, Screen>)),
+      () => new Map<string, Screen>(),
+    );
     return screens;
   }
 
-  async function saveScreens(): Promise<void> {
-    const map = await loadScreens();
-    const temporary = `${args.stateFile}.tmp`;
-    await writeFile(temporary, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
-    await rename(temporary, args.stateFile);
+  // Saves share one temp file, so they run one at a time. Each writes the map as it is when its turn comes.
+  function saveScreens(): Promise<void> {
+    const save = async () => {
+      const map = await loadScreens();
+      const temporary = `${args.stateFile}.tmp`;
+      await writeFile(temporary, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
+      await rename(temporary, args.stateFile);
+    };
+    const next = saving.then(save, save);
+    saving = next.catch(() => {});
+    return next;
   }
 
   function screenOwning(map: Map<string, Screen>, targetId: string): Screen | undefined {

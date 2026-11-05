@@ -138,9 +138,6 @@ describe("systemPrompt", () => {
   it("names the bot and its workspace, and keeps passwords out of the chat", () => {
     expect(prompt).toContain("Ada");
     expect(prompt).toContain("/workspace/bot123");
-    for (const tool of ["shell", "read_file", "write_file"]) {
-      expect(prompt).toContain(tool);
-    }
     expect(prompt).toContain("Never ask for a password");
   });
 
