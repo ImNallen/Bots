@@ -7,7 +7,6 @@ type Sent = { method: string; params: Record<string, unknown>; sessionId: string
 
 function fakeChromium() {
   const pages = new Map<string, { openerId?: string }>([["target-0", {}]]);
-  const bounds = new Map<string, Record<string, unknown>>();
   const sent: Sent[] = [];
   const closeListeners: Array<() => void> = [];
   let nextTarget = 1;
@@ -16,7 +15,6 @@ function fakeChromium() {
 
   return {
     pages,
-    bounds,
     sent,
     openPopup: (openerId: string) => {
       const targetId = `target-${nextTarget++}`;
@@ -52,15 +50,10 @@ function fakeChromium() {
           }
           case "Target.attachToTarget":
             return { sessionId: `session-${String(params.targetId)}` };
-          case "Browser.getWindowForTarget":
-            return { windowId: 1, bounds: bounds.get(String(params.targetId)) ?? { left: 0, top: 27 } };
           case "Runtime.evaluate": {
             const expression = String(params.expression);
             if (expression === "document.readyState") {
               return { result: { value: "complete" } };
-            }
-            if (expression === "outerHeight - innerHeight") {
-              return { result: { value: 85 } };
             }
             if (expression.includes("scrollIntoView")) {
               return { result: { value: locateResult } };
@@ -237,79 +230,6 @@ describe("browser", () => {
     const typed = (target: FakeChromium) => target.sent.filter((entry) => entry.method === "Input.insertText").map((entry) => entry.params.text);
     expect(typed(machine.chromiumOfBot("a"))).toEqual(["for a"]);
     expect(typed(machine.chromiumOfBot("b"))).toEqual(["for b"]);
-  });
-
-  describe("a person's input", () => {
-    const mouseEvents = () => chromium.sent.filter((entry) => entry.method === "Input.dispatchMouseEvent");
-
-    it("reaches only the bot's own page", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      await look(browser, "b");
-      const other = machine.chromiumOfBot("b");
-      other.sent.length = 0;
-      chromium.sent.length = 0;
-      await browser.input("b", { kind: "text", text: "secret" });
-      await browser.input("b", { kind: "pointer", x: 5, y: 200, action: "down" });
-      await browser.input("b", { kind: "key", key: "Enter" });
-      const input = other.sent.filter((entry) => entry.method.startsWith("Input."));
-      expect(input.length).toBeGreaterThan(2);
-      expect(new Set(input.map((entry) => entry.sessionId))).toEqual(new Set(["session-target-0"]));
-      expect(chromium.sent.filter((entry) => entry.method.startsWith("Input."))).toEqual([]);
-    });
-
-    it("takes no lease per event, so a pointer move runs no sudo", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      const before = machine.acquires();
-      for (let move = 0; move < 20; move += 1) {
-        await browser.input("a", { kind: "pointer", x: move, y: 200, action: "move" });
-      }
-      expect(machine.acquires()).toBe(before);
-    });
-
-    it("starts the desktop once when there is no connection yet", async () => {
-      const browser = browserOf();
-      await browser.input("a", { kind: "text", text: "first" });
-      await browser.input("a", { kind: "text", text: "second" });
-      expect(machine.acquires()).toBe(1);
-      expect(machine.openLeases()).toBe(0);
-      expect(chromium.sent.filter((entry) => entry.method === "Input.insertText")).toHaveLength(2);
-    });
-
-    it("maps a point on the stream to a point in the page, below the panel and the window's bars", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      chromium.sent.length = 0;
-      await browser.input("a", { kind: "pointer", x: 640, y: 400, action: "down" });
-      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mousePressed", x: 640, y: 288, button: "left", buttons: 1 });
-    });
-
-    it("ignores a click on the panel or the window's bars, which CDP input cannot reach", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      chromium.sent.length = 0;
-      await browser.input("a", { kind: "pointer", x: 640, y: 40, action: "down" });
-      expect(mouseEvents()).toEqual([]);
-    });
-
-    it("maps a point inside a popup from that window's own bounds", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      const popup = chromium.openPopup("target-0");
-      chromium.bounds.set(popup, { left: 60, top: 60 });
-      chromium.sent.length = 0;
-      await browser.input("a", { kind: "pointer", x: 300, y: 300, action: "down" });
-      expect(mouseEvents()[0]?.params).toMatchObject({ x: 240, y: 155 });
-    });
-
-    it("scrolls the page at that point", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      chromium.sent.length = 0;
-      await browser.input("a", { kind: "scroll", x: 640, y: 400, dx: 0, dy: 120 });
-      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseWheel", x: 640, y: 288, deltaY: 120 });
-    });
   });
 
   it("reports a stale ref as an error that tells the bot what to do", async () => {

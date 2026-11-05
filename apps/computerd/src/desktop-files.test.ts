@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { holderText, SLOTS } from "./desktops.ts";
+import { holderText, SLOTS, streamPort } from "./desktops.ts";
 
 const DESKTOP_DIR = new URL("../desktop/", import.meta.url);
 const read = (name: string) => readFile(new URL(name, DESKTOP_DIR), "utf8");
@@ -49,6 +49,15 @@ describe("the files a desktop runs from", () => {
       `computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[${first}-${last}].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[${first}-${last}].service, /usr/bin/systemctl restart --quiet computerd-input@[${first}-${last}].service\n`,
     );
     expect(SLOTS).toEqual(Array.from({ length: last - first + 1 }, (_, index) => first + index));
+  });
+
+  it("puts each stream on the port that streamPort names, for every slot", async () => {
+    const input = await read("computerd-input@.service");
+    for (const slot of SLOTS) {
+      expect(execStart(input).replaceAll("%i", String(slot))).toContain(`-rfbport ${streamPort(slot, "control")} `);
+      expect(holderText("bot", slot)).toContain(`VNC_PORT=${streamPort(slot, "watch")}\n`);
+    }
+    expect(execStart(await read("computerd-vnc@.service"))).toContain("-rfbport ${VNC_PORT} ");
   });
 
   it("reads only the keys that a holder file has", async () => {

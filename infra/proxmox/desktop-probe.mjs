@@ -182,7 +182,7 @@ async function browser(port) {
     const evaluate = async (expression) =>
       (await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
     for (let round = 0; round < 50 && (await evaluate("document.readyState")) !== "complete"; round += 1) await sleep(100);
-    return { evaluate };
+    return { evaluate, close: () => send("Target.closeTarget", { targetId }) };
   };
   return { send, page };
 }
@@ -251,6 +251,14 @@ switch (command) {
     await typeText(session, text);
     await sleep(1500);
     console.log(`value=${await tab.evaluate("document.getElementById('field').value")}`);
+    await tab.close();
+    break;
+  }
+  case "rfb-click": {
+    const session = await rfbSession(Number(args[0]));
+    await clickAt(session, Number(args[1]), Number(args[2]));
+    await sleep(300);
+    console.log("clicked");
     break;
   }
   // Ctrl+L and the address bar sit outside the page, so only a person's desktop input can reach them.
@@ -268,6 +276,7 @@ switch (command) {
     await tapKey(session, RETURN);
     await sleep(2000);
     console.log(`title=${await tab.evaluate("document.title")}`);
+    await tab.close();
     break;
   }
   // A dropdown's menu is a window of its own, which is why a mouse click on an option does nothing through CDP.
@@ -287,6 +296,7 @@ switch (command) {
     await clickAt(session, Math.round(box.x), Math.round(box.y + box.h * 3));
     await sleep(600);
     console.log(`chosen=${await tab.evaluate("document.getElementById('o').textContent")}`);
+    await tab.close();
     break;
   }
   // Leaves a key pressed as the viewer goes, as a phone that loses its network would.

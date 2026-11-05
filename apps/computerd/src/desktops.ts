@@ -2,15 +2,21 @@ import { execFile } from "node:child_process";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { StreamMode } from "@bots/protocol";
 import { log } from "./log.ts";
 
 export const SLOTS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 export type Slot = (typeof SLOTS)[number];
 
-export type Desktop = { slot: Slot; cdpPort: number; vncPort: number };
+export type Desktop = { slot: Slot; cdpPort: number };
 
 export function desktopOf(slot: Slot): Desktop {
-  return { slot, cdpPort: 9300 + slot, vncPort: 5900 + slot };
+  return { slot, cdpPort: 9300 + slot };
+}
+
+// The unit files hold these numbers too, and desktop-files.test.ts pins them to this function.
+export function streamPort(slot: Slot, mode: StreamMode): number {
+  return (mode === "watch" ? 5900 : 6900) + slot;
 }
 
 // A lease keeps its desktop running. Nothing stops or evicts a desktop while a lease on it is open.
@@ -65,8 +71,7 @@ function idleBots(claims: ReadonlyMap<string, Claim>, holds: ReadonlyMap<string,
 // The one record of who holds a slot. PID 1 reads it as root at each start of a unit, so it needs no wider mode. It lives in
 // /run, so it dies with the processes it describes, at a reboot.
 export function holderText(botId: string, slot: Slot): string {
-  const { cdpPort, vncPort } = desktopOf(slot);
-  return `BOT_ID=${botId}\nCDP_PORT=${cdpPort}\nVNC_PORT=${vncPort}\n`;
+  return `BOT_ID=${botId}\nCDP_PORT=${desktopOf(slot).cdpPort}\nVNC_PORT=${streamPort(slot, "watch")}\n`;
 }
 
 export function parseHolder(text: string): string | null {
@@ -215,6 +220,8 @@ export type Systemd = {
   start: (slot: Slot) => Promise<void>;
   // Stops the display. Everything is bound to it, and a stop returns after Chromium has exited, so its profile and ports are free.
   stop: (slot: Slot) => Promise<void>;
+  // Opens the slot's input stream for a new viewer, and ends the stream of any viewer before it.
+  restartInput: (slot: Slot) => Promise<void>;
   liveSlots: () => Promise<Slot[]>;
 };
 
@@ -223,12 +230,13 @@ const SYSTEMCTL_TIMEOUT_MS = 75_000;
 const run = promisify(execFile);
 
 export function createSystemd(): Systemd {
-  async function sudoSystemctl(verb: "start" | "stop", unit: string): Promise<void> {
+  async function sudoSystemctl(verb: "start" | "stop" | "restart", unit: string): Promise<void> {
     await run("sudo", ["-n", "/usr/bin/systemctl", verb, "--quiet", unit], { timeout: SYSTEMCTL_TIMEOUT_MS });
   }
   return {
     start: (slot) => sudoSystemctl("start", `computerd-desktop@${slot}.target`),
     stop: (slot) => sudoSystemctl("stop", `computerd-xvfb@${slot}.service`),
+    restartInput: (slot) => sudoSystemctl("restart", `computerd-input@${slot}.service`),
     liveSlots: async () => {
       try {
         const { stdout } = await run("systemctl", ["list-units", "--plain", "--no-legend", "--no-pager", "computerd-xvfb@*"], {

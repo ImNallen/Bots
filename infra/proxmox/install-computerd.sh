@@ -78,7 +78,7 @@ build() {
   [ -d /workspace ] || install --directory --owner agent --group agent --mode 0755 /workspace
   id browser >/dev/null 2>&1 || useradd --create-home browser
   # A terminal on the desktop opens this shell. The user has no sudo.
-  usermod --shell /bin/bash browser
+  usermod --shell /bin/bash browser >/dev/null
 
   # Anything a killed run left is unfinished, and the selected release is never in this list.
   for candidate in "$ROOT"/build.* "$ROOT"/runtimes/*.tmp; do

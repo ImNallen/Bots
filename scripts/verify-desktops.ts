@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createBrowser } from "../apps/computerd/src/browser.ts";
-import { createDesktops, createSystemd, IDLE_STOP_MS, type DesktopLease, type Slot, type Systemd } from "../apps/computerd/src/desktops.ts";
+import { createDesktops, createSystemd, IDLE_STOP_MS, streamPort, type DesktopLease, type Slot, type Systemd } from "../apps/computerd/src/desktops.ts";
 
 const FRAMES = process.argv[2];
 const run = promisify(execFile);
@@ -90,10 +90,11 @@ const slots = BOTS.map((botId) => (leases.get(botId) as DesktopLease).slot);
 check(new Set(slots).size === 2, "their leases are on different slots", slots.join());
 for (const botId of BOTS) {
   const lease = leases.get(botId) as DesktopLease;
-  const size = await probe("rfb-size", String(lease.vncPort));
-  check(size === "1280x800", `slot ${lease.slot} streams 1280x800 on port ${lease.vncPort}`, size);
+  const watchPort = streamPort(lease.slot, "watch");
+  const size = await probe("rfb-size", String(watchPort));
+  check(size === "1280x800", `slot ${lease.slot} streams 1280x800 on port ${watchPort}`, size);
   if (FRAMES !== undefined) {
-    await probe("rfb-frame", String(lease.vncPort), `${FRAMES}/slot-${lease.slot}.png`);
+    await probe("rfb-frame", String(watchPort), `${FRAMES}/slot-${lease.slot}.png`);
   }
 }
 
@@ -112,17 +113,11 @@ check(backOnOpener.output.includes("Title: the opener"), "when the popup closes,
 const stale = await browse(BOTS[0], { name: "browser_click", args: { ref: 999 } });
 check(stale.outcome === "error" && stale.output.includes("take a new snapshot"), "a ref that is not on the page answers with the stale ref error", stale.output);
 
-await browse(BOTS[1], { name: "browser_navigate", args: { url: pageWith("a form", `<input id="field" style="position:fixed;inset:0;width:100%;height:100%">`) } });
-const startsBefore = starts;
-for (let move = 0; move < 50; move += 1) {
-  await browser.input(BOTS[1], { kind: "pointer", x: 300 + move, y: 300, action: "move" });
-}
-check(starts === startsBefore, "50 pointer moves run no start, and no sudo", `${starts - startsBefore} starts`);
-await browser.input(BOTS[1], { kind: "pointer", x: 640, y: 400, action: "down" });
-await browser.input(BOTS[1], { kind: "pointer", x: 640, y: 400, action: "up" });
-await browser.input(BOTS[1], { kind: "text", text: "typed by a person" });
-const typed = await browse(BOTS[1], { name: "browser_snapshot", args: {} });
-check(typed.output.includes("typed by a person"), "a person's click lands in the page below the panel and the window's bars, and text follows", typed.output);
+const personSlot = (leases.get(BOTS[1]) as DesktopLease).slot;
+const inputPort = streamPort(personSlot, "control");
+await real.restartInput(personSlot);
+const personTyped = await probe("rfb-type", String(9300 + personSlot), String(inputPort));
+check(personTyped === "value=xyz", "a person's click and keys through computerd's own restart reach the bot's page", personTyped);
 
 const target = "position:fixed;left:200px;top:150px;width:60px;height:40px;background:#f0f;border:0";
 await browse(BOTS[1], {
@@ -130,9 +125,9 @@ await browse(BOTS[1], {
   args: { url: pageWith("not clicked", `<button style="${target}" onclick="document.title='clicked'"></button>`) },
 });
 await new Promise((done) => setTimeout(done, 500));
-const [x, y] = (await probe("rfb-find-magenta", String((leases.get(BOTS[1]) as DesktopLease).vncPort))).split(",").map(Number) as [number, number];
-await browser.input(BOTS[1], { kind: "pointer", x, y, action: "down" });
-await browser.input(BOTS[1], { kind: "pointer", x, y, action: "up" });
+const [x, y] = (await probe("rfb-find-magenta", String(streamPort(personSlot, "watch")))).split(",").map(Number) as [number, number];
+await real.restartInput(personSlot);
+await probe("rfb-click", String(inputPort), String(x), String(y));
 const hit = await browse(BOTS[1], { name: "browser_snapshot", args: {} });
 check(hit.output.includes("Title: clicked"), `a person's click at ${x},${y} on the stream lands on what the stream shows there`, hit.output);
 

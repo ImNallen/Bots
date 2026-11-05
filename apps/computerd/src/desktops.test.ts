@@ -41,6 +41,7 @@ function fakeSystemd(runtimeDir: string) {
       await call(`stop ${slot}`);
       live.delete(slot);
     },
+    restartInput: (slot) => call(`restart input ${slot}`),
     liveSlots: async () => {
       await call("liveSlots");
       return [...live.keys()];
@@ -93,7 +94,7 @@ describe("a desktop for each bot", () => {
 
   it("derives a lease's ports from its slot", async () => {
     const lease = await computerd().acquire("a");
-    expect(lease).toMatchObject({ slot: 1, cdpPort: 9301, vncPort: 5901 });
+    expect(lease).toMatchObject({ slot: 1, cdpPort: 9301 });
   });
 
   it("keeps a bot on its slot, and starts it on every acquire so that a lost part heals", async () => {
@@ -362,6 +363,7 @@ describe("a desktop for each bot", () => {
           stop: async () => {
             throw new Error("no such command");
           },
+          restartInput: async () => {},
         },
       });
       await expect(desktops.acquire("a")).rejects.toThrow(noBrowser);
@@ -434,6 +436,7 @@ describe("a desktop for each bot", () => {
         systemd: {
           start: (slot) => wrap(() => pid1.systemd.start(slot)),
           stop: (slot) => wrap(() => pid1.systemd.stop(slot)),
+          restartInput: (slot) => wrap(() => pid1.systemd.restartInput(slot)),
           liveSlots: () => wrap(() => pid1.systemd.liveSlots()),
         },
       };

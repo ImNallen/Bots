@@ -74,11 +74,16 @@ export const computerMessage = z.discriminatedUnion("kind", [
 
 export type ComputerMessage = z.infer<typeof computerMessage>;
 
+// A person watches a stream, or uses it during a take-over.
+export type StreamMode = "watch" | "control";
+
 export const orchestratorMessage = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("welcome") }),
   z.strictObject({ kind: z.literal("toolCall"), callId, botId, tool: toolInvocation }),
   z.strictObject({ kind: z.literal("cancelTool"), callId }),
-  z.strictObject({ kind: z.literal("screenOpen"), streamId, botId }),
+  // Only control carries a mode. A computerd closes its link on a field it does not know, and a VM updates after its orchestrator,
+  // so a watch stream's message must stay what it was before modes.
+  z.strictObject({ kind: z.literal("screenOpen"), streamId, botId, mode: z.literal("control").optional() }),
   z.strictObject({ kind: z.literal("screenInput"), botId, event: browserInputEvent }),
 ]);
 
