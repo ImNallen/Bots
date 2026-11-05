@@ -397,14 +397,8 @@ textarea:disabled {
   inset: 0;
 }
 
-.screen-input {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  touch-action: none;
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-  cursor: crosshair;
+.screen-view-control {
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
 .screen-controls {
@@ -424,19 +418,14 @@ textarea:disabled {
   min-height: 2.75rem;
 }
 
-.screen-url {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.screen-url input {
-  flex: 1;
-  min-width: 0;
-}
-
 .screen-typing {
   width: 100%;
   min-height: 2.75rem;
+}
+
+.screen-refusal {
+  margin: 0;
+  font-size: 0.875rem;
 }
 
 .tool-approval {

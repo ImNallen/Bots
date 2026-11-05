@@ -1,17 +1,14 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import RFB from "@novnc/novnc";
-import { useMutation } from "convex/react";
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
+import { useConvex, useMutation } from "convex/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { KEY_KEYSYMS, isNamedKey, planTyping, type NamedKey } from "./keysyms.ts";
 
 type ScreenState = "connecting" | "live" | "ended";
+type StreamMode = "watch" | "control";
 
-const SCREEN_WIDTH = 1280;
-const SCREEN_HEIGHT = 800;
 const RENEW_MS = 60_000;
-const TAP_SLOP_PX = 10;
-const TOUCH_SCROLL_FACTOR = 2;
-const NAMED_KEYS = new Set(["Enter", "Tab", "Escape", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 const KEY_BAR = [
   ["Tab", "Tab"],
   ["Esc", "Escape"],
@@ -28,7 +25,13 @@ function socketUrl(path: string): string {
   return `${scheme}://${window.location.host}${path}`;
 }
 
-function ScreenView({ botId, onState, children }: { botId: string; onState: (state: ScreenState) => void; children?: ReactNode }) {
+function ScreenView(props: {
+  botId: string;
+  mode: StreamMode;
+  onState: (state: ScreenState) => void;
+  onScreen: (screen: RFB | null) => void;
+}) {
+  const { botId, mode, onState, onScreen } = props;
   const target = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,245 +40,176 @@ function ScreenView({ botId, onState, children }: { botId: string; onState: (sta
       return undefined;
     }
     onState("connecting");
-    const rfb = new RFB(element, socketUrl(`/screens/${encodeURIComponent(botId)}`), { shared: true });
-    // This stays on during a take-over. Input goes through its own socket to one page, never through this stream.
-    rfb.viewOnly = true;
+    const path = `/screens/${encodeURIComponent(botId)}${mode === "control" ? "/input" : ""}`;
+    const rfb = new RFB(element, socketUrl(path), { shared: true });
+    rfb.viewOnly = mode === "watch";
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
-    const onConnect = () => onState("live");
-    const onDisconnect = () => onState("ended");
+    const onConnect = () => {
+      onState("live");
+      onScreen(rfb);
+      if (mode === "control") {
+        // So a real keyboard reaches the desktop at once, and a shortcut does not reach this page instead.
+        rfb.focus({ preventScroll: true });
+      }
+    };
+    const onDisconnect = () => {
+      onScreen(null);
+      onState("ended");
+    };
     rfb.addEventListener("connect", onConnect);
     rfb.addEventListener("disconnect", onDisconnect);
     return () => {
       rfb.removeEventListener("connect", onConnect);
       rfb.removeEventListener("disconnect", onDisconnect);
+      onScreen(null);
       rfb.disconnect();
     };
-  }, [botId, onState]);
+  }, [botId, mode, onState, onScreen]);
 
   return (
-    <div className="screen-view">
+    <div className={mode === "control" ? "screen-view screen-view-control" : "screen-view"}>
       <div ref={target} aria-label="This bot's screen" />
-      {children}
     </div>
   );
 }
 
-type Send = (event: Record<string, unknown>) => void;
-
-// While control is true the owner holds the screen. Leaving this state for any reason gives it back, so hiding the screen
-// or leaving the page does not keep the bot waiting.
-function useTakeover(args: { botId: Id<"bots">; control: boolean; onEnded: () => void }): Send | null {
-  const { botId, control, onEnded } = args;
+// While wanted is true the owner holds the screen. Leaving this state for any reason gives it back, so hiding the screen or
+// leaving the page does not keep the bot waiting.
+function useTakeover(args: { botId: Id<"bots">; wanted: boolean; onEnded: () => void }) {
+  const { botId, wanted, onEnded } = args;
+  const convex = useConvex();
   const takeOver = useMutation(api.bots.takeOver);
   const release = useMutation(api.bots.releaseTakeover);
-  const socket = useRef<WebSocket | null>(null);
-  const [connected, setConnected] = useState(false);
+  const [granted, setGranted] = useState(false);
+  const until = useRef(0);
+  const replaced = useRef(false);
 
   useEffect(() => {
-    if (!control) {
+    if (!wanted) {
       return undefined;
     }
     let cancelled = false;
+    replaced.current = false;
     const renew = setInterval(() => {
-      takeOver({ botId }).catch(() => {});
+      takeOver({ botId }).then(
+        (value) => {
+          until.current = value;
+        },
+        () => {},
+      );
     }, RENEW_MS);
-    takeOver({ botId }).then(
-      () => {
-        if (cancelled) {
-          return;
-        }
-        const input = new WebSocket(socketUrl(`/screens/${encodeURIComponent(botId)}/input`));
-        socket.current = input;
-        input.addEventListener("open", () => setConnected(true));
-        input.addEventListener("close", () => {
-          if (!cancelled) {
-            setConnected(false);
-            onEnded();
-          }
-        });
-      },
-      () => onEnded(),
-    );
+    takeOver({ botId }).then((value) => {
+      until.current = value;
+      if (!cancelled) {
+        setGranted(true);
+      }
+    }, onEnded);
     return () => {
       cancelled = true;
       clearInterval(renew);
-      socket.current?.close();
-      socket.current = null;
-      setConnected(false);
-      release({ botId }).catch(() => {});
+      setGranted(false);
+      if (!replaced.current) {
+        release({ botId }).catch(() => {});
+      }
     };
-  }, [botId, control, onEnded, release, takeOver]);
+  }, [botId, wanted, onEnded, release, takeOver]);
 
-  const send = useCallback<Send>((event) => {
-    if (socket.current?.readyState === WebSocket.OPEN) {
-      socket.current.send(JSON.stringify(event));
-    }
-  }, []);
-  return connected ? send : null;
+  // A newer tab of this owner ends this stream by taking over. It renewed the take-over before that, so a value that is not ours
+  // says so, and giving back now would take the screen from that tab.
+  const streamEnded = useCallback(() => {
+    convex
+      .query(api.bots.get, { botId })
+      .then((bot) => {
+        const current = bot?.takeoverUntil ?? 0;
+        replaced.current = current !== 0 && current !== until.current;
+      })
+      .catch(() => {})
+      .finally(onEnded);
+  }, [botId, convex, onEnded]);
+
+  return { granted, streamEnded };
 }
 
-function InputSurface({ send }: { send: Send }) {
-  const start = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+const REFUSALS = {
+  "no-key": "That character has no key on the screen, so nothing was sent. It is still in this box.",
+  "keyboard-full": "The screen's keyboard has no room for another new character, so nothing was sent. Give back and take over again to type it.",
+} as const;
 
-  function toScreen(event: { clientX: number; clientY: number; currentTarget: HTMLElement }) {
-    const box = event.currentTarget.getBoundingClientRect();
-    const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
-    return {
-      x: clamp(((event.clientX - box.left) / box.width) * SCREEN_WIDTH, SCREEN_WIDTH),
-      y: clamp(((event.clientY - box.top) / box.height) * SCREEN_HEIGHT, SCREEN_HEIGHT),
-    };
-  }
-
-  function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    start.current = { x: event.clientX, y: event.clientY, moved: false };
-    // A touch is a tap or a scroll, and only its end can say which. A mouse button means a press now.
-    if (event.pointerType === "mouse") {
-      send({ kind: "pointer", action: "move", ...toScreen(event) });
-      send({ kind: "pointer", action: "down", ...toScreen(event) });
-    }
-  }
-
-  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerType === "mouse") {
-      send({ kind: "pointer", action: "move", ...toScreen(event) });
-      return;
-    }
-    const begun = start.current;
-    if (begun === null) {
-      return;
-    }
-    const dx = begun.x - event.clientX;
-    const dy = begun.y - event.clientY;
-    if (!begun.moved && Math.hypot(dx, dy) < TAP_SLOP_PX) {
-      return;
-    }
-    begun.moved = true;
-    begun.x = event.clientX;
-    begun.y = event.clientY;
-    send({ kind: "scroll", ...toScreen(event), dx: dx * TOUCH_SCROLL_FACTOR, dy: dy * TOUCH_SCROLL_FACTOR });
-  }
-
-  function onPointerUp(event: PointerEvent<HTMLDivElement>) {
-    const begun = start.current;
-    start.current = null;
-    if (event.pointerType === "mouse") {
-      send({ kind: "pointer", action: "up", ...toScreen(event) });
-    } else if (begun !== null && !begun.moved) {
-      send({ kind: "pointer", action: "move", ...toScreen(event) });
-      send({ kind: "pointer", action: "down", ...toScreen(event) });
-      send({ kind: "pointer", action: "up", ...toScreen(event) });
-    }
-  }
-
-  function onWheel(event: WheelEvent<HTMLDivElement>) {
-    send({ kind: "scroll", ...toScreen(event), dx: event.deltaX, dy: event.deltaY });
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-      return;
-    }
-    if (NAMED_KEYS.has(event.key)) {
-      event.preventDefault();
-      send({ kind: "key", key: event.key });
-    } else if (event.key.length === 1) {
-      event.preventDefault();
-      send({ kind: "text", text: event.key });
-    }
-  }
-
-  return (
-    <div
-      className="screen-input"
-      role="application"
-      aria-label="Control this screen"
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onWheel={onWheel}
-      onKeyDown={onKeyDown}
-    />
-  );
-}
-
-function TypingBox({ send }: { send: Send }) {
+function TypingBox({ screen }: { screen: RFB }) {
   const composing = useRef(false);
+  const added = useRef<ReadonlySet<number>>(new Set());
+  const [refusal, setRefusal] = useState<keyof typeof REFUSALS | null>(null);
 
   function flush(element: HTMLInputElement) {
-    if (element.value !== "") {
-      send({ kind: "text", text: element.value });
-      element.value = "";
+    if (element.value === "") {
+      setRefusal(null);
+      return;
     }
+    const plan = planTyping(element.value, added.current);
+    if (plan.kind === "refuse") {
+      setRefusal(plan.reason);
+      return;
+    }
+    for (const keysym of plan.keysyms) {
+      screen.sendKey(keysym, null);
+    }
+    added.current = plan.added;
+    setRefusal(null);
+    element.value = "";
   }
 
   // A phone keyboard builds a word through composition, and changing the box during that garbles the word. So the text
   // goes to the page when the word is done. The box then empties, so a password never sits in it or in the chat.
   return (
-    <input
-      className="screen-typing"
-      aria-label="Type on the screen"
-      placeholder="Tap here to type on the screen"
-      autoComplete="off"
-      autoCapitalize="off"
-      autoCorrect="off"
-      spellCheck={false}
-      data-1p-ignore
-      data-lpignore="true"
-      onCompositionStart={() => {
-        composing.current = true;
-      }}
-      onCompositionEnd={(event) => {
-        composing.current = false;
-        flush(event.currentTarget);
-      }}
-      onInput={(event) => {
-        if (!composing.current) {
+    <>
+      <input
+        className="screen-typing"
+        aria-label="Type on the screen"
+        placeholder="Tap here to type on the screen"
+        autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        onCompositionStart={() => {
+          composing.current = true;
+        }}
+        onCompositionEnd={(event) => {
+          composing.current = false;
           flush(event.currentTarget);
-        }
-      }}
-      onKeyDown={(event) => {
-        // During composition these keys choose or confirm a word for the keyboard, and they are not meant for the page.
-        if (NAMED_KEYS.has(event.key) && !composing.current && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          flush(event.currentTarget);
-          send({ kind: "key", key: event.key });
-        }
-      }}
-    />
+        }}
+        onInput={(event) => {
+          if (!composing.current) {
+            flush(event.currentTarget);
+          }
+        }}
+        onKeyDown={(event) => {
+          // During composition these keys choose or confirm a word for the keyboard, and they are not meant for the page.
+          if (isNamedKey(event.key) && !composing.current && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            flush(event.currentTarget);
+            screen.sendKey(KEY_KEYSYMS[event.key], null);
+          }
+        }}
+      />
+      {refusal !== null && (
+        <p className="screen-refusal" role="alert">
+          {REFUSALS[refusal]}
+        </p>
+      )}
+    </>
   );
 }
 
-function TakeoverControls({ send, onGiveBack }: { send: Send; onGiveBack: () => void }) {
-  const [url, setUrl] = useState("https://");
-
-  function go(event: FormEvent) {
-    event.preventDefault();
-    if (URL.canParse(url) && /^https?:\/\//i.test(url)) {
-      send({ kind: "navigate", url });
-    }
-  }
-
+function TakeoverControls({ screen, onGiveBack }: { screen: RFB; onGiveBack: () => void }) {
   return (
     <div className="screen-controls">
-      <form className="screen-url" onSubmit={go}>
-        <input
-          aria-label="Address"
-          type="url"
-          inputMode="url"
-          autoCapitalize="off"
-          autoCorrect="off"
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-        />
-        <button type="submit">Go</button>
-      </form>
-      <TypingBox send={send} />
+      <TypingBox screen={screen} />
       <div className="screen-keys" role="group" aria-label="Keys">
-        {KEY_BAR.map(([label, key]) => (
-          <button key={key} type="button" aria-label={key} onClick={() => send({ kind: "key", key })}>
+        {KEY_BAR.map(([label, key]: readonly [string, NamedKey]) => (
+          <button key={key} type="button" aria-label={key} onClick={() => screen.sendKey(KEY_KEYSYMS[key], null)}>
             {label}
           </button>
         ))}
@@ -300,8 +234,23 @@ export function ScreenPanel({ botId }: { botId: Id<"bots"> }) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<ScreenState>("connecting");
   const [control, setControl] = useState(false);
+  const [screen, setScreen] = useState<RFB | null>(null);
+  const [takeoverEnded, setTakeoverEnded] = useState(false);
   const endControl = useCallback(() => setControl(false), []);
-  const send = useTakeover({ botId, control: open && control, onEnded: endControl });
+  const { granted, streamEnded } = useTakeover({ botId, wanted: open && control, onEnded: endControl });
+  const mode: StreamMode = granted ? "control" : "watch";
+
+  const onState = useCallback(
+    (next: ScreenState) => {
+      setState(next);
+      // Only the stream can end a take-over here. Giving back removes the listener first.
+      if (mode === "control" && next === "ended") {
+        setTakeoverEnded(true);
+        streamEnded();
+      }
+    },
+    [mode, streamEnded],
+  );
 
   return (
     <section className="screen-panel">
@@ -311,32 +260,39 @@ export function ScreenPanel({ botId }: { botId: Id<"bots"> }) {
           onClick={() => {
             setOpen((value) => !value);
             setControl(false);
+            setTakeoverEnded(false);
           }}
         >
           {open ? "Hide screen" : "Watch screen"}
         </button>
         {open && !control && state === "live" && (
-          <button type="button" onClick={() => setControl(true)}>
+          <button
+            type="button"
+            onClick={() => {
+              setTakeoverEnded(false);
+              setControl(true);
+            }}
+          >
             Take over
           </button>
         )}
         {open && (
           <span className="screen-status" role="status">
-            {control ? "You control this screen. The bot waits before its next tool." : STATUS[state]}
+            {mode === "control" && state === "live"
+              ? "You control this screen. The bot waits before its next tool."
+              : takeoverEnded && state === "live"
+                ? "Your take-over ended. You are watching, and the bot keeps working."
+                : STATUS[state]}
           </span>
         )}
-        {open && state === "ended" && (
+        {open && mode === "watch" && state === "ended" && (
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
             Try again
           </button>
         )}
       </div>
-      {open && (
-        <ScreenView key={attempt} botId={botId} onState={setState}>
-          {send !== null && <InputSurface send={send} />}
-        </ScreenView>
-      )}
-      {send !== null && <TakeoverControls send={send} onGiveBack={endControl} />}
+      {open && <ScreenView key={`${attempt}-${mode}`} botId={botId} mode={mode} onState={onState} onScreen={setScreen} />}
+      {mode === "control" && screen !== null && <TakeoverControls screen={screen} onGiveBack={endControl} />}
     </section>
   );
 }
