@@ -2,11 +2,14 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { readFile } from "node:fs/promises";
 import { REJECTION_STATUS, identityFor, resolveIdentity } from "./auth.ts";
 import { parseConfig } from "./config.ts";
 import { keyRoutes } from "./keys.ts";
 import { startLink } from "./link.ts";
 import { log } from "./log.ts";
+import { createProxmox } from "./proxmox.ts";
+import { startReconciler } from "./reconciler.ts";
 import { startRunner } from "./runner.ts";
 import { hashComputerToken } from "./secrets.ts";
 import { createService } from "./service.ts";
@@ -50,6 +53,17 @@ const link = startLink({
 });
 
 startRunner({ service, link, masterKey: config.masterKey, mistral: config.mistral, ownerScope, log });
+
+if (config.proxmox !== null) {
+  const { url, node, token, caFile } = config.proxmox;
+  startReconciler({
+    service,
+    link,
+    proxmox: createProxmox({ url, node, token, caPem: await readFile(caFile, "utf8") }),
+    linkUrl: `ws://${config.link.host}:${config.link.port}`,
+    log,
+  });
+}
 
 const app = new Hono();
 

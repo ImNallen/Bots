@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { runEventBody, runState } from "./validators.js";
+import { desiredVm, observedVm, runEventBody, runState } from "./validators.js";
 
 export default defineSchema({
   users: defineTable({
@@ -16,7 +16,11 @@ export default defineSchema({
 
   computers: defineTable({
     ownerId: v.id("users"),
-    tokenHash: v.string(),
+    // A provisioned computer has no hash until its VM makes a token.
+    tokenHash: v.optional(v.string()),
+    // Only provisioned computers have these. A dev computer is a local container.
+    desiredVm: v.optional(desiredVm),
+    observedVm: v.optional(observedVm),
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_owner", ["ownerId"]),

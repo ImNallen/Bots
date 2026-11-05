@@ -124,4 +124,40 @@ describe("parseConfig", () => {
       /^JWT_PRIVATE_JWK is not valid JSON$/,
     );
   });
+
+  describe("proxmox", () => {
+    const proxmoxEnv = {
+      PROXMOX_URL: "https://192.0.2.1:8006",
+      PROXMOX_NODE: "pve",
+      PROXMOX_TOKEN: "user@pve!name=secret-value",
+      PROXMOX_CA_FILE: "/etc/bots/ca.pem",
+    };
+
+    it("is off when no variable is set", () => {
+      expect(parseConfig(validEnv).proxmox).toBeNull();
+    });
+
+    it("reads all four variables", () => {
+      expect(parseConfig({ ...validEnv, ...proxmoxEnv }).proxmox).toEqual({
+        url: "https://192.0.2.1:8006",
+        node: "pve",
+        token: "user@pve!name=secret-value",
+        caFile: "/etc/bots/ca.pem",
+      });
+    });
+
+    it.each(Object.keys(proxmoxEnv))("rejects a missing %s and never echoes the token", (name) => {
+      const parse = () => parseConfig({ ...validEnv, ...proxmoxEnv, [name]: "" });
+      expect(parse).toThrow(`${name} is required`);
+      try {
+        parse();
+      } catch (error) {
+        expect(String(error)).not.toContain("secret-value");
+      }
+    });
+
+    it("rejects a URL that is not https", () => {
+      expect(() => parseConfig({ ...validEnv, ...proxmoxEnv, PROXMOX_URL: "http://192.0.2.1:8006" })).toThrow("https://");
+    });
+  });
 });

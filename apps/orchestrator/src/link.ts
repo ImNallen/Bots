@@ -27,6 +27,7 @@ export type LinkOutcome =
   | { outcome: "unavailable"; output: string; truncated: false };
 
 export type Link = {
+  isConnected: (ownerId: Id<"users">) => boolean;
   call: (args: {
     ownerId: Id<"users">;
     callId: string;
@@ -296,6 +297,7 @@ export function startLink(args: {
   }
 
   return {
+    isConnected: (ownerId) => connections.has(ownerId),
     async call(call) {
       for (;;) {
         const connection = connections.get(call.ownerId);

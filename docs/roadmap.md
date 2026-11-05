@@ -27,7 +27,7 @@ Backups are deferred. Add off-server copies of Convex exports and the master key
 - The control VM deploys a branch until someone deploys another. It runs `main` now. To update it, run [the deploy script](../infra/control-vm/README.md).
 - User VMs use the `botsvms` network, `10.77.0.0/24`, with the gateway at `10.77.0.1`. The control VM is `10.78.0.2` on `botsctl`, `10.78.0.0/30`. The link listens only on `10.78.0.2:8788`.
 - VM 9000, `bots-user-template`, is the template for user VMs. Its description names the commit of its `computerd`.
-- VM 201, `bots-user-201`, at `10.77.0.21`, is the owner's computer for now. It is a hand clone with 2 cores, 2 GB of memory, and a 16 GB disk, and the reconcile loop will replace it. Reach it with `qm guest exec` on the host, because it accepts no inbound connections and has no SSH keys.
+- VM 201, `bots-user-201`, at `10.77.0.21`, is the owner's computer. The orchestrator's reconcile loop owns it, and it is in slot 1. Reach it with `qm guest exec` on the host, because it accepts no inbound connections and has no SSH keys.
 - Your Mac has its own Convex data and its own Mistral key, separate from the control VM.
 
 ## Decisions for step 3
@@ -54,8 +54,8 @@ Step 3 also has to decide how an update reaches `computerd` on existing VMs. Not
 
 1. Done. The networks and their rules run on Proxmox, and `infra/proxmox/verify-network.sh` passes against the real control VM. That script still has to run from VMs that the template creates, because step 3's check is about those VMs.
 2. Done. VM 9000 is the template, with `computerd` under systemd. A hand-cloned VM connects over the link, and `pnpm verify:template` runs a tool on it from a real chat.
-3. Next. Build the reconcile loop, with the scoped API token and pool, and call `computers.register` from it. The check is to kill it at each stage and confirm that it converges. The provisioner must follow `infra/proxmox/clone-user-vm.sh`. That script sets `firewall=1`, the MAC filter, and `ipfilter-net0` on the VM, and the VM makes its own token, so only the hash leaves it.
-4. Decide how updates reach `computerd`, then run the full network check from template VMs.
+3. Done. The orchestrator converges each computer from its desired state in Convex, using a Proxmox token scoped to one pool. `scripts/verify-reconcile.ts` kills it at each stage, and `pnpm test` kills it between every pair of calls against a fake Proxmox.
+4. Next. Decide how updates reach `computerd`, then run the full network check from template VMs.
 
 ## After step 3: deploy from `main`
 
@@ -93,7 +93,11 @@ These are open on purpose. Fix each one when the work reaches it.
 - `pnpm verify:tailnet` does not check that `systemd-resolved` on port 5355 and SSH on port 22 stay private, and both answer on the VM's LAN address today. User VMs cannot reach them, which `infra/proxmox/verify-network.sh` proves.
 - A host reboot loaded `bots-guard.service` before the guests and the rules held afterward. No reboot has tested the failure cases, which are an empty `home_public` set stopping autostart and a boot with no internet using the cached address.
 - A bot can reach the router's admin console after the home public address changes, until the next successful refresh. The refresh runs every minute but depends on `api.ipify.org`, so an outage of that site extends the gap. The owner accepted this risk and chose not to add a router rule. A rule would have to keep DNS open, because the Proxmox host uses the router for DNS.
-- A kill during `qm clone` in `infra/proxmox/clone-user-vm.sh` leaves a locked VM with the template's tag. A rerun refuses it instead of converging. The reconcile loop must treat a locked VM as a normal state.
+- A host crash during a clone leaves a locked VM outside the pool. The loop reports `failed` on every pass, because only `root` can clear the lock. Killing the orchestrator does not cause this, because the clone runs on the host.
+- Removing a computer while its first clone is still running leaves a VM that no computer owns. The next computer in that slot would adopt that VM and its disk.
+- `computers:declareVm` and `computers:removeVm` have no UI yet, and a removed test user stays in the `users` table. Step 6 needs the UI.
+- The Proxmox token can destroy any VM in its pool, including the template, and it can run commands as root in user VMs. The orchestrator holds it, so a compromised orchestrator can do these things. It cannot touch VM 110 or the host.
+- A disk that grows on a running VM reaches the guest's filesystem at the VM's next boot. A size change that also changes memory or cores restarts the VM, and a change to the disk alone does not.
 - VM 110 has no firewall of its own, and SSH and LLMNR listen on its `10.78.0.2` address. Only `bots_guard` stops a user VM from reaching them. `verify-network.sh` fails if that table is missing, and guests do not autostart without it.
 - The rules limit where a bot connects, not how much it sends. A bot can flood the link port, and it can connect to port 25 on any public address from the home IP address.
 - Bots cannot be deleted, so `pnpm verify:tailnet` leaves `verify-tailnet-*` bots in the user's list.

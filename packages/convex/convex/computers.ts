@@ -2,6 +2,9 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server.js";
 import { requireService, upsertUser } from "./identity.js";
 
+// Slot n is VM 200 + n at 10.77.0.(20 + n), so 200 slots stay inside the user network.
+const MAX_SLOT = 200;
+
 export const register = mutation({
   args: {
     ownerSubject: v.string(),
@@ -43,5 +46,127 @@ export const byTokenHash = query({
       .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
       .first();
     return computer === null ? null : { computerId: computer._id, ownerId: computer.ownerId };
+  },
+});
+
+export const declareVm = mutation({
+  args: {
+    ownerSubject: v.string(),
+    email: v.string(),
+    displayName: v.string(),
+    cores: v.number(),
+    memoryMb: v.number(),
+    diskGb: v.number(),
+  },
+  handler: async (ctx, { ownerSubject, email, displayName, cores, memoryMb, diskGb }) => {
+    await requireService(ctx);
+    for (const [name, value] of Object.entries({ cores, memoryMb, diskGb })) {
+      if (!Number.isInteger(value) || value < 1) {
+        throw new ConvexError(`${name} must be a positive integer`);
+      }
+    }
+    const ownerId = await upsertUser(ctx, { authSubject: ownerSubject, email, displayName });
+    const existing = await ctx.db
+      .query("computers")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .unique();
+    if (existing?.desiredVm?.removing === true) {
+      throw new ConvexError("This computer is being removed");
+    }
+    let slot = existing?.desiredVm?.slot;
+    if (slot === undefined) {
+      const computers = await ctx.db.query("computers").collect();
+      const taken = new Set(computers.map((computer) => computer.desiredVm?.slot));
+      slot = 1;
+      while (taken.has(slot)) {
+        slot += 1;
+      }
+      if (slot > MAX_SLOT) {
+        throw new ConvexError("Every VM slot is taken");
+      }
+    }
+    const desiredVm = { slot, cores, memoryMb, diskGb, removing: false };
+    if (existing === null) {
+      const computerId = await ctx.db.insert("computers", { ownerId, desiredVm });
+      return { computerId, slot };
+    }
+    await ctx.db.patch(existing._id, { desiredVm });
+    return { computerId: existing._id, slot };
+  },
+});
+
+// Removing the hash here makes the link refuse the VM at once, before the VM is gone.
+export const removeVm = mutation({
+  args: { ownerSubject: v.string() },
+  handler: async (ctx, { ownerSubject }) => {
+    await requireService(ctx);
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_auth_subject", (q) => q.eq("authSubject", ownerSubject))
+      .unique();
+    if (user === null) {
+      throw new ConvexError("No such user");
+    }
+    const computer = await ctx.db
+      .query("computers")
+      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      .unique();
+    if (computer?.desiredVm === undefined) {
+      throw new ConvexError("This user has no provisioned computer");
+    }
+    await ctx.db.patch(computer._id, { tokenHash: undefined, desiredVm: { ...computer.desiredVm, removing: true } });
+  },
+});
+
+export const desiredVms = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireService(ctx);
+    const computers = await ctx.db.query("computers").collect();
+    return computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm }) =>
+      desiredVm === undefined ? [] : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm }],
+    );
+  },
+});
+
+export const recordObservedVm = mutation({
+  args: { computerId: v.id("computers"), stage: v.string(), detail: v.optional(v.string()) },
+  handler: async (ctx, { computerId, stage, detail }) => {
+    await requireService(ctx);
+    await ctx.db.patch(computerId, { observedVm: { stage, detail, at: Date.now() } });
+  },
+});
+
+export const recordVmToken = mutation({
+  args: { computerId: v.id("computers"), tokenHash: v.string() },
+  handler: async (ctx, { computerId, tokenHash }) => {
+    await requireService(ctx);
+    const computer = await ctx.db.get(computerId);
+    if (computer === null) {
+      throw new ConvexError("No such computer");
+    }
+    if (computer.desiredVm?.removing === true) {
+      throw new ConvexError("This computer is being removed");
+    }
+    const holder = await ctx.db
+      .query("computers")
+      .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
+      .first();
+    if (holder !== null && holder._id !== computerId) {
+      throw new ConvexError("This computer token belongs to another computer");
+    }
+    await ctx.db.patch(computerId, { tokenHash });
+  },
+});
+
+export const forgetVm = mutation({
+  args: { computerId: v.id("computers") },
+  handler: async (ctx, { computerId }) => {
+    await requireService(ctx);
+    const computer = await ctx.db.get(computerId);
+    if (computer?.desiredVm?.removing !== true) {
+      throw new ConvexError("Only a computer being removed can be forgotten");
+    }
+    await ctx.db.delete(computerId);
   },
 });
