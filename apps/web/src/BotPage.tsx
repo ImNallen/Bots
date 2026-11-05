@@ -324,10 +324,10 @@ function BotThread({ botId }: { botId: Id<"bots"> }) {
 }
 
 const APPROVAL_LEVELS = [
-  ["outside", "Ask before shell commands and browser actions that change something"],
-  ["everything", "Ask before everything"],
-  ["shell", "Ask before shell commands only"],
-  ["nothing", "Never ask"],
+  ["outside", "Shell commands and page changes"],
+  ["everything", "Everything"],
+  ["shell", "Shell commands only"],
+  ["nothing", "Nothing"],
 ] as const;
 
 function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof APPROVAL_LEVELS)[number][0] }) {
@@ -335,7 +335,7 @@ function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof A
   const [problem, setProblem] = useState<string | null>(null);
   return (
     <label className="approval-setting">
-      <span>Approvals</span>
+      <span>Ask before</span>
       <select
         value={level}
         onChange={(event) => {
