@@ -24,9 +24,9 @@ Backups are deferred. Add off-server copies of Convex exports and the master key
 - The control VM is VM 110, `bots-control`, at `192.168.1.161`. Log in as `bots` over SSH, which has passwordless `sudo`. The app is in `/opt/bots`.
 - Run `sudo tailscale serve status` on the control VM to find its `https://bots-control.<tailnet>.ts.net` address.
 - The service runs as `bots-orchestrator`, which has no `sudo`. Keep it separate from the `bots` login: a process can take over another process of its own user, and `bots` has `sudo`.
-- The control VM deploys a branch until someone deploys another. It runs `t3/step-3-proxmox` now, so run [the deploy script](../infra/control-vm/README.md) with `main` after that branch merges.
+- The control VM deploys a branch until someone deploys another. It runs `main` now. To update it, run [the deploy script](../infra/control-vm/README.md).
 - User VMs use the `botsvms` network, `10.77.0.0/24`, with the gateway at `10.77.0.1`. The control VM is `10.78.0.2` on `botsctl`, `10.78.0.0/30`. The link listens only on `10.78.0.2:8788`.
-- VM 9000, `bots-user-template`, is the template for user VMs. Its description names the commit of its `computerd`. It was built from `t3/step-3-template`, so rebuild it from `main` after that branch merges.
+- VM 9000, `bots-user-template`, is the template for user VMs. Its description names the commit of its `computerd`.
 - VM 201, `bots-user-201`, at `10.77.0.21`, is the owner's computer for now. It is a hand clone with 2 cores, 2 GB of memory, and a 16 GB disk, and the reconcile loop will replace it. Reach it with `qm guest exec` on the host, because it accepts no inbound connections and has no SSH keys.
 - Your Mac has its own Convex data and its own Mistral key, separate from the control VM.
 
