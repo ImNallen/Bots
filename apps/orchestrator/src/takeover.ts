@@ -25,17 +25,18 @@ export async function waitWhileTakenOver(args: {
       waiting = true;
       onWait();
     }
+    // A take-over can last minutes, and a lease's signals outlive this wait, so each delay removes the listeners it added.
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, pollMs);
+      const finish = () => {
+        clearTimeout(timer);
+        for (const signal of signals) {
+          signal.removeEventListener("abort", finish);
+        }
+        resolve();
+      };
+      const timer = setTimeout(finish, pollMs);
       for (const signal of signals) {
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        signal.addEventListener("abort", finish, { once: true });
       }
     });
   }

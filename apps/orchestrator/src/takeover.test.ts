@@ -91,4 +91,31 @@ describe("waitWhileTakenOver", () => {
     }).done;
     expect(answers).toBe(0);
   });
+
+  it("leaves no listeners on the run's signals, however long the wait lasts", async () => {
+    const lost = new AbortController();
+    let added = 0;
+    let removed = 0;
+    const { signal } = lost;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((...args: Parameters<typeof add>) => {
+      added += 1;
+      add(...args);
+    }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((...args: Parameters<typeof remove>) => {
+      removed += 1;
+      remove(...args);
+    }) as typeof signal.removeEventListener;
+    let answers = 0;
+    await run({
+      until: async () => {
+        answers += 1;
+        return answers < 20 ? 5000 : 0;
+      },
+      signals: [signal],
+    }).done;
+    expect(added).toBe(19);
+    expect(removed).toBe(added);
+  });
 });

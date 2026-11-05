@@ -237,7 +237,8 @@ function TypingBox({ send }: { send: Send }) {
         }
       }}
       onKeyDown={(event) => {
-        if (NAMED_KEYS.has(event.key)) {
+        // During composition these keys choose or confirm a word for the keyboard, and they are not meant for the page.
+        if (NAMED_KEYS.has(event.key) && !composing.current && !event.nativeEvent.isComposing) {
           event.preventDefault();
           flush(event.currentTarget);
           send({ kind: "key", key: event.key });
