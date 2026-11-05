@@ -3,6 +3,7 @@ import {
   MAX_ORCHESTRATOR_MESSAGE_BYTES,
   orchestratorMessage,
   parseJsonMessage,
+  type BrowserInputEvent,
   type ComputerMessage,
   type ToolResult,
 } from "@bots/protocol";
@@ -27,8 +28,9 @@ export function connectLink(args: {
   token: string;
   calls: Calls;
   openScreen: (streamId: string, botId: string) => void;
+  onInput: (botId: string, event: BrowserInputEvent) => void;
 }): void {
-  const { url, token, calls, openScreen } = args;
+  const { url, token, calls, openScreen, onInput } = args;
   let retryMs = FIRST_RETRY_MS;
 
   function connect(): void {
@@ -81,6 +83,9 @@ export function connectLink(args: {
         case "screenOpen":
           log({ level: "info", event: "screen-open", botId: message.botId });
           openScreen(message.streamId, message.botId);
+          return;
+        case "screenInput":
+          onInput(message.botId, message.event);
           return;
         case "cancelTool":
           log({ level: "info", event: "tool-cancel", callId: message.callId });

@@ -186,7 +186,9 @@ The tests did not cover noVNC on a phone. The step 4 check does.
 
 A VM accepts no inbound connections, so a stream is one more outbound connection. The web app opens a WebSocket to the orchestrator. The orchestrator asks `computerd` over the link for that bot's screen, and `computerd` dials back to the link port with its token. The orchestrator then relays bytes between the two, and it accepts a dial only for a stream that it asked for, from a computer of the bot's owner.
 
-Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host. Without this check, any site that a user visits could watch that user's screens.
+During a take-over, the bot waits before its next tool. That state is in Convex, so a restarted orchestrator keeps waiting, and if it cannot read the state it waits too, because starting a tool while a person may be typing is the worse mistake. Input has its own WebSocket, separate from the stream. It takes only a short list of event kinds, and nothing that carries an event logs or stores it, because an event can hold a password. If the owner leaves without giving back, the take-over expires after 15 minutes and the bot carries on.
+
+Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
 
 ## Where secrets live
 

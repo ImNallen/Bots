@@ -53,7 +53,7 @@ function fakeChromium() {
           case "Target.attachToTarget":
             return { sessionId: `session-${String(params.targetId)}` };
           case "Browser.getWindowForTarget":
-            return { windowId: params.targetId };
+            return { windowId: params.targetId, bounds: windows.get(String(params.targetId)) ?? { left: 0, top: 0 } };
           case "Browser.setWindowBounds": {
             const bounds = params.bounds as Record<string, unknown>;
             if (bounds.left !== undefined) {
@@ -65,6 +65,9 @@ function fakeChromium() {
             const expression = String(params.expression);
             if (expression === "document.readyState") {
               return { result: { value: "complete" } };
+            }
+            if (expression === "outerHeight - innerHeight") {
+              return { result: { value: 85 } };
             }
             if (expression.includes("scrollIntoView")) {
               return { result: { value: locateResult } };
@@ -223,6 +226,53 @@ describe("browser", () => {
     const input = chromium.sent.filter((entry) => entry.method.startsWith("Input."));
     expect(input.length).toBeGreaterThan(2);
     expect(new Set(input.map((entry) => entry.sessionId))).toEqual(new Set([`session-${pageB}`]));
+  });
+
+  describe("a person's pointer", () => {
+    const mouseEvents = () => chromium.sent.filter((entry) => entry.method === "Input.dispatchMouseEvent");
+
+    it("maps a point on the stream to a point in the page, below the window's bars", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      chromium.sent.length = 0;
+      await browser.input("a", { kind: "pointer", x: 640, y: 400, action: "down" });
+      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mousePressed", x: 640, y: 315, button: "left", buttons: 1 });
+    });
+
+    it("ignores a click on the window's bars, which CDP input cannot reach", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      chromium.sent.length = 0;
+      await browser.input("a", { kind: "pointer", x: 640, y: 40, action: "down" });
+      expect(mouseEvents()).toEqual([]);
+    });
+
+    it("maps a point on the second screen the same way, relative to that screen", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      await browser.regionFor("b");
+      chromium.sent.length = 0;
+      await browser.input("b", { kind: "pointer", x: 640, y: 400, action: "up" });
+      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseReleased", x: 640, y: 315 });
+    });
+
+    it("maps a point inside a popup, which sits inset on its screen", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      const opener = [...chromium.pages][0] as string;
+      await chromium.openPopup(opener);
+      chromium.sent.length = 0;
+      await browser.input("a", { kind: "pointer", x: 300, y: 300, action: "down" });
+      expect(mouseEvents()[0]?.params).toMatchObject({ x: 240, y: 155 });
+    });
+
+    it("scrolls the page at that point", async () => {
+      const browser = browserOf();
+      await browser.regionFor("a");
+      chromium.sent.length = 0;
+      await browser.input("a", { kind: "scroll", x: 640, y: 400, dx: 0, dy: 120 });
+      expect(mouseEvents()[0]?.params).toMatchObject({ type: "mouseWheel", x: 640, y: 315, deltaY: 120 });
+    });
   });
 
   it("reports a stale ref as an error that tells the bot what to do", async () => {

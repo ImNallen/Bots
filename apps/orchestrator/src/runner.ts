@@ -5,6 +5,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
+import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
@@ -177,6 +178,13 @@ async function runTool(args: {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
+  await waitWhileTakenOver({
+    until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),
+    now: Date.now,
+    signals: [lease.lost, lease.cancel],
+    onWait: () => deps.log({ level: "info", event: "tool-waiting-for-takeover", runId, toolCallId: call.id }),
+  });
+  lease.lost.throwIfAborted();
   const callId = makeCallId({ runId, toolCallId: call.id });
   deps.log({ level: "info", event: "tool-dispatch", callId, tool: parsed.invocation.name });
   const result = await deps.link.call({
