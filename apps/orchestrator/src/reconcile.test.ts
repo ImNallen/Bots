@@ -208,12 +208,12 @@ async function pass(world: World, overrides: { proxmox?: Proxmox; want?: Desired
     installedCommit: world.installedCommit,
     observed: world.observed,
     now: world.now,
+    busy: world.busy,
     report: effects.report,
     recordCommit: effects.recordCommit,
     recordToken: effects.recordToken,
     forget: effects.forget,
     isConnected: () => world.connected,
-    isBusy: () => world.busy,
     disconnect: () => {
       world.log.push("disconnect");
       world.connected = false;
@@ -491,37 +491,65 @@ describe("reconcileVm", () => {
   });
 
   describe("repair", () => {
-    it("leaves a VM alone while it may just be connecting", async () => {
+    const PASS_MS = 15_000;
+
+    // The real loop passes every 15 seconds, so a stage that flaps between passes never grows old.
+    async function passesFor(world: World, ms: number): Promise<Stage[]> {
+      const stages: Stage[] = [];
+      for (let elapsed = 0; elapsed < ms; elapsed += PASS_MS) {
+        world.now += PASS_MS;
+        stages.push(...(await pass(world)).stages);
+      }
+      return stages;
+    }
+
+    it("runs nothing on a VM that may just be connecting", async () => {
       const world = newWorld();
       world.connected = false;
       await pass(world);
       world.log.length = 0;
-      world.now += 60_000;
-      expect((await pass(world)).stage).toBe("connecting");
+      const stages = await passesFor(world, 60_000);
+      expect(world.log).toEqual([]);
+      expect(new Set(stages)).toEqual(new Set(["connecting"]));
+    });
+
+    it("reinstalls computerd when a VM stays disconnected across real passes", async () => {
+      const world = newWorld();
+      world.connected = false;
+      await pass(world);
+      world.log.length = 0;
+      await passesFor(world, 3 * 60_000);
+      expect(world.log).toContain("repair");
+    });
+
+    it("waits again after a repair instead of repairing on every pass", async () => {
+      const world = newWorld();
+      world.connected = false;
+      await pass(world);
+      world.log.length = 0;
+      await passesFor(world, 2 * 60_000 + PASS_MS * 2);
+      const repairs = world.log.filter((entry) => entry === "repair").length;
+      expect(repairs).toBe(1);
+      world.log.length = 0;
+      await passesFor(world, 60_000);
       expect(world.log).not.toContain("repair");
     });
 
-    it("reinstalls computerd when a VM stays disconnected, and then waits again", async () => {
+    it("repairs a VM that was ready and then lost its connection", async () => {
       const world = newWorld();
+      await pass(world);
       world.connected = false;
-      await pass(world);
       world.log.length = 0;
-      world.now += 3 * 60_000;
-      const { stages } = await pass(world);
-      expect(stages).toContain("repairing");
+      await passesFor(world, 3 * 60_000);
       expect(world.log).toContain("repair");
-      world.log.length = 0;
-      world.now += 60_000;
-      await pass(world);
-      expect(world.log).not.toContain("repair");
+      expect(world.tokenHash).toBe(HASH);
     });
 
     it("does not repair a connected VM", async () => {
       const world = newWorld();
       await pass(world);
       world.log.length = 0;
-      world.now += 60 * 60_000;
-      await pass(world);
+      await passesFor(world, 10 * 60_000);
       expect(world.log).toEqual([]);
     });
   });

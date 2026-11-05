@@ -22,7 +22,7 @@ export function startReconciler(args: {
   async function pass(): Promise<void> {
     const computers = await service.query(api.computers.desiredVms, {});
     for (const computer of computers) {
-      const { computerId, ownerId, tokenHash, desiredVm, observedVm, computerdCommit } = computer;
+      const { computerId, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun } = computer;
       let reported = observedVm?.stage;
       const record = async (stage: string, detail?: string) => {
         if (stage !== reported || detail !== undefined) {
@@ -41,6 +41,7 @@ export function startReconciler(args: {
           installedCommit: computerdCommit,
           observed: observedVm,
           now: Date.now(),
+          busy: hasActiveRun,
           report: record,
           recordCommit: async (commit) => {
             await service.mutation(api.computers.recordComputerdCommit, { computerId, commit });
@@ -52,7 +53,6 @@ export function startReconciler(args: {
             await service.mutation(api.computers.forgetVm, { computerId });
           },
           isConnected: () => link.isConnected(ownerId),
-          isBusy: () => link.isBusy(ownerId),
           disconnect: () => link.disconnect(ownerId),
         });
       } catch (error) {

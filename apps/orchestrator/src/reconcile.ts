@@ -160,16 +160,16 @@ export async function reconcileVm(args: {
   installedCommit: string | undefined;
   observed: { stage: string; at: number } | undefined;
   now: number;
+  busy: boolean;
   report: (stage: Stage) => Promise<void>;
   recordToken: (tokenHash: string) => Promise<void>;
   recordCommit: (commit: string) => Promise<void>;
   forget: () => Promise<void>;
   isConnected: () => boolean;
-  isBusy: () => boolean;
   disconnect: () => void;
 }): Promise<Stage> {
-  const { proxmox, desired, linkUrl, tokenHash, install, installedCommit, observed, now } = args;
-  const { report, recordToken, recordCommit, forget, isConnected, isBusy, disconnect } = args;
+  const { proxmox, desired, linkUrl, tokenHash, install, installedCommit, observed, now, busy } = args;
+  const { report, recordToken, recordCommit, forget, isConnected, disconnect } = args;
   const vmid = vmidFor(desired.slot);
   const address = addressFor(desired.slot);
 
@@ -233,8 +233,13 @@ export async function reconcileVm(args: {
     return stopAt("ready");
   }
   // An update restarts computerd, which interrupts a running tool. The computer works meanwhile, so this waits for a quiet pass.
-  if (isConnected() && isBusy()) {
+  if (isConnected() && busy) {
     return stopAt("ready");
+  }
+  // Changing the stage here would restart this clock on every pass, so a disconnected VM runs nothing until the clock runs out.
+  const repairDue = !isConnected() && observed?.stage === "connecting" && now - observed.at > REPAIR_AFTER_MS;
+  if (tokenHash !== undefined && !isConnected() && !needsUpdate && !repairDue) {
+    return stopAt("connecting");
   }
 
   if (!(await proxmox.agentResponds(vmid))) {
@@ -257,7 +262,7 @@ export async function reconcileVm(args: {
   if (needsUpdate) {
     await report("updating");
     await runInstall(false);
-  } else if (!isConnected() && observed?.stage === "connecting" && now - observed.at > REPAIR_AFTER_MS) {
+  } else if (repairDue) {
     // A user has no SSH, and a bot cannot help once computerd is down, so only this can bring a broken computer back.
     await report("repairing");
     await runInstall(true);

@@ -123,8 +123,17 @@ export const desiredVms = query({
   handler: async (ctx) => {
     await requireService(ctx);
     const computers = await ctx.db.query("computers").collect();
+    // Run state is durable, so this holds right after a restart, before the runner has picked its runs back up.
+    const owners = new Set<string>();
+    for (const kind of ["queued", "running"] as const) {
+      for await (const run of ctx.db.query("runs").withIndex("by_state", (q) => q.eq("state.kind", kind))) {
+        owners.add(run.ownerId);
+      }
+    }
     return computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }) =>
-      desiredVm === undefined ? [] : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }],
+      desiredVm === undefined
+        ? []
+        : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun: owners.has(ownerId) }],
     );
   },
 });
