@@ -134,42 +134,71 @@ Bots and users install their own software on their VMs, so an update must not to
 
 - Each release has its own directory under `/opt/bots-computerd` and its own Node, so a bot that changes the system's Node does not affect `computerd`.
 - Everything new gets a new directory, and one symlink selects a release, so a kill or a failed download leaves the selected release whole, even during a repair. A second run waits on a lock.
-- The script changes nothing outside that directory, except the sudoers file, the unit file, and any tool that `computerd` needs and a bot removed.
+- The script changes nothing outside that directory, except the sudoers file, its unit files, and any package that `computerd` or a desktop needs and a bot removed. It installs `apps/computerd/desktop` as the desktop units. No step stops a running desktop, so a repair does not cost a bot its page, and a desktop takes new unit text at its next start.
 
 The deploy script records the last commit that changed `computerd`, and VMs follow that commit. So the orchestrator and `computerd` stay compatible, and a deploy that leaves `computerd` alone restarts nothing on a VM. An update restarts `computerd`, which reports a running tool as interrupted, so an update has two parts. The build is slow and restarts nothing. Then the loop sets a fence in Convex, and `computers.fenceForUpdate` succeeds only if the owner has no queued or running run. While the fence holds, `runs.claim` refuses that owner's runs, and only a claimed run can call a tool. Convex runs both mutations atomically, so a run and a restart cannot overlap. A new message waits a few seconds. Memory could not do this, because a deploy restarts the orchestrator. The fence expires after a minute, so a crash cannot strand a run.
 
 A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM stays disconnected for 2 minutes, the loop reinstalls `computerd`.
 
-## Why screens share one browser
+## How each bot's desktop runs
 
-The roadmap replaces this design with a desktop for each bot, and its next section has the reasons and the test results. This section describes what runs today.
+Each active bot on a VM has a real Linux desktop: its own X display, Xfce, its own Chromium, and a view-only stream. `computerd` starts a desktop when a bot or a viewer first needs it, and stops it after an hour with no use.
 
-Each bot has its own screen, and all of a user's bots share logins. These two requirements conflict in the obvious design, one X display for each bot. Chromium locks a profile to one process, and that process stays on one display.
+The first design put every bot in one wide display with one shared browser, because Chromium locks a profile to one process, and that process stays on one display. A copy of a profile for each bot removes that limit. A test on a real VM then showed that a browser per bot works, so `computerd` no longer moves popups between regions, keeps a page list on disk, or streams a cropped part of a screen. [The roadmap](roadmap.md) has that test's results.
 
-The design that works has one wide virtual display. Each bot gets one Chromium window in its own 1280x800 region of that display. A cropped `x11vnc` stream shows each region.
+### systemd owns every process
 
-We tested this in an arm64 Debian container against a local page:
+A desktop is five files in `apps/computerd/desktop`, and a slot number from 1 to 8 is the unit's instance. `computerd` starts one name, `computerd-desktop@N.target`, and stops one name, `computerd-xvfb@N.service`. Everything binds to the display, so a stop returns only after Chromium has exited and its profile and ports are free. A test with a browser that ignored SIGTERM saw that stop take 10 seconds, which is `TimeoutStopSec`.
 
-| Test | Result |
-|---|---|
-| Open the same profile on a second display | The page opened on display 1, and display 2 stayed empty |
-| Bot B visits a site after bot A logs in | Bot B sent bot A's HTTP-only cookie |
-| Two bots type 100 characters each through CDP at once | Neither input mixed with the other |
-| Simulated user types on screen A while a bot types on screen B | Neither input mixed with the other |
-| Two windows receive `xdotool` input at once | Characters landed in the wrong windows |
-| Bot B opens a popup | The popup opened on screen A until CDP moved it to screen B |
-| One VNC stream per region | Each stream returned 1280x800 and the correct page color |
+A desktop's processes sit in their own cgroups, outside `computerd.service`, so an update that restarts `computerd` does not touch them. `computerd` needs root for two exact commands, which the sudoers file names, and `desktop-files.test.ts` fails the build if those drift from the code.
 
-A second test on a real user VM covered four screens, real websites, input through a VNC stream, and Chromium with its sandbox on:
+`computerd` runs `systemctl start` on every browser tool call. Starting is safe on a running desktop, and it brings back a part that is down, so `computerd` has no other health check. It takes about 10 ms on a real VM. Take-over input does not do this, because a pointer move must not run `sudo`.
+
+| What dies | What systemd does | What a bot and a viewer see |
+|---|---|---|
+| `computerd` | Leaves the desktops alone, and restarts `computerd` after 2 seconds | The same screen. A viewer's relay ended, so "Try again" reconnects to it |
+| Chromium | Kills the rest of its cgroup, and restarts it after 2 seconds | A running step fails. The next step gets the stale ref error, and the snapshot says `about:blank`. A viewer stays connected |
+| `x11vnc` | Restarts it after 2 seconds | The viewer's stream ends, and "Try again" works. The bot notices nothing |
+| Xfce | Restarts it after 2 seconds | The panel blinks. CDP is untouched |
+| Xvfb | Stops the whole desktop, and restarts nothing | A running step fails, and the page is gone. The next use starts the whole desktop on the same profile |
+| The VM reboots | Starts no desktop, because the units have no `[Install]` | The next use starts a desktop on the bot's profile, on a blank page |
+
+`infra/proxmox/verify-desktop.sh` proves each row on a real VM, and it needs no link.
+
+### Who holds a slot
+
+Each desktop's ports derive from its slot: `9300 + slot` for CDP and `5900 + slot` for the stream. Two records say the rest. systemd says which slots are live. `/run/computerd/desktop-N.env` says which bot holds a slot, and units read it at each start. It lives in `/run`, so a reboot clears it along with the processes it describes.
+
+`computerd` writes that file only while the slot is dead: stop, write, start. Each step is safe to repeat and safe to die after, so a crash at any point leaves one of three states, and a new `computerd` reads them all the same way. A live slot with a holder is that bot's. A live slot with no holder, or with a holder that another slot already claimed, gets stopped. A dead slot is free. A test kills `computerd` before and after every call to systemd, and no bot ever gets another bot's browser.
+
+### When a desktop stops
+
+A hold means a desktop is in use. Every tool call holds its bot's desktop, including a shell command, so a long build cannot lose the page the bot left open. A viewer's stream holds its desktop for as long as it runs, so a screen never stops under a person. A hold blocks both ways to stop a desktop:
+
+- After an hour with no hold, a timer stops the desktop to save memory. A desktop takes about 250 MB of anonymous memory when idle, and about 330 MB with a Wikipedia page open.
+- When a ninth bot needs a slot, the bot that has gone longest without a hold gives up its slot. If all 8 are held, the ninth bot gets an error.
+
+A bot that comes back gets any free slot, the same profile, and a blank page. A click from before then gets the stale ref error, so it can never land on the wrong page.
+
+### Which page a bot acts on
+
+Each browser belongs to one bot, so every page in it is that bot's. `computerd` keeps one CDP socket per bot and asks Chromium for its targets on every look. The newest page is the current one, so a popup is current until it closes. This needs no events, no window moves, and no state file. After a `computerd` restart, the list rebuilds with pages that have an opener last, so a popup stays current.
+
+### Where a profile comes from
+
+A bot's profile is `/home/browser/profiles/<botId>`, and it starts as a copy of `/home/browser/profile`, the base. Nothing opens the base, so nothing can damage a login in it. VM 201's logins became the base without moving. A real cookie written by the old shared browser reads back from a copied profile, with `--password-store=basic`. The copy goes to `<botId>.tmp` and is renamed when whole, so a kill midway leaves nothing that a later start could use by mistake. The update stops the old browser before anything can copy the base.
+
+### What the browser tests showed
+
+We tested a shared browser in an arm64 Debian container against a local page, and later on a real user VM with real websites and the sandbox on. These results still set rules for each browser:
 
 | Test | Result |
 |---|---|
 | Chromium under its own user, with its sandbox on | `chrome://sandbox` reports that it is adequately sandboxed |
-| Four 1280x800 regions in one display, each with its own VNC stream | Each stream returned 1280x800 and the correct page |
-| Real websites on all four screens | Wikipedia, Hacker News, GitHub, and MDN loaded and showed on their streams. GitLab stopped at a Cloudflare check |
+| Two windows receive `xdotool` input at once | Characters landed in the wrong windows |
+| Two bots type 100 characters each through CDP at once | Neither input mixed with the other |
 | Type through a VNC stream right after a click on another screen | The first keys reached the previous screen's window, even after a 200 ms wait |
 | Type through CDP with X focus on another window | Every key reached its page, on every target |
-| Another bot navigates, opens a window, opens a popup, or brings itself to front during that typing | Nothing changed, although X focus moved |
 | Send keys and clicks through a VNC stream started with `-viewonly` | No screen received any input |
 | Change a dropdown through CDP | The menu appeared on the stream. The keyboard changed the value, and a mouse click on an option did not |
 | Type into the real login forms of GitHub and Wikipedia through CDP | The fields took the text, and `navigator.webdriver` was false |
@@ -178,13 +207,12 @@ A second test on a real user VM covered four screens, real websites, input throu
 The results set these rules:
 
 - Bots drive the browser through CDP, not through desktop input.
-- A person's input also goes through CDP, to one page. Every VNC stream is view-only, so no path through X can type into another bot's window. X focus lags behind a click, so a person typing through VNC could put the start of a password into the wrong bot's page.
+- A person's input also goes through CDP, to one page, until take-over moves to noVNC. Every VNC stream is view-only.
 - Take-over has a key bar for arrows, Enter, Esc, and Tab, because a phone has no such keys and dropdowns need them.
-- `computerd` moves each popup to the screen of the bot that opened it.
-- `computerd` keeps one blank window open, because Chromium exits when its last window closes.
-- Screens show the browser only until desktop apps get an input lock.
 
 The tests did not cover noVNC on a phone. The step 4 check does.
+
+### How a stream reaches its owner
 
 A VM accepts no inbound connections, so a stream is one more outbound connection. The web app opens a WebSocket to the orchestrator. The orchestrator asks `computerd` over the link for that bot's screen, and `computerd` dials back to the link port with its token. The orchestrator then relays bytes between the two, and it accepts a dial only for a stream that it asked for, from a computer of the bot's owner.
 
@@ -217,7 +245,7 @@ The orchestrator signs a short-lived JWT with the subject `service:orchestrator`
 
 `computerd` holds only its link token. A VM is untrusted, so the orchestrator validates every link message, closes the socket on an invalid one, accepts a result only for a call it sent on that socket, and caps output again.
 
-Logins that a user types into a VM's browser stay in that VM's shared browser profile, so every bot on that VM can use them. A user logs in through take-over until the Vault ships, so passwords never enter the chat. When the Vault ships, bots lose passwordless `sudo`. Otherwise a bot could read a filled password from browser memory.
+Logins that a user types into a bot's browser stay in that bot's profile on the VM, and [the roadmap](roadmap.md) plans how to copy them to the VM's other bots. A user logs in through take-over until the Vault ships, so passwords never enter the chat. When the Vault ships, bots lose passwordless `sudo`. Otherwise a bot could read a filled password from browser memory.
 
 Chromium and `computerd` run under their own Linux user from the first version to keep that later change small.
 
