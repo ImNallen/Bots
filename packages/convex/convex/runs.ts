@@ -116,6 +116,14 @@ export const claim = mutation({
     if (!claimable) {
       return { kind: "unavailable" as const };
     }
+    // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
+    const computer = await ctx.db
+      .query("computers")
+      .withIndex("by_owner", (q) => q.eq("ownerId", run.ownerId))
+      .unique();
+    if ((computer?.updateFenceUntil ?? 0) > now) {
+      return { kind: "unavailable" as const };
+    }
     // Every attempt passes through here, and a crash cannot lose this count. Each attempt may have paid for a model call.
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {

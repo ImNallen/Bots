@@ -4,6 +4,8 @@ import { requireService, upsertUser } from "./identity.js";
 
 // Slot n is VM 200 + n at 10.77.0.(20 + n), so 200 slots stay inside the user network.
 const MAX_SLOT = 200;
+// Longer than the activate step, which swaps a symlink and restarts one service.
+const UPDATE_FENCE_MS = 60 * 1000;
 
 export const register = mutation({
   args: {
@@ -165,6 +167,39 @@ export const recordVmToken = mutation({
       throw new ConvexError("This computer token belongs to another computer");
     }
     await ctx.db.patch(computerId, { tokenHash });
+  },
+});
+
+// Convex runs a mutation atomically, so this and runs.claim cannot both win. An orchestrator that dies here leaves a fence
+// that expires, so a crash delays a user's run and cannot strand it.
+export const fenceForUpdate = mutation({
+  args: { computerId: v.id("computers") },
+  handler: async (ctx, { computerId }) => {
+    await requireService(ctx);
+    const computer = await ctx.db.get(computerId);
+    if (computer === null) {
+      throw new ConvexError("No such computer");
+    }
+    for (const kind of ["queued", "running"] as const) {
+      const active = await ctx.db
+        .query("runs")
+        .withIndex("by_state", (q) => q.eq("state.kind", kind))
+        .filter((q) => q.eq(q.field("ownerId"), computer.ownerId))
+        .first();
+      if (active !== null) {
+        return { fenced: false };
+      }
+    }
+    await ctx.db.patch(computerId, { updateFenceUntil: Date.now() + UPDATE_FENCE_MS });
+    return { fenced: true };
+  },
+});
+
+export const releaseUpdateFence = mutation({
+  args: { computerId: v.id("computers") },
+  handler: async (ctx, { computerId }) => {
+    await requireService(ctx);
+    await ctx.db.patch(computerId, { updateFenceUntil: undefined });
   },
 });
 

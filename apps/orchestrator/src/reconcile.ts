@@ -3,7 +3,9 @@ import type { Proxmox, VmConfig } from "./proxmox.ts";
 const TEMPLATE_VMID = 9000;
 const VM_TAG = "bots-user";
 const TOKEN_TIMEOUT_MS = 30 * 1000;
-const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+// Shorter than the fence in computers.ts, so computerd is back before a run can be claimed again.
+const ACTIVATE_TIMEOUT_MS = 40 * 1000;
 // Longer than a VM takes to boot and connect, so a slow start is not mistaken for a broken computerd.
 const REPAIR_AFTER_MS = 2 * 60 * 1000;
 const FIREWALL_OPTIONS = {
@@ -164,12 +166,14 @@ export async function reconcileVm(args: {
   report: (stage: Stage) => Promise<void>;
   recordToken: (tokenHash: string) => Promise<void>;
   recordCommit: (commit: string) => Promise<void>;
+  fence: () => Promise<boolean>;
+  releaseFence: () => Promise<void>;
   forget: () => Promise<void>;
   isConnected: () => boolean;
   disconnect: () => void;
 }): Promise<Stage> {
   const { proxmox, desired, linkUrl, tokenHash, install, installedCommit, observed, now, busy } = args;
-  const { report, recordToken, recordCommit, forget, isConnected, disconnect } = args;
+  const { report, recordToken, recordCommit, fence, releaseFence, forget, isConnected, disconnect } = args;
   const vmid = vmidFor(desired.slot);
   const address = addressFor(desired.slot);
 
@@ -246,26 +250,35 @@ export async function reconcileVm(args: {
     return stopAt("waiting-for-agent");
   }
 
-  async function runInstall(force: boolean): Promise<void> {
+  async function runInstall(mode: "build" | "activate" | "force", timeoutMs: number): Promise<void> {
     const installed = await proxmox.exec(
       vmid,
-      ["bash", "-c", install.script, "install-computerd", install.commit, ...(force ? ["force"] : [])],
-      INSTALL_TIMEOUT_MS,
+      ["bash", "-c", install.script, "install-computerd", install.commit, mode],
+      timeoutMs,
     );
     const lastLine = installed.stdout.trim().split("\n").at(-1);
     if (installed.exitCode !== 0 || lastLine !== install.commit) {
-      throw new Error(`VM ${vmid} could not install computerd ${install.commit}, and the script exited with ${installed.exitCode}`);
+      throw new Error(`VM ${vmid} could not ${mode} computerd ${install.commit}, and the script exited with ${installed.exitCode}`);
     }
-    await recordCommit(install.commit);
   }
 
   if (needsUpdate) {
     await report("updating");
-    await runInstall(false);
+    await runInstall("build", BUILD_TIMEOUT_MS);
+    // A run may have started during the build. Only the fence makes it safe to restart, and the built release keeps for the next pass.
+    if (!(await fence())) {
+      return stopAt(isConnected() ? "ready" : "connecting");
+    }
+    try {
+      await runInstall("activate", ACTIVATE_TIMEOUT_MS);
+      await recordCommit(install.commit);
+    } finally {
+      await releaseFence();
+    }
   } else if (repairDue) {
     // A user has no SSH, and a bot cannot help once computerd is down, so only this can bring a broken computer back.
     await report("repairing");
-    await runInstall(true);
+    await runInstall("force", BUILD_TIMEOUT_MS);
   }
 
   await report("making-token");

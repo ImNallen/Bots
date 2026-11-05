@@ -133,10 +133,10 @@ Bots and users install their own software on their VMs, so an update must not to
 `infra/proxmox/install-computerd.sh` builds, updates, and repairs with the same steps:
 
 - Each release has its own directory under `/opt/bots-computerd` and its own Node, so a bot that changes the system's Node does not affect `computerd`.
-- The script swaps one symlink just before the restart, so a kill leaves a whole old release or a whole new one. A second run waits on a lock.
+- Everything new gets a new directory, and one symlink selects a release, so a kill or a failed download leaves the selected release whole, even during a repair. A second run waits on a lock.
 - The script changes nothing outside that directory, except the sudoers file, the unit file, and any tool that `computerd` needs and a bot removed.
 
-The deploy script records the last commit that changed `computerd`, and VMs follow that commit. So the orchestrator and `computerd` stay compatible, and a deploy that leaves `computerd` alone restarts nothing on a VM. An update restarts `computerd`, which reports a running tool as interrupted, so the loop waits until the owner has no queued or running run. It reads that from Convex, because a deploy restarts the orchestrator and the orchestrator's memory is empty at that moment.
+The deploy script records the last commit that changed `computerd`, and VMs follow that commit. So the orchestrator and `computerd` stay compatible, and a deploy that leaves `computerd` alone restarts nothing on a VM. An update restarts `computerd`, which reports a running tool as interrupted, so an update has two parts. The build is slow and restarts nothing. Then the loop sets a fence in Convex, and `computers.fenceForUpdate` succeeds only if the owner has no queued or running run. While the fence holds, `runs.claim` refuses that owner's runs, and only a claimed run can call a tool. Convex runs both mutations atomically, so a run and a restart cannot overlap. A new message waits a few seconds. Memory could not do this, because a deploy restarts the orchestrator. The fence expires after a minute, so a crash cannot strand a run.
 
 A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM stays disconnected for 2 minutes, the loop reinstalls `computerd`.
 

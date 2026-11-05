@@ -43,6 +43,10 @@ export function startReconciler(args: {
           now: Date.now(),
           busy: hasActiveRun,
           report: record,
+          fence: async () => (await service.mutation(api.computers.fenceForUpdate, { computerId })).fenced,
+          releaseFence: async () => {
+            await service.mutation(api.computers.releaseUpdateFence, { computerId });
+          },
           recordCommit: async (commit) => {
             await service.mutation(api.computers.recordComputerdCommit, { computerId, commit });
           },

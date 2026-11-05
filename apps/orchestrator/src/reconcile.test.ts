@@ -29,6 +29,8 @@ type World = {
   forgotten: boolean;
   connected: boolean;
   busy: boolean;
+  fenceRefused: boolean;
+  fenced: boolean;
   now: number;
   log: string[];
   startsWithFilters: boolean[];
@@ -43,6 +45,8 @@ function newWorld(): World {
     forgotten: false,
     connected: true,
     busy: false,
+    fenceRefused: false,
+    fenced: false,
     now: 1_000_000,
     log: [],
     startsWithFilters: [],
@@ -142,7 +146,10 @@ function fakeProxmox(world: World): Proxmox {
     agentResponds: async (id) => vmIn(world, id).agentUp,
     exec: async (id, command) => {
       if (command[3] === "install-computerd") {
-        world.log.push(command[5] === "force" ? "repair" : "install");
+        world.log.push(command[5] === "force" ? "repair" : String(command[5]));
+        if (command[5] === "activate" && !world.fenced) {
+          throw new Error("activate ran without the fence");
+        }
         return { exitCode: 0, stdout: `some output\n${command[4]}\n` };
       }
       world.log.push("exec");
@@ -189,6 +196,15 @@ async function pass(world: World, overrides: { proxmox?: Proxmox; want?: Desired
       recordCommit: async (commit: string) => {
         world.installedCommit = commit;
       },
+      fence: async () => {
+        world.log.push("fence");
+        world.fenced = !world.fenceRefused;
+        return world.fenced;
+      },
+      releaseFence: async () => {
+        world.log.push("release");
+        world.fenced = false;
+      },
       recordToken: async (hash: string) => {
         world.log.push("recordToken");
         world.tokenHash = hash;
@@ -211,6 +227,8 @@ async function pass(world: World, overrides: { proxmox?: Proxmox; want?: Desired
     busy: world.busy,
     report: effects.report,
     recordCommit: effects.recordCommit,
+    fence: effects.fence,
+    releaseFence: effects.releaseFence,
     recordToken: effects.recordToken,
     forget: effects.forget,
     isConnected: () => world.connected,
@@ -407,86 +425,116 @@ describe("reconcileVm", () => {
   });
 
   describe("updates", () => {
-    it("installs before the token on a new VM, so computerd starts on the right version", async () => {
-      const world = newWorld();
-      await pass(world);
-      expect(world.log.indexOf("install")).toBeLessThan(world.log.indexOf("exec"));
-      expect(world.log.indexOf("start")).toBeLessThan(world.log.indexOf("install"));
-    });
-
-    it("updates a connected VM once when the commit changes, and then leaves it alone", async () => {
+    const fresh = async () => {
       const world = newWorld();
       await pass(world);
       world.log.length = 0;
-      const { stages } = await pass(world, { commit: NEW_COMMIT });
-      expect(stages).toContain("updating");
-      expect(world.log.filter((entry) => entry === "install")).toHaveLength(1);
+      return world;
+    };
+
+    it("installs before the token on a new VM, so computerd starts on the right version", async () => {
+      const world = newWorld();
+      await pass(world);
+      expect(world.log.indexOf("activate")).toBeLessThan(world.log.indexOf("exec"));
+      expect(world.log.indexOf("start")).toBeLessThan(world.log.indexOf("build"));
+    });
+
+    it("builds, then fences, then activates, then releases", async () => {
+      const world = await fresh();
+      await pass(world, { commit: NEW_COMMIT });
+      expect(world.log.slice(0, 4)).toEqual(["build", "fence", "activate", "release"]);
       expect(world.installedCommit).toBe(NEW_COMMIT);
+      expect(world.fenced).toBe(false);
+    });
+
+    it("updates once when the commit changes, and then leaves the VM alone", async () => {
+      const world = await fresh();
+      await pass(world, { commit: NEW_COMMIT });
       world.log.length = 0;
       await pass(world, { commit: NEW_COMMIT });
       expect(world.log).toEqual([]);
     });
 
     it("keeps the token through an update", async () => {
-      const world = newWorld();
-      await pass(world);
-      world.log.length = 0;
+      const world = await fresh();
       await pass(world, { commit: NEW_COMMIT });
       expect(world.log).not.toContain("recordToken");
       expect(world.tokenHash).toBe(HASH);
     });
 
-    it("waits while a tool runs, and updates on the next quiet pass", async () => {
-      const world = newWorld();
-      await pass(world);
-      world.log.length = 0;
+    it("does not build while a run is active, and updates on the next quiet pass", async () => {
+      const world = await fresh();
       world.busy = true;
       expect((await pass(world, { commit: NEW_COMMIT })).stage).toBe("ready");
       expect(world.log).toEqual([]);
-      expect(world.installedCommit).toBe(COMMIT);
       world.busy = false;
       await pass(world, { commit: NEW_COMMIT });
       expect(world.installedCommit).toBe(NEW_COMMIT);
     });
 
-    it("does not record a commit that the script failed to install", async () => {
-      const world = newWorld();
-      await pass(world);
+    it("does not restart when a run started during the build, and finishes on a later pass", async () => {
+      const world = await fresh();
+      world.fenceRefused = true;
+      expect((await pass(world, { commit: NEW_COMMIT })).stage).toBe("ready");
+      expect(world.log).toEqual(["build", "fence"]);
+      expect(world.installedCommit).toBe(COMMIT);
+      world.fenceRefused = false;
+      await pass(world, { commit: NEW_COMMIT });
+      expect(world.log).toContain("activate");
+      expect(world.installedCommit).toBe(NEW_COMMIT);
+    });
+
+    it("releases the fence when activate fails", async () => {
+      const world = await fresh();
       const real = fakeProxmox(world);
-      const failing: Proxmox = { ...real, exec: async () => ({ exitCode: 1, stdout: `${NEW_COMMIT}\n` }) };
-      await expect(pass(world, { proxmox: failing, commit: NEW_COMMIT })).rejects.toThrow("could not install");
+      const failing: Proxmox = {
+        ...real,
+        exec: async (id, command, timeoutMs) =>
+          command[5] === "activate" ? { exitCode: 1, stdout: "" } : real.exec(id, command, timeoutMs),
+      };
+      await expect(pass(world, { proxmox: failing, commit: NEW_COMMIT })).rejects.toThrow("could not activate");
+      expect(world.fenced).toBe(false);
+      expect(world.installedCommit).toBe(COMMIT);
+    });
+
+    it.each(["build", "activate"])("does not record a commit when %s fails", async (mode) => {
+      const world = await fresh();
+      const real = fakeProxmox(world);
+      const failing: Proxmox = {
+        ...real,
+        exec: async (id, command, timeoutMs) =>
+          command[5] === mode ? { exitCode: 1, stdout: `${NEW_COMMIT}\n` } : real.exec(id, command, timeoutMs),
+      };
+      await expect(pass(world, { proxmox: failing, commit: NEW_COMMIT })).rejects.toThrow(`could not ${mode}`);
       expect(world.installedCommit).toBe(COMMIT);
     });
 
     it("does not record a commit that the script did not print", async () => {
-      const world = newWorld();
-      await pass(world);
+      const world = await fresh();
       const real = fakeProxmox(world);
       const wrong: Proxmox = { ...real, exec: async () => ({ exitCode: 0, stdout: `${COMMIT}\n` }) };
-      await expect(pass(world, { proxmox: wrong, commit: NEW_COMMIT })).rejects.toThrow("could not install");
+      await expect(pass(world, { proxmox: wrong, commit: NEW_COMMIT })).rejects.toThrow("could not build");
       expect(world.installedCommit).toBe(COMMIT);
     });
 
-    it("converges when killed around the install, and installs at most twice", async () => {
-      const world = newWorld();
-      await pass(world);
-      world.log.length = 0;
-      let installs = 0;
-      const killable = fakeProxmox(world);
+    it.each(["build", "activate"])("converges when killed right after %s", async (mode) => {
+      const world = await fresh();
+      const real = fakeProxmox(world);
       const killing: Proxmox = {
-        ...killable,
+        ...real,
         exec: async (id, command, timeoutMs) => {
-          const result = await killable.exec(id, command, timeoutMs);
-          installs += 1;
-          throw new Killed(String(result.exitCode));
+          const result = await real.exec(id, command, timeoutMs);
+          if (command[5] === mode) {
+            throw new Killed(String(result.exitCode));
+          }
+          return result;
         },
       };
       await expect(pass(world, { proxmox: killing, commit: NEW_COMMIT })).rejects.toBeInstanceOf(Killed);
       expect(world.installedCommit).toBe(COMMIT);
       await pass(world, { commit: NEW_COMMIT });
-      expect(installs).toBe(1);
       expect(world.installedCommit).toBe(NEW_COMMIT);
-      expect(world.log.filter((entry) => entry === "install")).toHaveLength(2);
+      expect(world.fenced).toBe(false);
     });
   });
 
