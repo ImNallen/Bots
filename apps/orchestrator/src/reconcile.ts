@@ -154,14 +154,20 @@ export async function reconcileVm(args: {
   recordToken: (tokenHash: string) => Promise<void>;
   forget: () => Promise<void>;
   isConnected: () => boolean;
+  disconnect: () => void;
 }): Promise<Stage> {
-  const { proxmox, desired, linkUrl, tokenHash, report, recordToken, forget, isConnected } = args;
+  const { proxmox, desired, linkUrl, tokenHash, report, recordToken, forget, isConnected, disconnect } = args;
   const vmid = vmidFor(desired.slot);
   const address = addressFor(desired.slot);
 
   async function stopAt(stage: Stage): Promise<Stage> {
     await report(stage);
     return stage;
+  }
+
+  // This comes before any call that can fail or wait, so a locked VM or a Proxmox outage cannot keep a removed computer working.
+  if (desired.removing) {
+    disconnect();
   }
 
   let member = (await proxmox.members()).find((entry) => entry.vmid === vmid);

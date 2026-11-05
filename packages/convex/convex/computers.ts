@@ -95,7 +95,7 @@ export const declareVm = mutation({
   },
 });
 
-// Removing the hash here makes the link refuse the VM at once, before the VM is gone.
+// Removing the hash makes the link refuse a new connection at once. The reconcile loop closes a live one on its next pass.
 export const removeVm = mutation({
   args: { ownerSubject: v.string() },
   handler: async (ctx, { ownerSubject }) => {

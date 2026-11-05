@@ -87,7 +87,7 @@ The orchestrator creates and repairs user VMs in a loop, from what Convex says e
 	pnpm verify:template https://bots-control.<tailnet>.ts.net bots-user-201
 	```
 
-To remove a computer, run `computers:removeVm` the same way, with `'{"ownerSubject":"tailscale:<login>"}'`. The link refuses the VM at once, and the loop then destroys the VM and its workspace. You cannot undo this.
+To remove a computer, run `computers:removeVm` the same way, with `'{"ownerSubject":"tailscale:<login>"}'`. The link refuses a new connection from the VM at once. Within about 15 seconds, the loop closes the live connection and then destroys the VM and its workspace. You cannot undo this.
 
 ## Check it
 

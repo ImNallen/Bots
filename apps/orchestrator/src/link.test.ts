@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import type { Id } from "@bots/convex/dataModel";
-import type { OrchestratorMessage, ToolInvocation } from "@bots/protocol";
+import { LINK_CLOSE, type OrchestratorMessage, type ToolInvocation } from "@bots/protocol";
 import { beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { startLink, type Link } from "./link.ts";
@@ -196,5 +196,23 @@ describe("link", () => {
     expect(computer.socket.readyState).toBe(WebSocket.OPEN);
     computer.socket.close();
     await computer.closed;
+  });
+});
+
+describe("disconnect", () => {
+  it("closes a live computer as unauthorized, and new calls no longer reach it", async () => {
+    const computer = await connectComputer();
+    expect(link.isConnected(OWNER)).toBe(true);
+    link.disconnect(OWNER);
+    expect(link.isConnected(OWNER)).toBe(false);
+    expect(await computer.closed).toBe(LINK_CLOSE.unauthorized);
+    const before = computer.received.length;
+    const result = await link.call(callArgs("run:after-disconnect"));
+    expect(result.outcome).toBe("unavailable");
+    expect(computer.received).toHaveLength(before);
+  });
+
+  it("does nothing for an owner with no connection", () => {
+    expect(() => link.disconnect("nobody" as Id<"users">)).not.toThrow();
   });
 });

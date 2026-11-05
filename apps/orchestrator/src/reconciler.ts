@@ -44,6 +44,7 @@ export function startReconciler(args: {
             await service.mutation(api.computers.forgetVm, { computerId });
           },
           isConnected: () => link.isConnected(ownerId),
+          disconnect: () => link.disconnect(ownerId),
         });
       } catch (error) {
         const detail = (error instanceof Error ? error.message : "unknown error").slice(0, MAX_DETAIL_CHARS);

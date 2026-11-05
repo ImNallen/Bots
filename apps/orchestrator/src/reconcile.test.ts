@@ -181,6 +181,10 @@ async function pass(world: World, overrides: { proxmox?: Proxmox; want?: Desired
     recordToken: effects.recordToken,
     forget: effects.forget,
     isConnected: () => world.connected,
+    disconnect: () => {
+      world.log.push("disconnect");
+      world.connected = false;
+    },
   });
   return { stage, stages };
 }
@@ -390,11 +394,33 @@ describe("reconcileVm", () => {
       expect(world.forgotten).toBe(false);
     });
 
-    it("waits on a locked VM", async () => {
+    it("waits on a locked VM, with the computer already disconnected", async () => {
       const world = newWorld();
       world.vms.set(vmid, { ...clonedVm(), config: { ...clonedVm().config, lock: "backup" } });
       expect((await pass(world, { want: removing })).stage).toBe("waiting-for-lock");
-      expect(world.log).toEqual([]);
+      expect(world.log).toEqual(["disconnect"]);
+      expect(world.connected).toBe(false);
+    });
+
+    it("disconnects the computer before stopping the VM", async () => {
+      const world = newWorld();
+      await pass(world);
+      world.log.length = 0;
+      await pass(world, { want: removing });
+      expect(world.log).toEqual(["disconnect", "stop", "destroy"]);
+    });
+
+    it("disconnects the computer when Proxmox is down", async () => {
+      const world = newWorld();
+      await pass(world);
+      const proxmox: Proxmox = {
+        ...fakeProxmox(world),
+        members: async () => {
+          throw new Error("no route to host");
+        },
+      };
+      await expect(pass(world, { proxmox, want: removing })).rejects.toThrow("no route");
+      expect(world.connected).toBe(false);
     });
 
     it("finishes when killed after the destroy", async () => {
