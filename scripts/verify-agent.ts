@@ -1205,6 +1205,33 @@ try {
       assert.deepEqual(await pendingFor(cancelled), []);
     });
 
+    // The runner starts 8 runs at a time, so 8 unanswered requests would stop every other bot if they held their slots.
+    const SLOTS = 8;
+    const waitingChats = await Promise.all(
+      Array.from({ length: SLOTS + 1 }, async (_, index) => {
+        const chat = await newChat({ client: first, name: `approval-slot-${index}`, level: "outside" });
+        const text = `approval slot ${index} ${nonce}`;
+        scriptedShell(text, "echo waiting");
+        const runId = await chat.send(text);
+        await waitForPending(chat);
+        return { chat, runId };
+      }),
+    );
+    const free = await newChat({ client: first, name: "approval-free", level: "nothing" });
+    const freeText = `approval free ${nonce}`;
+    scriptedShell(freeText, `echo free-${nonce}`);
+    const freeDone = await free.settled(await free.send(freeText));
+    await check("more unanswered requests than the runner has slots do not stop another bot", () => {
+      assert.equal(resultsOf(freeDone)[0]?.outcome, "ok");
+      assert.match(resultsOf(freeDone)[0]?.output ?? "", new RegExp(`free-${nonce}`));
+    });
+    await Promise.all(
+      waitingChats.map(async ({ chat, runId }) => {
+        await first.mutation(api.runs.requestCancel, { runId });
+        await chat.settled(runId);
+      }),
+    );
+
     const everything = await newChat({ client: first, name: "approval-everything", level: "everything" });
     const everythingText = `approval everything ${nonce}`;
     fake.script(everythingText, ({ toolResults }) =>

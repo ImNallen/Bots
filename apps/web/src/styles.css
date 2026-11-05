@@ -474,3 +474,12 @@ textarea:disabled {
   font-size: 0.875rem;
 }
 
+.tool-approval-args {
+  margin: var(--space-1) 0 0;
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+}
+

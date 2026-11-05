@@ -34,6 +34,24 @@ function argumentsSummary(raw: string): string {
   return raw;
 }
 
+// A person can only approve what they can read, so this shows every argument in full. A single string shows as it is, so a
+// shell command keeps its line breaks.
+function fullArguments(raw: string): string {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      const values = Object.values(parsed);
+      if (values.length === 1 && typeof values[0] === "string") {
+        return values[0];
+      }
+      return JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    // A malformed call shows as it arrived.
+  }
+  return raw;
+}
+
 function ApprovalButtons({ approvalId }: { approvalId: Id<"approvals"> }) {
   const decide = useMutation(api.approvals.decide);
   const [problem, setProblem] = useState<string | null>(null);
@@ -75,7 +93,14 @@ function ToolCallView(props: {
           {status}
         </span>
       </div>
-      {waiting && <ApprovalButtons approvalId={approvalId} />}
+      {waiting && (
+        <>
+          <pre className="tool-approval-args" aria-label="What this call will do">
+            {fullArguments(call.arguments)}
+          </pre>
+          <ApprovalButtons approvalId={approvalId} />
+        </>
+      )}
       {result !== undefined && (
         <details>
           <summary>

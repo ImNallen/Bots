@@ -2,7 +2,7 @@ import type { Id } from "@bots/convex/dataModel";
 
 export type ApprovalLevel = "everything" | "outside" | "shell" | "nothing";
 
-const POLL_MS = 1000;
+const POLL_MS = 2000;
 
 // These change nothing outside the VM. Any other tool asks, so a tool added later cannot run unasked by being forgotten here.
 const FREE_AT_OUTSIDE_LEVEL = new Set(["read_file", "write_file", "browser_navigate", "browser_snapshot"]);
@@ -26,34 +26,42 @@ export function needsApproval(args: { level: ApprovalLevel; toolName: string }):
 
 export type Decision = "approved" | "denied" | "expired" | "aborted";
 
-type Requested = { approvalId: Id<"approvals">; state: "pending" | "approved" | "denied" | "expired"; expiresAt: number };
+type ApprovalState = "pending" | "approved" | "denied" | "expired";
+type Requested = { approvalId: Id<"approvals">; state: ApprovalState; expiresAt: number };
 
 // Only an approved answer lets a call through. A failed read waits and asks again, so an outage can never run a call.
 export async function waitForApproval(args: {
   request: () => Promise<Requested>;
+  read: (approvalId: Id<"approvals">) => Promise<ApprovalState>;
   expire: (approvalId: Id<"approvals">) => Promise<unknown>;
   now: () => number;
   signals: AbortSignal[];
   onWait: () => void;
   pollMs?: number;
 }): Promise<Decision> {
-  const { request, expire, now, signals, onWait, pollMs = POLL_MS } = args;
+  const { request, read, expire, now, signals, onWait, pollMs = POLL_MS } = args;
+  let requested: Requested | null = null;
+  let state: ApprovalState = "pending";
   let waiting = false;
   for (;;) {
     if (signals.some((signal) => signal.aborted)) {
       return "aborted";
     }
-    let answer: Requested | null = null;
     try {
-      answer = await request();
+      if (requested === null) {
+        requested = await request();
+        state = requested.state;
+      } else {
+        state = await read(requested.approvalId);
+      }
     } catch {
-      answer = null;
+      state = "pending";
     }
-    if (answer !== null && answer.state !== "pending") {
-      return answer.state;
+    if (state !== "pending") {
+      return state;
     }
-    if (answer !== null && now() >= answer.expiresAt) {
-      await expire(answer.approvalId).catch(() => {});
+    if (requested !== null && now() >= requested.expiresAt) {
+      await expire(requested.approvalId).catch(() => {});
       continue;
     }
     if (!waiting) {

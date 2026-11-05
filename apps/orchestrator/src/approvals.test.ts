@@ -33,22 +33,28 @@ function run(answers: Array<"pending" | "approved" | "denied" | "expired" | Erro
   const expired: string[] = [];
   const waits: number[] = [];
   let index = 0;
+  let requests = 0;
+  const next = () => {
+    const answer = answers[Math.min(index, answers.length - 1)];
+    index += 1;
+    if (answer instanceof Error) {
+      throw answer;
+    }
+    return answer ?? "pending";
+  };
   const done = waitForApproval({
     request: async () => {
-      const answer = answers[Math.min(index, answers.length - 1)];
-      index += 1;
-      if (answer instanceof Error) {
-        throw answer;
-      }
-      return { approvalId: ID, state: answer ?? "pending", expiresAt: options.expiresAt ?? 10_000 };
+      requests += 1;
+      return { approvalId: ID, state: next(), expiresAt: options.expiresAt ?? 10_000 };
     },
+    read: async () => next(),
     expire: async (approvalId) => expired.push(approvalId),
     now: options.now ?? (() => 1000),
     signals: options.signals ?? [],
     onWait: () => waits.push(1),
     pollMs: 1,
   });
-  return { done, expired, waits, asks: () => index };
+  return { done, expired, waits, asks: () => index, requests: () => requests };
 }
 
 describe("waitForApproval", () => {
@@ -56,6 +62,25 @@ describe("waitForApproval", () => {
     const { done, waits } = run(["pending", "pending", "approved"]);
     expect(await done).toBe("approved");
     expect(waits).toEqual([1]);
+  });
+
+  it("creates the request once, and only reads after that", async () => {
+    const { done, requests, asks } = run(["pending", "pending", "pending", "approved"]);
+    expect(await done).toBe("approved");
+    expect(requests()).toBe(1);
+    expect(asks()).toBe(4);
+  });
+
+  it("asks again until the request exists", async () => {
+    const { done, requests } = run([new Error("convex is down"), "approved"]);
+    expect(await done).toBe("approved");
+    expect(requests()).toBe(2);
+  });
+
+  it("keeps waiting when a read fails after the request exists", async () => {
+    const { done, asks } = run(["pending", new Error("convex is down"), new Error("convex is down"), "denied"]);
+    expect(await done).toBe("denied");
+    expect(asks()).toBe(4);
   });
 
   it("returns denied", async () => {

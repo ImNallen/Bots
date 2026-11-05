@@ -37,6 +37,15 @@ export const request = mutation({
   },
 });
 
+export const stateOf = query({
+  args: { approvalId: v.id("approvals") },
+  handler: async (ctx, { approvalId }) => {
+    await requireService(ctx);
+    // A request that has vanished cannot have been approved.
+    return (await ctx.db.get(approvalId))?.state ?? "denied";
+  },
+});
+
 export const decide = mutation({
   args: { approvalId: v.id("approvals"), decision: v.union(v.literal("approved"), v.literal("denied")) },
   handler: async (ctx, { approvalId, decision }) => {
