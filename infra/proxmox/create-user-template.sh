@@ -75,4 +75,8 @@ qm shutdown "$VMID" --timeout 120 >/dev/null
 # The image now holds the guest agent. A clone must not spend its first boot on the snippet's package update.
 qm set "$VMID" --delete cicustom,ipconfig0 --description "computerd $commit" >/dev/null
 qm template "$VMID" >/dev/null
+# Destroying the old template took it out of the pool, and the orchestrator's token can clone only what the pool holds.
+if pvesh get /pools/bots --output-format json >/dev/null 2>&1; then
+  pvesh set /pools/bots --vms "$VMID" >/dev/null
+fi
 echo "VM $VMID is a template with computerd at $commit"
