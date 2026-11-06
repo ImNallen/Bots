@@ -142,6 +142,15 @@ export async function applyMemoryCall(
   }
 }
 
+export function promptNotes(notes: readonly Doc<"memories">[]) {
+  return notes.map((note) => ({
+    id: note._id,
+    by: note.source.kind === "owner" ? ("owner" as const) : ("you" as const),
+    date: new Date(note._creationTime).toISOString().slice(0, 10),
+    text: note.text,
+  }));
+}
+
 export const list = query({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {

@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
-import { notesOf } from "./memories.js";
+import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
 import { isActive } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
@@ -221,7 +221,14 @@ export const promptFor = query({
   handler: async (ctx, { botId }) => {
     await requireService(ctx);
     const bot = await ctx.db.get(botId);
-    return { name: bot?.name ?? "Bot", title: bot?.title, assignment: bot?.assignment };
+    const owner = bot === null ? null : await ctx.db.get(bot.ownerId);
+    return {
+      name: bot?.name ?? "Bot",
+      title: bot?.title,
+      assignment: bot?.assignment,
+      about: owner?.about,
+      notes: promptNotes(await notesOf(ctx, botId)),
+    };
   },
 });
 

@@ -162,6 +162,8 @@ async function callModel(args: {
         botId: claim.botId,
         title: profile.title,
         assignment: profile.assignment,
+        about: profile.about,
+        notes: profile.notes,
       }),
       events: events.map((event) => event.body),
     }),
