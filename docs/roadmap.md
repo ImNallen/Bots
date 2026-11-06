@@ -9,6 +9,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 2 | Done | Agent loop and shell and file tools, with `computerd` in Docker | A user chats with a bot in the web UI, and killing the orchestrator mid-tool resumes the run with no duplicate side effects |
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | **Next** | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
+| 4b | | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
 | 5 | | Schedules, the memory UI, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
 | 6 | | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
@@ -65,7 +66,7 @@ The user chose to update `computerd` in place, because bots and users install th
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it.
 4. Done. An owner can take over a screen, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. The owner used a take-over on a real phone on 2026-11-06.
 5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
-6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 2, 3, and 4 of the next section's list are now done too: a take-over is the bot's real desktop through noVNC, and a login typed there reaches the computer's other bots. Next come the checks in item 6, after a deploy, and then the step's check on a real phone with two bots. Step 4 is not done until that check passes.
+6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 2, 3, and 4 of the next section's list are now done too: a take-over is the bot's real desktop through noVNC, and a login typed there reaches the computer's other bots. The checks in item 6 passed again after the last deploy. Next comes the step's check on a real phone with two bots. Step 4 is not done until that check passes.
 
 ## Next: a desktop for each bot
 
@@ -102,7 +103,7 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 3. Done. A take-over is the real desktop through noVNC, and the CDP input path and its custom touch controls are gone. The noVNC library has no phone keyboard, so a typing box and a key bar stay. The owner confirmed on a real phone on 2026-11-06 that a take-over works and that the key bar is still needed.
 4. Done. A new bot starts from a copy of the base, `/home/browser/profile`, plus the logins that have moved since. When a take-over ends, `computerd` moves the cookies that it changed to every running browser through CDP, and a stopped or new bot gets them when it starts. The base stays as it is, because nothing opens it, so writing it would take a throwaway Chromium for each change and make a second record of the same logins. `infra/proxmox/verify-desktop.sh` proves this on a real VM. localStorage does not move, so a site that keeps its session there needs its own login in each bot.
 5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
-6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed against desktops. Run them again after items 3 and 4, because take-over adds an input stream. `verify:takeover` now also checks that another bot gets a login typed in a take-over. Then run the step's check on a real phone, with two bots.
+6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed again after items 3 and 4, and `verify:takeover` now also checks that another bot gets a login typed in a take-over. Next, run the step's check on a real phone, with two bots. During it, log in to a real site, because no real site's login has moved between bots yet.
 
 ### Follow-ups, in this order
 
@@ -111,6 +112,30 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 3. Let a bot ask for a take-over, for example at a login page. Grok Bot calls this a secure handoff.
 4. Consider "Always allow" on an approval. Grok Bot has it. Always allowing shell would turn approvals off for that bot, so it needs care.
 
+
+## After step 4: the redesign
+
+The web app works but looks basic. The owner wants it redesigned to match Grok Bot's UI, and this comes after step 4 and before step 5. Step 4 settles the take-over screen that the design is built around, and every screen added before the redesign is one more to redo. Steps 6 and 7 bring in other people and new apps, and they should start from the finished design.
+
+### References
+
+- The owner gathers the desktop references, because Mobbin does not appear to cover them.
+- Mobile references come from Mobbin.
+- References stay out of this repository, because it is public and screenshots can show account details.
+
+### What to build
+
+1. Agree on a direction from the references, before any code.
+2. Set the design system, the navigation, and the layout.
+3. Rebuild the home page, the bot page, and the screen panel in the new design. Keep the phone typing box and key bar, because noVNC has no phone keyboard.
+4. Render markdown in chat, which closes that known gap.
+
+This step changes only the web app. It adds no features, and the backend and the link stay as they are. Step 5 builds the memory UI and the Activity view in the new design, and step 7's apps reuse it.
+
+These are proposals, so change them if you find a better answer:
+
+- Match Grok Bot's layout and flows, with this project's own name, visuals, and copy.
+- Add screens that Grok Bot lacks where Bots needs them. Reviews say it has no way to inspect or edit individual memories, for example.
 
 ## After step 3: deploy from `main`
 
