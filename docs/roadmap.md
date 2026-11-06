@@ -144,6 +144,13 @@ This is a proposal, so change it if you find a better answer:
 
 - Add screens that Grok Bot lacks where Bots needs them. Reviews say it has no way to inspect or edit individual memories, for example.
 
+### Progress on the redesign
+
+1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stays inline in the chat until its own unit, and tested on a Mac only in its "not connected" state, because Docker's `computerd` has no desktop.
+2. Next. Chat with markdown.
+3. The screen panel.
+4. Final settings polish.
+
 ## After step 3: deploy from `main`
 
 Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tailscale key and no SSH key. The timer does these things:
@@ -158,6 +165,9 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 These are open on purpose. Fix each one when the work reaches it.
 
 - The web UI shows raw markdown.
+- A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
+- `bots.overview` compares a take-over's end with `Date.now()`, and Convex does not rerun a query because time passes. So after a closed tab or a sleeping phone, an idle bot's row says "You have the screen" until something the query reads changes. A reload does not clear it. Any new run or change to one of the owner's bots does.
+- In a long conversation, the inline screen panel scrolls out of sight at the top of the chat. Its own unit in the redesign replaces it.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
 - Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
 - At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
@@ -170,7 +180,6 @@ These are open on purpose. Fix each one when the work reaches it.
 - Meta files in the journal never expire, so the journal grows slowly. Pruning 200,000 of them took 158 ms.
 - An error body cut at 300 characters can split an emoji. Convex then rejects the failure reason, so the run makes 5 model calls before it stops.
 - Redaction matches only the whole, exact key. An upstream that echoes part of a key could put that part in a failure reason.
-- `.run-failure` in `apps/web/src/styles.css` has no `overflow-wrap`, so a long unbroken error widens the page.
 - The orchestrator's dev guard checks four forwarding headers and the host name. Binding to loopback is the real boundary.
 - Vite's default CORS lets any page on a localhost port read a dev token from `/auth/token`. Setting `server.cors` to `false` closes this.
 - The orchestrator sends no CSP, `X-Frame-Options`, or `nosniff` header.
