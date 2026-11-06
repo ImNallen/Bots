@@ -61,7 +61,10 @@ const indexRoute = createRoute({
 const botRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/bots/$botId",
-  validateSearch: (search: Record<string, unknown>): { info?: true } => (search.info === true ? { info: true } : {}),
+  validateSearch: (search: Record<string, unknown>): { info?: true; screen?: true } => ({
+    ...(search.info === true && { info: true }),
+    ...(search.screen === true && { screen: true }),
+  }),
   component: BotPage,
 });
 

@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { subLineOf } from "./activity.ts";
+import { shownActivity, subLineOf } from "./activity.ts";
 
 const lastMessage = "See you tomorrow.";
+
+describe("a row during a take-over", () => {
+  const until = 1_000_000;
+  const row = { activity: { kind: "idle" } as const, takeoverUntil: until, lastMessage };
+  const textAt = (now: number) => subLineOf({ activity: shownActivity(row, now), lastMessage }).text;
+
+  it("says the owner has the screen until the end time, and goes back to the bot's state at that moment", () => {
+    expect(textAt(until - 1)).toBe("You have the screen");
+    expect(textAt(until)).toBe(lastMessage);
+    expect(textAt(until + 1)).toBe(lastMessage);
+  });
+
+  it("puts the screen before an approval and shows the approval once the take-over ends", () => {
+    const asking = { activity: { kind: "needsApproval" } as const, takeoverUntil: until };
+    expect(shownActivity(asking, until - 1)).toEqual({ kind: "ownerHasScreen" });
+    expect(shownActivity(asking, until)).toEqual({ kind: "needsApproval" });
+  });
+
+  it("shows the bot's own state with no take-over", () => {
+    expect(shownActivity({ activity: { kind: "failed" }, takeoverUntil: null }, until)).toEqual({ kind: "failed" });
+  });
+});
 
 describe("subLineOf", () => {
   it("prefers the state of the bot over its last message", () => {
