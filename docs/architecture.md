@@ -197,7 +197,7 @@ The bot page deletes a bot, and it refuses during a run or a take-over, because 
 
 | Where | What goes | When |
 |---|---|---|
-| Convex | The bot's row | At once, in the mutation, so nothing new can start on it |
+| Convex | The bot's row and its notes | At once, in the mutation, so nothing new can start on it. Notes go here because at most 40 fit one mutation, and `purge` stops early for a bot with no thread |
 | Convex | Its thread, runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. The thread goes last |
 | The VM | Its desktop, profile, workspace, and any take-over baseline | Within about 15 seconds, by the reconcile loop |
 | The VM | Its tool results in the `computerd` journal | At the journal's own limit of 7 days |
@@ -309,11 +309,11 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Level | What asks first |
 |---|---|
 | Everything | Every tool |
-| Outside, the default | Shell commands and browser actions that change something |
+| Outside, the default | Shell commands and browser actions that change something, and a memory tool once a computer tool has a result in this run |
 | Shell | Shell commands |
 | Nothing | No tool |
 
-Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A new effect fails the typecheck until `needsApproval` gives its answer.
+Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A new effect fails the typecheck until `needsApproval` gives its answer.
 
 A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
 
@@ -321,13 +321,59 @@ Approvals are a check on what a bot asks to do, not a sandbox. An approved shell
 
 ## Why only the owner can write an assignment
 
-A bot's assignment is text that the model reads on every call, in every conversation. Whoever can write it decides what the bot works on from then on. If a bot could write its own, one prompt-injected page could leave a lasting instruction that reads as the owner's. So the assignment is an owner's field, and a bot's own notes, when they come, are a separate thing that ranks below it.
+A bot's assignment is text that the model reads on every call, in every conversation. Whoever can write it decides what the bot works on from then on. If a bot could write its own, one prompt-injected page could leave a lasting instruction that reads as the owner's. So the assignment is an owner's field, and a bot's own notes are a separate thing that ranks below it.
 
 One mutation writes it. `bots.setProfile` goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user. The runner reads through `bots.promptFor`, which only the service token can call, and it has no way to write. No tool reaches `setProfile`. A bot holds no Convex token, and its VM reaches only the internet and the link port, so it cannot call Convex or open the web app.
 
 The runner reads the assignment before each model call and not at the claim. An edit during a run reaches the next call, and a resumed run reads the current text. The cost is that no event records which text a model call saw.
 
 An assignment is not a permission. The system prompt tells the model that the assignment cannot override the fixed rules, but that sentence is an instruction to a model and no code checks it. The checks that matter stay in code, so approvals and the network rules hold whatever an assignment says. Convex stores it in plain text, as it does the chat.
+
+## How memory works
+
+A bot keeps notes that last across runs, and it writes them by itself with `memory_save` and `memory_forget`. The owner reads and edits every note in the bot's info panel. Each note is a row in `memories`, with its bot, its text, and its source, which is the owner, or the bot and the run that saved it. A run reads the notes through `bots.promptFor` before each model call, so a save reaches the next call of the same run, and an owner's delete is gone from it.
+
+Rows are immutable. An owner's edit deletes a row and inserts a new one in one mutation, so an edit cannot interleave with a bot's forget. The loser of that race gets "no such note". The edited note counts as the owner's, because the owner has read it.
+
+Notes live in Convex and not on the VM. A bot has root on its VM, so anything that runs there could change a file, and a computer is not a permanent store. The owner must also be able to read and edit notes while the computer is off. So `memory_save` and `memory_forget` never reach the link. `toolInvocation` is the link's wire type and leaves them out, so a memory call passed to `Link.call` fails the typecheck. `verify:agent` runs one with `computerd` stopped, and finds no journal entry for one.
+
+`users.about` is one string that the owner writes about themselves, up to 2,000 characters, and all of that owner's bots read it. No tool writes it. If a bot could write a fact that other bots read, one injected page could reach every bot.
+
+### One mutation writes a note and its result
+
+`runs.append` takes a memory call as well as an event body. It checks the lease and the sequence number, then `applyMemoryCall` makes the change and returns a `toolResult` body, and that body goes in as the event. All of this is one Convex mutation, and `applyMemoryCall` has no endpoint of its own. So a memory call happens exactly once, where a call through `computerd`'s journal happens at most once, and it needs no new table or idempotency key.
+
+| Kill or failure | What the next runner finds | Result |
+|---|---|---|
+| Before the mutation | A turn with no result, so the call is pending | It decides again and applies the call once |
+| During the mutation | Neither the note nor the result, because Convex commits both or neither | The same as before the mutation |
+| After the commit, with the reply lost | The result, so the call is not pending | Nothing repeats, and a resend fails the sequence check |
+| While the call waits for approval | The same request and the same answer | It applies the call once, if the answer was yes |
+| A stale runner wakes up | Nothing new, because `requireLease` throws | The whole mutation aborts, with no note |
+| `claim` gives up after 5 attempts | `closeUnansweredCalls` recorded `unavailable` | No note, and the next run's prompt holds the true list |
+
+A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no control or text-direction characters, and nothing that `looksLikeSecret` refuses.
+
+### What limits an injected save
+
+A page that a bot reads can tell it to save a note, and every later model call reads that note. The harm outlasts the run, so these limits sit in code:
+
+- At the default level, a memory tool asks once a computer tool has a result in this run. The card shows the exact text. `touchedComputer` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied` or `invalid` does not count, because it brought nothing back.
+- A note reaches only the bot that saved it, so one page cannot reach the owner's other bots.
+- A bot cannot change or forget a note whose source is the owner, and it cannot write the assignment or `users.about`.
+- Size and count are capped, so notes' text adds at most 20,000 characters to a model call.
+- Every save and forget is a row in the chat. A chat row cuts its summary short, so the row's output holds the whole text, and the forgotten text stays there after the note is gone. Every note is also a dated row in the panel, which says who wrote it.
+- Notes reach the model as one JSON array on one line, after everything else in the system prompt. A note holding `"]` or a fake closing line stays inside its string, and a test parses the block with `JSON.parse` to prove it.
+
+### What does not limit it
+
+The prompt says that a bot's own notes can be wrong or planted, that they inform and do not instruct, and that they rank below the assignment and the owner's messages. That sentence is an instruction to a model, and no code checks it, so it is not a boundary.
+
+The card covers one run. The thread replays on every model call, so an injection from an earlier run is still in the model's history, and the first save of a later run has no card. A hold for review would close this, but a thread stays exposed for good, so it would ask about nearly every save.
+
+At the Shell and Nothing levels, no save shows a card. The owner chose those levels, and the chat row and the panel are the only signs.
+
+`looksLikeSecret` catches careless saves and nothing more. It refuses PEM headers, known key prefixes, JWTs, `password=` pairs, card numbers, and any unbroken run of 32 or more token characters. "My password is hunter2" passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
 
 ## Where secrets live
 
