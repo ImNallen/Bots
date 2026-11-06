@@ -1,3 +1,9 @@
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import type { Cdp, CdpConnector } from "./browser.ts";
+import { desktopOf, SLOTS, type DesktopLease } from "./desktops.ts";
+import { log } from "./log.ts";
+
 type PartitionKey = { topLevelSite: string; hasCrossSiteAncestor: boolean };
 
 // One entry of Storage.getCookies.
@@ -43,7 +49,7 @@ export const LOGOUT_KEEP_MS = 400 * 24 * 60 * 60 * 1000;
 // .invalid can never resolve, so no site ever receives this cookie.
 const CURSOR_DOMAIN = "logins.bots.invalid";
 
-export function cursorParam(generation: number, now: number): CookieParam {
+function cursorParam(generation: number, now: number): CookieParam {
   return {
     name: "generation",
     value: String(generation),
@@ -119,7 +125,7 @@ export function mergeJar(jar: Jar, moved: readonly CookieParam[], now: number): 
   };
 }
 
-export function cursorOf(browser: readonly Cookie[]): number {
+function cursorOf(browser: readonly Cookie[]): number {
   return Number(browser.find((cookie) => cookie.domain === CURSOR_DOMAIN)?.value) || 0;
 }
 
@@ -135,4 +141,211 @@ export function planApply(jar: Jar, browser: readonly Cookie[], now: number): Co
       return generation > cursor || (param.expires === undefined && !held.has(key));
     })
     .map((entry) => entry.param);
+}
+
+// The cookies at the start of a take-over and the browser that held them. It exists only during a take-over, and it goes last, so
+// a crash repeats the diff, and an equal value adds no generation.
+type Baseline = { identity: string; cookies: Cookie[] };
+
+export type Logins = {
+  // Gives one browser what it lacks. A stopped slot is not an error. It never rejects, because a bot without a login is better than
+  // a bot without a browser.
+  catchUp: (cdpPort: number) => Promise<void>;
+  opened: (botId: string, cdpPort: number) => Promise<void>;
+  closed: (botId: string, cdpPort: number) => Promise<void>;
+  recover: (acquire: (botId: string) => Promise<DesktopLease>) => Promise<void>;
+};
+
+const BROWSER_DEADLINE_MS = 10_000;
+
+export function createLogins(args: { dir: string; connector: CdpConnector; now?: () => number }): Logins {
+  const { dir, connector, now = Date.now } = args;
+  const jarFile = join(dir, "logins.json");
+  const takeovers = join(dir, "takeovers");
+  const baselineFile = (botId: string) => join(takeovers, `${botId}.json`);
+  const openStreams = new Map<string, number>();
+  const caughtUp = new Map<number, { identity: string; generation: number }>();
+  const turns = new Map<number, Promise<void>>();
+  let jar = readJar(jarFile);
+  let tail: Promise<void> = Promise.resolve();
+
+  // A push and a merge must not interleave, so everything that writes the jar or a baseline takes its turn here.
+  function inOrder(event: string, step: () => Promise<void>): Promise<void> {
+    tail = tail.then(step).catch((error: unknown) => warn(event, error));
+    return tail;
+  }
+
+  // Null when the port refuses, which is a stopped slot. Closing the socket ends every call that is waiting on it.
+  async function withBrowser<T>(cdpPort: number, use: (client: Cdp) => Promise<T>): Promise<T | null> {
+    const client = await connector(cdpPort).catch(() => null);
+    if (client === null) {
+      return null;
+    }
+    const deadline = setTimeout(() => client.close(), BROWSER_DEADLINE_MS);
+    deadline.unref();
+    try {
+      return await use(client);
+    } finally {
+      clearTimeout(deadline);
+      client.close();
+    }
+  }
+
+  async function applyTo(cdpPort: number): Promise<void> {
+    await withBrowser(cdpPort, async (client) => {
+      const current = await jar;
+      const known = caughtUp.get(cdpPort);
+      if (known?.identity === client.identity && known.generation === current.generation) {
+        return;
+      }
+      const browser = await cookiesOf(client);
+      const plan = planApply(current, browser, now());
+      const rejected = await setCookies(client, plan);
+      // Last, and on its own. A real VM showed that Chromium writes cookies to disk in the order they were set, so a cursor on disk
+      // means that the batch before it is on disk too.
+      if (current.generation > cursorOf(browser)) {
+        await client.send("Storage.setCookies", { cookies: [cursorParam(current.generation, now())] });
+      }
+      caughtUp.set(cdpPort, { identity: client.identity, generation: current.generation });
+      if (plan.length > 0) {
+        log({ level: "info", event: "logins-applied", cdpPort, applied: plan.length - rejected, rejected });
+      }
+    });
+  }
+
+  // One browser at a time on each port, so an older catch-up cannot put back an older cursor after a newer one.
+  function catchUp(cdpPort: number): Promise<void> {
+    const turn = (turns.get(cdpPort) ?? Promise.resolve())
+      .then(() => applyTo(cdpPort))
+      .catch((error: unknown) => warn("logins-catch-up-failed", error));
+    turns.set(cdpPort, turn);
+    return turn;
+  }
+
+  async function publish(botId: string, cdpPort: number): Promise<void> {
+    const baseline = await readBaseline(baselineFile(botId));
+    if (baseline === null) {
+      await rm(baselineFile(botId), { force: true });
+      return;
+    }
+    const read = await withBrowser(cdpPort, async (client) => ({ identity: client.identity, cookies: await cookiesOf(client) }));
+    if (read === null) {
+      log({ level: "warn", event: "logins-publish-waits", botId });
+      return;
+    }
+    const moved = diffCookies(baseline.cookies, read.cookies, baseline.identity === read.identity, now());
+    const before = await jar;
+    const next = mergeJar(before, moved, now());
+    if (next.generation !== before.generation) {
+      await writeSecret(jarFile, next);
+    }
+    jar = Promise.resolve(next);
+    // A stopped or new bot catches up when it next starts, and a slot that changes hands during this gets the same jar.
+    await Promise.all(SLOTS.map((slot) => catchUp(desktopOf(slot).cdpPort)));
+    await rm(baselineFile(botId), { force: true });
+    log({ level: "info", event: "logins-published", botId, moved: moved.length, generation: next.generation });
+  }
+
+  return {
+    catchUp,
+    opened: (botId, cdpPort) =>
+      inOrder("logins-open-failed", async () => {
+        openStreams.set(botId, (openStreams.get(botId) ?? 0) + 1);
+        await catchUp(cdpPort);
+        if ((await readBaseline(baselineFile(botId))) !== null) {
+          return;
+        }
+        const baseline = await withBrowser(cdpPort, async (client) => ({ identity: client.identity, cookies: await cookiesOf(client) }));
+        if (baseline === null) {
+          log({ level: "warn", event: "logins-no-baseline", botId });
+          return;
+        }
+        await writeSecret(baselineFile(botId), baseline);
+      }),
+    closed: (botId, cdpPort) =>
+      inOrder("logins-publish-failed", async () => {
+        const left = (openStreams.get(botId) ?? 1) - 1;
+        if (left > 0) {
+          openStreams.set(botId, left);
+          return;
+        }
+        openStreams.delete(botId);
+        await publish(botId, cdpPort);
+      }),
+    recover: (acquire) =>
+      inOrder("logins-recover-failed", async () => {
+        const files = await readdir(takeovers).catch(() => [] as string[]);
+        for (const file of files.filter((name) => name.endsWith(".json"))) {
+          const botId = file.slice(0, -".json".length);
+          try {
+            const lease = await acquire(botId);
+            try {
+              await publish(botId, lease.cdpPort);
+            } finally {
+              lease.release();
+            }
+          } catch (error) {
+            warn("logins-recover-failed", error);
+          }
+        }
+      }),
+  };
+}
+
+async function cookiesOf(client: Cdp): Promise<Cookie[]> {
+  return (await client.send("Storage.getCookies")).cookies as Cookie[];
+}
+
+// Chromium refuses a whole batch for one cookie that it cannot take, and sets none of it. Returns how many it still refuses alone.
+async function setCookies(client: Cdp, cookies: readonly CookieParam[]): Promise<number> {
+  if (cookies.length === 0) {
+    return 0;
+  }
+  try {
+    await client.send("Storage.setCookies", { cookies });
+    return 0;
+  } catch {
+    let rejected = 0;
+    for (const cookie of cookies) {
+      await client.send("Storage.setCookies", { cookies: [cookie] }).catch(() => {
+        rejected += 1;
+      });
+    }
+    return rejected;
+  }
+}
+
+async function readJson(file: string): Promise<unknown> {
+  const text = await readFile(file, "utf8").catch(() => null);
+  if (text === null) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    // A parse error quotes the file, and the file holds cookie values, so this logs only that it happened.
+    log({ level: "warn", event: "logins-file-unreadable" });
+    return null;
+  }
+}
+
+// A lost jar is safe. The next generation comes from the clock, so it is still ahead of every browser's cursor.
+async function readJar(file: string): Promise<Jar> {
+  const parsed = (await readJson(file)) as Jar | null;
+  return typeof parsed?.generation === "number" && Array.isArray(parsed.cookies) ? parsed : { generation: 0, cookies: [] };
+}
+
+async function readBaseline(file: string): Promise<Baseline | null> {
+  const parsed = (await readJson(file)) as Baseline | null;
+  return Array.isArray(parsed?.cookies) ? parsed : null;
+}
+
+async function writeSecret(file: string, content: Jar | Baseline): Promise<void> {
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(`${file}.tmp`, JSON.stringify(content), { mode: 0o600 });
+  await rename(`${file}.tmp`, file);
+}
+
+function warn(event: string, error: unknown): void {
+  log({ level: "warn", event, message: error instanceof Error ? error.message : "unknown error" });
 }

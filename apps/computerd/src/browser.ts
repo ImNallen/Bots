@@ -18,9 +18,12 @@ const KEY_CODES: Record<string, number> = {
   ArrowRight: 39,
 };
 
-type Cdp = {
+export type Cdp = {
+  // The browser's GUID, which changes at each start.
+  identity: string;
   send: (method: string, params?: Record<string, unknown>, sessionId?: string) => Promise<Record<string, unknown>>;
   onClose: (listener: () => void) => void;
+  close: () => void;
 };
 
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
@@ -323,7 +326,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function webSocketConnector(cdpPort: number): Promise<Cdp> {
+export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
   let debuggerUrl: string;
   try {
     const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS) });
@@ -331,7 +334,7 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
   } catch {
     throw new Error("this computer has no running browser");
   }
-  const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024 });
+  const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024, handshakeTimeout: CDP_CONNECT_TIMEOUT_MS });
   await new Promise((resolve, reject) => {
     socket.once("open", resolve);
     socket.once("error", reject);
@@ -361,6 +364,7 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
     pending.clear();
   });
   return {
+    identity: debuggerUrl.split("/").at(-1) as string,
     send: (method, params = {}, sessionId) =>
       new Promise((resolve, reject) => {
         const id = nextId;
@@ -376,5 +380,6 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
         listener();
       }
     },
+    close: () => socket.terminate(),
   };
 }

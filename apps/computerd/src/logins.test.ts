@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { diffCookies, LOGOUT_KEEP_MS, mergeJar, planApply, toParam, type Cookie, type CookieParam, type Jar } from "./logins.ts";
+import { mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CdpConnector } from "./browser.ts";
+import { desktopOf, type Slot } from "./desktops.ts";
+import { createLogins, diffCookies, LOGOUT_KEEP_MS, mergeJar, planApply, toParam, type Cookie, type CookieParam, type Jar, type Logins } from "./logins.ts";
 
 const NOW = 1_800_000_000_000;
 const LATER = Math.floor(NOW / 1000) + 3600;
@@ -217,5 +222,470 @@ describe("planApply", () => {
   it("treats a cursor it cannot read as no cursor, so everything applies again", () => {
     const jar = jarOf([toParam(cookie("a", "1")), NOW]);
     expect(value(planApply(jar, [{ ...browserCursor(0), value: "garbage" }], NOW + 5))).toEqual(["a=1"]);
+  });
+});
+
+// Behaves as a real VM showed Chromium does. A past expiry deletes, a batch with one bad cookie sets none of it, a restart gives a
+// new identity and drops session cookies, and what was not flushed is lost.
+class FakeBrowser {
+  identity: string = crypto.randomUUID();
+  cookies: Cookie[] = [];
+  disk: Cookie[] = [];
+
+  site(item: Cookie): void {
+    this.cookies = [...this.cookies.filter((known) => !sameCookie(known, item)), item];
+  }
+
+  flush(): void {
+    this.disk = this.cookies.filter((known) => !known.session);
+  }
+
+  restart(): void {
+    this.identity = crypto.randomUUID();
+    this.cookies = this.disk;
+  }
+
+  value(name: string): string | undefined {
+    return this.cookies.find((known) => known.name === name)?.value;
+  }
+}
+
+const sameCookie = (a: Cookie, b: Cookie) => a.name === b.name && a.domain === b.domain && a.path === b.path;
+const REFUSED = "refused-by-the-browser";
+
+function fromParam(param: CookieParam): Cookie {
+  return {
+    ...param,
+    domain: param.domain ?? (param.url as string).split("/")[2] as string,
+    expires: param.expires ?? -1,
+    session: param.expires === undefined,
+  };
+}
+
+describe("createLogins", () => {
+  let dir: string;
+  let clock: number;
+  let browsers: Map<number, FakeBrowser>;
+  let hook: (() => Promise<void> | void) | null;
+  let calls: string[];
+  let written: string[];
+
+  const portOf = (slot: Slot) => desktopOf(slot).cdpPort;
+  const A = portOf(1);
+  const B = portOf(2);
+  const C = portOf(3);
+
+  const connector: CdpConnector = async (cdpPort) => {
+    const browser = browsers.get(cdpPort);
+    if (browser === undefined) {
+      throw new Error("this computer has no running browser");
+    }
+    calls.push("connect");
+    return {
+      identity: browser.identity,
+      onClose: () => {},
+      close: () => {},
+      send: async (method, params = {}) => {
+        await hook?.();
+        calls.push(method);
+        if (method === "Storage.getCookies") {
+          return { cookies: browser.cookies };
+        }
+        const cookies = params.cookies as CookieParam[];
+        if (cookies.some((param) => param.name === REFUSED)) {
+          throw new Error("Invalid cookie fields");
+        }
+        for (const param of cookies) {
+          const item = fromParam(param);
+          browser.cookies = browser.cookies.filter((known) => !sameCookie(known, item));
+          if (item.session || item.expires * 1000 > clock) {
+            browser.cookies.push(item);
+          }
+        }
+        return {};
+      },
+    };
+  };
+
+  const computerd = (): Logins => createLogins({ dir, connector, now: () => clock });
+  const running = (cdpPort: number): FakeBrowser => {
+    const browser = new FakeBrowser();
+    browsers.set(cdpPort, browser);
+    return browser;
+  };
+  const jarOnDisk = async (): Promise<Jar> => JSON.parse(await readFile(join(dir, "logins.json"), "utf8")) as Jar;
+  const leftBaselines = () => readdir(join(dir, "takeovers")).catch(() => [] as string[]);
+  const leaseOn = (cdpPort: number) => async () => ({ slot: (cdpPort - 9300) as Slot, cdpPort, release: () => {} });
+  const login = (value = "logged-in") => cookie("login", value, { httpOnly: true, secure: true });
+
+  beforeEach(async () => {
+    written = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((line) => {
+      written.push(String(line));
+      return true;
+    });
+    dir = await mkdtemp(join(tmpdir(), "logins-test-"));
+    clock = NOW;
+    browsers = new Map();
+    hook = null;
+    calls = [];
+  });
+
+  async function takeOverAndLogIn(logins: Logins, value = "logged-in"): Promise<void> {
+    await logins.opened("a", A);
+    (browsers.get(A) as FakeBrowser).site(login(value));
+    await logins.closed("a", A);
+  }
+
+  it("gives a login to a running bot at give-back, and to a stopped or new bot when it starts", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    expect(a.value("login")).toBe("logged-in");
+    expect(b.value("login")).toBe("logged-in");
+
+    const started = running(C);
+    expect(started.value("login")).toBeUndefined();
+    await logins.catchUp(C);
+    expect(started.value("login")).toBe("logged-in");
+  });
+
+  it("keeps the jar and the baseline to computerd alone", async () => {
+    running(A);
+    const logins = computerd();
+    await logins.opened("a", A);
+    expect((await stat(join(dir, "takeovers", "a.json"))).mode & 0o777).toBe(0o600);
+    (browsers.get(A) as FakeBrowser).site(login());
+    await logins.closed("a", A);
+    expect((await stat(join(dir, "logins.json"))).mode & 0o777).toBe(0o600);
+    expect(await leftBaselines()).toEqual([]);
+  });
+
+  it("moves only what the take-over changed, so an old session elsewhere stays out", async () => {
+    const [a, b] = [running(A), running(B)];
+    a.site(cookie("old", "from-before"));
+    await takeOverAndLogIn(computerd());
+    expect(b.value("login")).toBe("logged-in");
+    expect(b.value("old")).toBeUndefined();
+  });
+
+  it("logs counts and never a cookie's name or value", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(cookie("secretname", "secretvalue"));
+    a.site(cookie(REFUSED, "secretvalue2"));
+    await logins.closed("a", A);
+    expect(b.value("secretname")).toBe("secretvalue");
+    expect(written.join("")).toContain("logins-published");
+    expect(written.join("")).not.toMatch(/secretname|secretvalue|refused-by/);
+  });
+
+  it("carries a logout to the other bots, and does not bring it back", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    await logins.opened("a", A);
+    a.cookies = [];
+    clock += 1000;
+    await logins.closed("a", A);
+    expect(b.value("login")).toBeUndefined();
+
+    const later = running(C);
+    await logins.catchUp(C);
+    expect(later.value("login")).toBeUndefined();
+  });
+
+  it("does not let a push into a bot under take-over come back as a new generation", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("b", B);
+    await takeOverAndLogIn(logins);
+    expect(b.value("login")).toBe("logged-in");
+    const { generation } = await jarOnDisk();
+    clock += 1000;
+    await logins.closed("b", B);
+    expect((await jarOnDisk()).generation).toBe(generation);
+    expect(a.value("login")).toBe("logged-in");
+  });
+
+  it("publishes once when a newer tab replaces an older one, from the first baseline", async () => {
+    const [a, b] = [running(A), running(B)];
+    a.site(cookie("old", "1"));
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(login());
+    await logins.opened("a", A);
+    await logins.closed("a", A);
+    expect(b.value("login")).toBeUndefined();
+    await logins.closed("a", A);
+    expect(b.value("login")).toBe("logged-in");
+    expect(await leftBaselines()).toEqual([]);
+  });
+
+  it("does not take a browser restart during a take-over for a logout", async () => {
+    const [a, b] = [running(A), running(B)];
+    a.site(session("kept", "1"));
+    b.site(session("kept", "1"));
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.flush();
+    a.restart();
+    a.site(login());
+    await logins.closed("a", A);
+    expect(b.value("kept")).toBe("1");
+    expect(b.value("login")).toBe("logged-in");
+  });
+
+  it("brings a session login back after a restart, and leaves what a bot rotated", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(session("sess", "1"));
+    a.site(cookie("rotating", "from-owner"));
+    await logins.closed("a", A);
+    b.site(cookie("rotating", "rotated-by-bot"));
+    b.flush();
+    b.restart();
+    expect(b.value("sess")).toBeUndefined();
+    await logins.catchUp(B);
+    expect(b.value("sess")).toBe("1");
+    expect(b.value("rotating")).toBe("rotated-by-bot");
+  });
+
+  it("applies again when a browser stopped before its flush, because the cursor went with the cookies", async () => {
+    running(A);
+    const b = running(B);
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    b.restart();
+    expect(b.value("login")).toBeUndefined();
+    await logins.catchUp(B);
+    expect(b.value("login")).toBe("logged-in");
+  });
+
+  it("returns with no cookie call when nothing has changed, because every acquire calls it", async () => {
+    running(A);
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    await logins.catchUp(A);
+    calls = [];
+    await logins.catchUp(A);
+    expect(calls).toEqual(["connect"]);
+  });
+
+  it("looks again when the browser restarted, though the jar did not change", async () => {
+    const a = running(A);
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    a.restart();
+    calls = [];
+    await logins.catchUp(A);
+    expect(calls).toContain("Storage.getCookies");
+  });
+
+  it("treats a refused port as a stopped slot, so a push still reaches the rest", async () => {
+    const a = running(A);
+    const c = running(C);
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    expect(a.value("login")).toBe("logged-in");
+    expect(c.value("login")).toBe("logged-in");
+    expect(written.join("")).not.toContain("logins-catch-up-failed");
+  });
+
+  it("retries a refused batch one by one, and still moves the cursor", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(login());
+    a.site(cookie(REFUSED, "x"));
+    await logins.closed("a", A);
+    expect(b.value("login")).toBe("logged-in");
+    expect(b.value(REFUSED)).toBeUndefined();
+    expect(written.join("")).toContain('"rejected":1');
+    b.flush();
+    b.restart();
+    calls = [];
+    await logins.catchUp(B);
+    expect(calls).not.toContain("Storage.setCookies");
+  });
+
+  it("resolves when a browser fails during a catch-up, and tries again next time", async () => {
+    running(A);
+    const b = running(B);
+    const logins = computerd();
+    await takeOverAndLogIn(logins);
+    b.cookies = [];
+    b.identity = "restarted";
+    hook = () => {
+      throw new Error("the browser closed the connection");
+    };
+    await expect(logins.catchUp(B)).resolves.toBeUndefined();
+    hook = null;
+    await logins.catchUp(B);
+    expect(b.value("login")).toBe("logged-in");
+  });
+
+  it("keeps the baseline when the browser cannot be read at give-back, and the next give-back publishes", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(login());
+    browsers.delete(A);
+    await logins.closed("a", A);
+    expect(b.value("login")).toBeUndefined();
+    expect(await leftBaselines()).toEqual(["a.json"]);
+
+    browsers.set(A, a);
+    await logins.opened("a", A);
+    await logins.closed("a", A);
+    expect(b.value("login")).toBe("logged-in");
+    expect(await leftBaselines()).toEqual([]);
+  });
+
+  it("starts from an empty jar when the file cannot be read, and logs none of it", async () => {
+    await writeFile(join(dir, "logins.json"), '{"generation": 5, "cookies": [{"secretvalue');
+    running(A);
+    const b = running(B);
+    await takeOverAndLogIn(computerd());
+    expect(b.value("login")).toBe("logged-in");
+    expect((await jarOnDisk()).generation).toBe(NOW);
+    expect(written.join("")).toContain("logins-file-unreadable");
+    expect(written.join("")).not.toContain("secretvalue");
+  });
+
+  it("orders a give-back and the next take-over, so a push and a merge never interleave", async () => {
+    const a = running(A);
+    const logins = computerd();
+    const order: string[] = [];
+    await logins.opened("a", A);
+    a.site(login());
+    const closing = logins.closed("a", A).then(() => order.push("closed"));
+    const opening = logins.opened("a", A).then(() => order.push("opened"));
+    await Promise.all([closing, opening]);
+    expect(order).toEqual(["closed", "opened"]);
+    const baseline = JSON.parse(await readFile(join(dir, "takeovers", "a.json"), "utf8")) as { cookies: Cookie[] };
+    expect(baseline.cookies.map((known) => known.name)).toContain("login");
+  });
+
+  describe("a kill at each browser call", () => {
+    // A killed process runs no further step, so the old instance hangs where it stopped, and a new one starts over the same files.
+    function killAtCall(target: number): { killed: () => boolean } {
+      let seen = 0;
+      let dead = false;
+      hook = () => {
+        seen += 1;
+        if (seen > target) {
+          dead = true;
+          return new Promise(() => {});
+        }
+      };
+      return { killed: () => dead };
+    }
+
+    const until = async (done: () => boolean) => {
+      while (!done()) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    };
+
+    it("still publishes a give-back, with one generation", async () => {
+      let killAt = 0;
+      for (; ; killAt += 1) {
+        dir = await mkdtemp(join(tmpdir(), "logins-kill-"));
+        const [a, b] = [running(A), running(B)];
+        const first = computerd();
+        await first.opened("a", A);
+        a.site(login());
+        const { killed } = killAtCall(killAt);
+        let finished = false;
+        void first.closed("a", A).then(() => {
+          finished = true;
+        });
+        await until(() => finished || killed());
+        hook = null;
+
+        await computerd().recover(leaseOn(A));
+        expect(b.value("login"), `a kill at call ${killAt}`).toBe("logged-in");
+        expect(await leftBaselines(), `a kill at call ${killAt}`).toEqual([]);
+        expect((await jarOnDisk()).generation, `a kill at call ${killAt}`).toBe(NOW);
+        if (!killed()) {
+          break;
+        }
+      }
+      expect(killAt).toBeGreaterThanOrEqual(5);
+    });
+
+    it("leaves nothing wrong behind a kill during the start of a take-over", async () => {
+      let killAt = 0;
+      for (; ; killAt += 1) {
+        dir = await mkdtemp(join(tmpdir(), "logins-kill-"));
+        const [a, b] = [running(A), running(B)];
+        a.site(cookie("old", "1"));
+        const first = computerd();
+        const { killed } = killAtCall(killAt);
+        let finished = false;
+        void first.opened("a", A).then(() => {
+          finished = true;
+        });
+        await until(() => finished || killed());
+        hook = null;
+
+        await computerd().recover(leaseOn(A));
+        expect(b.value("old"), `a kill at call ${killAt}`).toBeUndefined();
+        expect(await leftBaselines(), `a kill at call ${killAt}`).toEqual([]);
+        if (!killed()) {
+          break;
+        }
+      }
+      expect(killAt).toBeGreaterThanOrEqual(1);
+    });
+
+    it("repeats the diff after a kill just before the baseline goes, with no new generation and nothing overwritten", async () => {
+      const [a, b] = [running(A), running(B)];
+      const first = computerd();
+      await first.opened("a", A);
+      const baseline = await readFile(join(dir, "takeovers", "a.json"), "utf8");
+      a.site(login());
+      await first.closed("a", A);
+      const { generation } = await jarOnDisk();
+      b.site(login("rotated-by-bot"));
+
+      await writeFile(join(dir, "takeovers", "a.json"), baseline);
+      clock += 1000;
+      await computerd().recover(leaseOn(A));
+      expect((await jarOnDisk()).generation).toBe(generation);
+      expect(b.value("login")).toBe("rotated-by-bot");
+      expect(await leftBaselines()).toEqual([]);
+    });
+
+    it("keeps a baseline whose bot cannot start, for the next start of computerd", async () => {
+      const a = running(A);
+      const first = computerd();
+      await first.opened("a", A);
+      a.site(login());
+      await computerd().recover(() => Promise.reject(new Error("every screen on this computer is in use")));
+      expect(await leftBaselines()).toEqual(["a.json"]);
+      const b = running(B);
+      await computerd().recover(leaseOn(A));
+      expect(b.value("login")).toBe("logged-in");
+    });
+
+    it("releases the lease after a recovery, and ignores a temp file that a kill left", async () => {
+      const a = running(A);
+      const first = computerd();
+      await first.opened("a", A);
+      a.site(login());
+      await writeFile(join(dir, "takeovers", "z.json.tmp"), "partial");
+      let released = 0;
+      const seen: string[] = [];
+      await computerd().recover(async (botId) => {
+        seen.push(botId);
+        return { slot: 1, cdpPort: A, release: () => (released += 1) };
+      });
+      expect(seen).toEqual(["a"]);
+      expect(released).toBe(1);
+    });
   });
 });

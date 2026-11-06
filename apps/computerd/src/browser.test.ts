@@ -29,6 +29,8 @@ function fakeChromium() {
       locateResult = value;
     },
     client: {
+      identity: "browser",
+      close: () => {},
       onClose: (listener: () => void) => {
         closeListeners.push(listener);
       },
