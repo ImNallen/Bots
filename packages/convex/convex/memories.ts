@@ -124,7 +124,8 @@ export async function applyMemoryCall(
         text: parsed.text,
         source: { kind: "bot", runId: run._id },
       });
-      return result("ok", `Saved note ${noteId}.`);
+      // A chat row cuts its summary short, and a save at the start of a run has no card, so the row's output holds the whole text.
+      return result("ok", `Saved note ${noteId}. Its text is: ${parsed.text}`);
     }
     case "memoryForget": {
       const noteId = ctx.db.normalizeId("memories", call.noteId);

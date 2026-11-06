@@ -1670,6 +1670,74 @@ button.card-row:hover {
   resize: vertical;
 }
 
+/* Memory */
+.note-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.note-count {
+  padding-right: 9px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.notes {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+
+.note + .note {
+  border-top: 1px solid var(--hair);
+}
+
+.note-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.note-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.note-actions button {
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.note-actions button:hover {
+  color: var(--fg);
+}
+
+.note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-new {
+  padding: 10px;
+}
+
 /* Character picker */
 .picker {
   display: flex;
@@ -2126,6 +2194,20 @@ button.card-row:hover {
 
   .select select {
     font-size: 15px;
+  }
+
+  .note-count,
+  .note-meta {
+    font-size: 13px;
+  }
+
+  .note-text {
+    font-size: 15px;
+  }
+
+  .note-actions button {
+    min-height: 44px;
+    font-size: 14px;
   }
 
   .panel-note {
