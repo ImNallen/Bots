@@ -128,6 +128,7 @@ export const timeline = query({
         : null;
       runs.push({
         _id: run._id,
+        createdAt: run._creationTime,
         state: publicState(run.state),
         cancelRequested: run.cancelRequested,
         events: events.reverse(),
