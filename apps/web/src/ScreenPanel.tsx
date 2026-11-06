@@ -190,7 +190,10 @@ function TypingBox({ screen }: { screen: RFB }) {
           if (isNamedKey(event.key) && !composing.current && !event.nativeEvent.isComposing) {
             event.preventDefault();
             flush(event.currentTarget);
-            screen.sendKey(KEY_KEYSYMS[event.key], null);
+            // Text that was refused stays in the box, and an Enter now could submit a form without it.
+            if (event.currentTarget.value === "") {
+              screen.sendKey(KEY_KEYSYMS[event.key], null);
+            }
           }
         }}
       />
