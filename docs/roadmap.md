@@ -164,6 +164,18 @@ This is a proposal, so change it if you find a better answer:
 
 Before this step, a bot has only a fixed system prompt. It has no job of its own, and it remembers only what is in its thread.
 
+### What Grok Bot does
+
+The owner asked a Grok Bot about itself on 2026-11-06, and its answers agree with [its documentation](https://docs.x.ai/grok-bot/bots) on memory.
+
+- A bot keeps lasting notes and a dated log. Each bot has its own, across all its chats. A few personal facts, such as a name and a time zone, reach the owner's other bots.
+- A bot decides by itself when to save, and it does not ask first. Saying "remember" makes a save certain. Nothing lists the notes, so the owner asks the bot what it remembers.
+- A reset keeps memory, and deleting the bot deletes it. Logins and cards belong in the Vault.
+
+The two sources disagree on the rest. The bot described a name, a title, and a free-text description that holds its assignment. The documentation says that a personal bot no longer has a description, that a shared bot does, and that a job is set by telling the bot in chat. It does not say how routines run or whether they are read-only, and it describes no activity view.
+
+Bots differs on purpose in four ways. The owner can read and edit each note. No bot can write a fact that another bot reads, because one injected page could then reach every bot. A save after a computer tool asks first at the default level, so a page cannot plant a note silently. Nothing stores a dated log, because the thread already records the work, and a log would be one more way into every later prompt. Add one if long threads get compaction.
+
 ### What to build
 
 1. The standing assignment. Each bot gets a title and an assignment that only its owner writes, and the model reads them on each call.
