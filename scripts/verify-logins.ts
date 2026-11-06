@@ -70,7 +70,7 @@ setTimeout(() => {
 
 const PAGE = (title: string, body: string) => `<!doctype html><title>${title}</title>${body}`;
 const FILLS_THE_PAGE = "position:fixed;left:0;top:0;width:100%;height:100%;font-size:40px";
-const YEAR = 86_400;
+const DAY_SECONDS = 86_400;
 
 function accountOf(header: string | undefined): string {
   const cookies = new Map((header ?? "").split("; ").map((pair) => pair.split("=") as [string, string]));
@@ -100,10 +100,10 @@ const site = createServer((request, response) => {
         request.on("end", () => {
           const user = new URLSearchParams(body).get("user") ?? "";
           response.setHeader("Set-Cookie", [
-            `persist=${user}; Path=/; HttpOnly; Max-Age=${YEAR}`,
+            `persist=${user}; Path=/; HttpOnly; Max-Age=${DAY_SECONDS}`,
             `sess=${user}; Path=/; HttpOnly`,
-            `__Host-token=${user}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${YEAR}`,
-            `visible=${user}; Path=/; SameSite=Strict; Max-Age=${YEAR}; Priority=High`,
+            `__Host-token=${user}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${DAY_SECONDS}`,
+            `visible=${user}; Path=/; SameSite=Strict; Max-Age=${DAY_SECONDS}; Priority=High`,
           ]);
           toAccount();
         });
@@ -139,7 +139,7 @@ const site = createServer((request, response) => {
       );
       return;
     case "/rotate":
-      response.setHeader("Set-Cookie", [`persist=${asUser("rotated")}; Path=/; HttpOnly; Max-Age=${YEAR}`]);
+      response.setHeader("Set-Cookie", [`persist=${asUser("rotated")}; Path=/; HttpOnly; Max-Age=${DAY_SECONDS}`]);
       toAccount();
       return;
     case "/embed":
@@ -401,7 +401,7 @@ async function runChecks(): Promise<void> {
   await browse(BOTS.a, { name: "browser_navigate", args: { url: `http://127.0.0.1:${sitePort()}/embed` } });
   const clientA = await webSocketConnector(cdpOf(slotA));
   await clientA.send("Storage.setCookies", {
-    cookies: [{ name: "dotted", value: asUser("domain"), domain: ".verify-logins.test", path: "/", secure: true, httpOnly: true, expires: Math.floor(Date.now() / 1000) + YEAR }],
+    cookies: [{ name: "dotted", value: asUser("domain"), domain: ".verify-logins.test", path: "/", secure: true, httpOnly: true, expires: Math.floor(Date.now() / 1000) + DAY_SECONDS }],
   });
   clientA.close();
   check(valueIn(await cookiesAt(slotB), "persist") === undefined, "nothing moves during the take-over");

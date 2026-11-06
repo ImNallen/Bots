@@ -7,14 +7,14 @@ import { log } from "./log.ts";
 const MAX_INBOUND_BYTES = 64 * 1024;
 const PAUSE_ABOVE_BYTES = 1024 * 1024;
 
-// A VM takes no inbound connections, so a stream is one more connection that this computer dials to the link.
-// The relay holds a lease for as long as it runs, so a viewer's desktop is never stopped.
-// A login typed during a take-over moves when the relay ends, however it ends, so these run only for a control stream.
+// Only a control stream calls these. A login moves when its relay ends, whether by a give-back, an expiry, or a phone that drops.
 export type TakeoverLogins = {
   opened: (cdpPort: number) => Promise<void>;
   closed: (cdpPort: number) => Promise<void>;
 };
 
+// A VM takes no inbound connections, so a stream is one more connection that this computer dials to the link.
+// The relay holds a lease for as long as it runs, so a viewer's desktop is never stopped.
 export function relayScreen(args: {
   linkUrl: string;
   token: string;

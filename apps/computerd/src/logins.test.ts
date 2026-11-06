@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CdpConnector } from "./browser.ts";
 import { desktopOf, type Slot } from "./desktops.ts";
-import { createLogins, diffCookies, LOGOUT_KEEP_MS, mergeJar, planApply, toParam, type Cookie, type CookieParam, type Jar, type Logins } from "./logins.ts";
+import { createLogins, diffCookies, MAX_COOKIE_LIFE_MS, mergeJar, planApply, toParam, type Cookie, type CookieParam, type Jar, type Logins } from "./logins.ts";
 
 const NOW = 1_800_000_000_000;
 const LATER = Math.floor(NOW / 1000) + 3600;
@@ -165,14 +165,14 @@ describe("mergeJar", () => {
   it("keeps a logout until it can no longer matter, and then drops it", () => {
     const logout = diffCookies([cookie("a", "1")], [], true, NOW);
     const first = mergeJar({ generation: 0, cookies: [] }, logout, NOW);
-    const other = toParam(cookie("b", "1", { expires: Math.floor(NOW / 1000) + 2 * LOGOUT_KEEP_MS }));
-    expect(mergeJar(first, [other], NOW + LOGOUT_KEEP_MS - 1).cookies).toHaveLength(2);
-    expect(mergeJar(first, [other], NOW + LOGOUT_KEEP_MS).cookies.map((entry) => entry.param.name)).toEqual(["b"]);
+    const other = toParam(cookie("b", "1", { expires: Math.floor(NOW / 1000) + 2 * MAX_COOKIE_LIFE_MS }));
+    expect(mergeJar(first, [other], NOW + MAX_COOKIE_LIFE_MS - 1).cookies).toHaveLength(2);
+    expect(mergeJar(first, [other], NOW + MAX_COOKIE_LIFE_MS).cookies.map((entry) => entry.param.name)).toEqual(["b"]);
   });
 
   it("keeps a session cookie, which has no expiry of its own", () => {
     const first = jarOf([toParam(session("a", "1")), NOW]);
-    expect(mergeJar(first, [], NOW + 2 * LOGOUT_KEEP_MS).cookies).toHaveLength(1);
+    expect(mergeJar(first, [], NOW + 2 * MAX_COOKIE_LIFE_MS).cookies).toHaveLength(1);
   });
 });
 

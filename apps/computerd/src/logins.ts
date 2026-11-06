@@ -42,9 +42,10 @@ export type CookieParam = {
 export type MovedCookie = { key: string; param: CookieParam; generation: number };
 export type Jar = { generation: number; cookies: MovedCookie[] };
 
-// Chromium keeps a cookie for at most 400 days, so after this no browser can still hold what a logout was for. A stopped bot has
-// no schedule and can come back after any time, so a shorter limit could leave it logged in. A logout entry holds no value.
-export const LOGOUT_KEEP_MS = 400 * 24 * 60 * 60 * 1000;
+// Chromium keeps a cookie for at most this long. So a logout stays in the jar this long, and after that no browser can still hold
+// what it was for. A stopped bot has no schedule and can come back after any time, so a shorter limit could leave it logged in. A
+// logout entry holds no value, so keeping it costs little.
+export const MAX_COOKIE_LIFE_MS = 400 * 24 * 60 * 60 * 1000;
 
 // .invalid can never resolve, so no site ever receives this cookie.
 const CURSOR_DOMAIN = "logins.bots.invalid";
@@ -57,7 +58,7 @@ function cursorParam(generation: number, now: number): CookieParam {
     path: "/",
     secure: true,
     httpOnly: true,
-    expires: Math.floor((now + LOGOUT_KEEP_MS) / 1000),
+    expires: Math.floor((now + MAX_COOKIE_LIFE_MS) / 1000),
   };
 }
 
@@ -121,7 +122,7 @@ export function mergeJar(jar: Jar, moved: readonly CookieParam[], now: number): 
   }
   return {
     generation,
-    cookies: [...entries.values()].filter((entry) => !isPast(entry.param, now) || now - entry.generation < LOGOUT_KEEP_MS),
+    cookies: [...entries.values()].filter((entry) => !isPast(entry.param, now) || now - entry.generation < MAX_COOKIE_LIFE_MS),
   };
 }
 
@@ -148,8 +149,7 @@ export function planApply(jar: Jar, browser: readonly Cookie[], now: number): Co
 type Baseline = { identity: string; cookies: Cookie[] };
 
 export type Logins = {
-  // Gives one browser what it lacks. A stopped slot is not an error. It never rejects, because a bot without a login is better than
-  // a bot without a browser.
+  // A stopped slot is not an error. It never rejects, because a bot without a login is better than a bot without a browser.
   catchUp: (cdpPort: number) => Promise<void>;
   opened: (botId: string, cdpPort: number) => Promise<void>;
   closed: (botId: string, cdpPort: number) => Promise<void>;
