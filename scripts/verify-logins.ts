@@ -65,7 +65,7 @@ if (parseLiveSlots(liveAtStart).length > 0) {
 
 setTimeout(() => {
   console.log(`FAIL  logins: the check did not finish in ${OVERALL_TIMEOUT_MS / 1000} seconds`);
-  process.exit(1);
+  cleanUp().finally(() => process.exit(1));
 }, OVERALL_TIMEOUT_MS).unref();
 
 const PAGE = (title: string, body: string) => `<!doctype html><title>${title}</title>${body}`;

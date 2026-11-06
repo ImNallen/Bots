@@ -172,10 +172,12 @@ These are open on purpose. Fix each one when the work reaches it.
 - Only a take-over moves a login. A login that a bot makes by itself stays in that bot's profile. A login from before desktops is in the base, so every new bot starts with it.
 - Chromium writes a new cookie to disk about 30 seconds after it changes, and SIGTERM does not make it write sooner. A test lost a cookie set 20 seconds before a stop and kept one set 35 seconds before. A login from a take-over survives this once the owner gives back, because the jar holds it and the next start applies it again. A cookie that a bot's own page set in those 30 seconds is still lost, and so is what the owner typed if the browser dies during the take-over.
 - A site that rotates one token across several browsers can log them out, because each browser that uses the moved token can make the others' copy stale.
+- A browser that is down when a take-over opens or ends moves no login. The login stays in that bot's profile, so the owner has to log in again in a later take-over to move it.
+- A cookie that another bot's push put into a bot during its own take-over, and that the owner then logs out of there, does not move as a logout, because the baseline never held it.
 - localStorage logins do not move. A new copy of the base would not bring them either, because the base holds only what it held before desktops.
 - An owner's login replaces a bot's own account on that site, because a moved cookie has the same name, host, and path.
 - A cookie moved in the middle of a task can disturb a form that a bot has open, for example by ending the session that the form belongs to.
-- A session cookie in the jar comes back at each restart of a browser until the owner logs out in a take-over, even if the site would have ended that session by now.
+- A session cookie in the jar comes back once at each start of a browser until the owner logs out in a take-over, even if the site would have ended that session by now.
 - A pending approval has no signal that reaches a desktop. After an hour with no tool, the desktop stops, and a ninth bot can take its slot sooner. The approved click then gets the stale ref error, so it clicks nothing wrong, and the bot starts again on a blank page.
 - A bot loses its page on every browser restart and idle stop. Its next snapshot says `about:blank`.
 - A ninth bot gets an error when all 8 screens have a tool running or a person watching. This is on purpose, so a screen never stops under a viewer.

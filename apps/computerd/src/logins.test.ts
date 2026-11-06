@@ -1,8 +1,11 @@
 import { mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CdpConnector } from "./browser.ts";
+import { WebSocketServer } from "ws";
+import { webSocketConnector, type CdpConnector } from "./browser.ts";
 import { desktopOf, type Slot } from "./desktops.ts";
 import { createLogins, diffCookies, MAX_COOKIE_LIFE_MS, mergeJar, planApply, toParam, type Cookie, type CookieParam, type Jar, type Logins } from "./logins.ts";
 
@@ -33,6 +36,10 @@ describe("toParam", () => {
 
   it("sends a cookie that is not secure by an http url, on its own path", () => {
     expect(toParam(cookie("a", "v", { path: "/app" })).url).toBe("http://a.test/app");
+  });
+
+  it("sends a cookie that an https site set without Secure by an https url", () => {
+    expect(toParam(cookie("a", "v", { sourceScheme: "Secure" })).url).toBe("https://a.test/");
   });
 
   it("sends a domain cookie by domain", () => {
@@ -159,7 +166,7 @@ describe("mergeJar", () => {
 
   it("gives a lost jar a generation that a browser's older cursor still sees as new", () => {
     const rebuilt = mergeJar({ generation: 0, cookies: [] }, [live], NOW);
-    expect(planApply(rebuilt, [browserCursor(NOW - 1000)], NOW)).toHaveLength(1);
+    expect(planApply(rebuilt, [browserCursor(NOW - 1000)], NOW, true)).toHaveLength(1);
   });
 
   it("keeps a logout until it can no longer matter, and then drops it", () => {
@@ -180,48 +187,53 @@ describe("planApply", () => {
   const value = (params: CookieParam[]) => params.map((param) => `${param.name}=${param.value}`).sort();
 
   it("plans every entry for a new browser with no cursor", () => {
-    expect(value(planApply(jarOf([toParam(cookie("a", "1")), NOW]), [], NOW))).toEqual(["a=1"]);
+    expect(value(planApply(jarOf([toParam(cookie("a", "1")), NOW]), [], NOW, true))).toEqual(["a=1"]);
   });
 
   it("plans only entries newer than the cursor", () => {
     const jar = jarOf([toParam(cookie("a", "1")), NOW], [toParam(cookie("b", "1")), NOW + 5]);
-    expect(value(planApply(jar, [browserCursor(NOW)], NOW + 5))).toEqual(["b=1"]);
+    expect(value(planApply(jar, [browserCursor(NOW)], NOW + 5, true))).toEqual(["b=1"]);
   });
 
   it("leaves a cookie that a bot rotated, once the cursor has passed it", () => {
     const jar = jarOf([toParam(cookie("a", "1")), NOW]);
-    expect(planApply(jar, [browserCursor(NOW), cookie("a", "rotated")], NOW + 5)).toEqual([]);
+    expect(planApply(jar, [browserCursor(NOW), cookie("a", "rotated")], NOW + 5, true)).toEqual([]);
   });
 
   it("brings back a session cookie that a restart dropped, whatever the cursor says", () => {
     const jar = jarOf([toParam(session("a", "1")), NOW]);
-    expect(value(planApply(jar, [browserCursor(NOW)], NOW + 5))).toEqual(["a=1"]);
+    expect(value(planApply(jar, [browserCursor(NOW)], NOW + 5, true))).toEqual(["a=1"]);
+  });
+
+  it("leaves out a session cookie missing from a browser that did not just start, because that is a logout", () => {
+    const jar = jarOf([toParam(session("a", "1")), NOW]);
+    expect(planApply(jar, [browserCursor(NOW)], NOW + 5, false)).toEqual([]);
   });
 
   it("leaves a session cookie that the browser still has", () => {
     const jar = jarOf([toParam(session("a", "1")), NOW]);
-    expect(planApply(jar, [browserCursor(NOW), session("a", "rotated")], NOW + 5)).toEqual([]);
+    expect(planApply(jar, [browserCursor(NOW), session("a", "rotated")], NOW + 5, true)).toEqual([]);
   });
 
   it("sends a logout to a browser that holds the cookie", () => {
     const jar = mergeJar({ generation: 0, cookies: [] }, diffCookies([cookie("a", "1")], [], true, NOW), NOW);
-    const [plan] = planApply(jar, [cookie("a", "1")], NOW + 5);
+    const [plan] = planApply(jar, [cookie("a", "1")], NOW + 5, true);
     expect(plan?.value).toBe("");
   });
 
   it("sends no logout to a browser with no such cookie, since it has nothing to do", () => {
     const jar = mergeJar({ generation: 0, cookies: [] }, diffCookies([cookie("a", "1")], [], true, NOW), NOW);
-    expect(planApply(jar, [], NOW + 5)).toEqual([]);
+    expect(planApply(jar, [], NOW + 5, true)).toEqual([]);
   });
 
   it("does not bring back a session cookie that was logged out, once the cursor has passed it", () => {
     const jar = mergeJar({ generation: 0, cookies: [] }, diffCookies([session("a", "1")], [], true, NOW), NOW);
-    expect(planApply(jar, [browserCursor(NOW)], NOW + 5)).toEqual([]);
+    expect(planApply(jar, [browserCursor(NOW)], NOW + 5, true)).toEqual([]);
   });
 
   it("treats a cursor it cannot read as no cursor, so everything applies again", () => {
     const jar = jarOf([toParam(cookie("a", "1")), NOW]);
-    expect(value(planApply(jar, [{ ...browserCursor(0), value: "garbage" }], NOW + 5))).toEqual(["a=1"]);
+    expect(value(planApply(jar, [{ ...browserCursor(0), value: "garbage" }], NOW + 5, true))).toEqual(["a=1"]);
   });
 });
 
@@ -506,9 +518,9 @@ describe("createLogins", () => {
     expect(written.join("")).toContain('"rejected":1');
     b.flush();
     b.restart();
-    calls = [];
+    written.length = 0;
     await logins.catchUp(B);
-    expect(calls).not.toContain("Storage.setCookies");
+    expect(written.join("")).not.toContain("logins-applied");
   });
 
   it("resolves when a browser fails during a catch-up, and tries again next time", async () => {
@@ -527,21 +539,75 @@ describe("createLogins", () => {
     expect(b.value("login")).toBe("logged-in");
   });
 
-  it("keeps the baseline when the browser cannot be read at give-back, and the next give-back publishes", async () => {
+  it("drops the baseline when the browser cannot be read at give-back, so a later take-over moves none of the bot's own browsing", async () => {
     const [a, b] = [running(A), running(B)];
     const logins = computerd();
     await logins.opened("a", A);
-    a.site(login());
     browsers.delete(A);
     await logins.closed("a", A);
-    expect(b.value("login")).toBeUndefined();
-    expect(await leftBaselines()).toEqual(["a.json"]);
+    expect(await leftBaselines()).toEqual([]);
 
     browsers.set(A, a);
+    a.site(cookie("the-bots-own", "session"));
     await logins.opened("a", A);
+    a.site(login());
     await logins.closed("a", A);
     expect(b.value("login")).toBe("logged-in");
-    expect(await leftBaselines()).toEqual([]);
+    expect(b.value("the-bots-own")).toBeUndefined();
+  });
+
+  it("replaces a baseline left with no stream open, for the same reason", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    const stale = await readFile(join(dir, "takeovers", "a.json"), "utf8");
+    await logins.closed("a", A);
+    await writeFile(join(dir, "takeovers", "a.json"), stale);
+
+    a.site(cookie("the-bots-own", "session"));
+    await logins.opened("a", A);
+    await logins.closed("a", A);
+    expect(b.value("the-bots-own")).toBeUndefined();
+  });
+
+  it("does not bring back a session login that the owner logged out of, when another bot's push arrives first", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    await logins.opened("a", A);
+    a.site(session("sess", "1"));
+    await logins.closed("a", A);
+    expect(b.value("sess")).toBe("1");
+
+    await logins.opened("a", A);
+    a.cookies = a.cookies.filter((known) => known.name !== "sess");
+    await logins.opened("b", B);
+    b.site(login());
+    clock += 1000;
+    await logins.closed("b", B);
+    expect(a.value("sess")).toBeUndefined();
+
+    clock += 1000;
+    await logins.closed("a", A);
+    expect(b.value("sess")).toBeUndefined();
+  });
+
+  it("does not publish an older value that a browser restart brought back during a take-over", async () => {
+    const [a, b] = [running(A), running(B)];
+    const logins = computerd();
+    a.site(login("old"));
+    a.flush();
+    await logins.opened("a", A);
+    a.site(login("new"));
+    await logins.closed("a", A);
+    expect(b.value("login")).toBe("new");
+
+    await logins.opened("a", A);
+    a.restart();
+    expect(a.value("login")).toBe("old");
+    clock += 1000;
+    await logins.closed("a", A);
+    expect(a.value("login")).toBe("new");
+    expect(b.value("login")).toBe("new");
   });
 
   it("starts from an empty jar when the file cannot be read, and logs none of it", async () => {
@@ -660,16 +726,33 @@ describe("createLogins", () => {
       expect(await leftBaselines()).toEqual([]);
     });
 
-    it("keeps a baseline whose bot cannot start, for the next start of computerd", async () => {
+    it("does not take a session logout for a new browser after a kill, so the logout still moves", async () => {
+      const [a, b] = [running(A), running(B)];
+      const first = computerd();
+      await first.opened("a", A);
+      a.site(session("sess", "1"));
+      await first.closed("a", A);
+      expect(b.value("sess")).toBe("1");
+
+      await first.opened("a", A);
+      a.cookies = a.cookies.filter((known) => known.name !== "sess");
+      clock += 1000;
+      const second = computerd();
+      await second.recover(async () => {
+        await second.catchUp(A);
+        return { slot: 1, cdpPort: A, release: () => {} };
+      });
+      expect(a.value("sess")).toBeUndefined();
+      expect(b.value("sess")).toBeUndefined();
+    });
+
+    it("drops a baseline whose bot cannot start, so a later start moves nothing out of date", async () => {
       const a = running(A);
       const first = computerd();
       await first.opened("a", A);
       a.site(login());
       await computerd().recover(() => Promise.reject(new Error("every screen on this computer is in use")));
-      expect(await leftBaselines()).toEqual(["a.json"]);
-      const b = running(B);
-      await computerd().recover(leaseOn(A));
-      expect(b.value("login")).toBe("logged-in");
+      expect(await leftBaselines()).toEqual([]);
     });
 
     it("releases the lease after a recovery, and ignores a temp file that a kill left", async () => {
@@ -689,3 +772,35 @@ describe("createLogins", () => {
     });
   });
 });
+
+describe("a browser that stops answering", () => {
+  it("ends a catch-up at its deadline, including the retry on the closed socket, and lets the next one run", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "logins-hang-"));
+    const param = toParam(cookie("login", "v"));
+    await writeFile(join(dir, "logins.json"), JSON.stringify(jarOf([param, NOW])));
+
+    const server = createServer((_request, response) => {
+      const { port } = server.address() as AddressInfo;
+      response.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/guid` }));
+    });
+    const peers = new WebSocketServer({ server });
+    peers.on("connection", (peer) => {
+      peer.on("message", (raw: Buffer) => {
+        const { id, method } = JSON.parse(raw.toString("utf8")) as { id: number; method: string };
+        if (method === "Storage.getCookies") {
+          peer.send(JSON.stringify({ id, result: { cookies: [] } }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    const logins = createLogins({ dir, connector: () => webSocketConnector(port), now: () => NOW, browserDeadlineMs: 50 });
+    await logins.catchUp(9301);
+    await logins.catchUp(9301);
+
+    peers.close();
+    server.close();
+  });
+});
+

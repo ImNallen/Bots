@@ -50,10 +50,13 @@ export const MAX_COOKIE_LIFE_MS = 400 * 24 * 60 * 60 * 1000;
 // .invalid can never resolve, so no site ever receives this cookie.
 const CURSOR_DOMAIN = "logins.bots.invalid";
 
-function cursorParam(generation: number, now: number): CookieParam {
+const GENERATION = "generation";
+const STARTED_FOR = "started-for";
+
+function cursorParam(name: string, value: string, now: number): CookieParam {
   return {
-    name: "generation",
-    value: String(generation),
+    name,
+    value,
     url: `https://${CURSOR_DOMAIN}/`,
     path: "/",
     secure: true,
@@ -66,13 +69,15 @@ function cursorParam(generation: number, now: number): CookieParam {
 // refuses those.
 export function toParam(cookie: Cookie): CookieParam {
   const { name, value, path, httpOnly, secure, session, expires, sameSite, priority, sourceScheme, sourcePort, partitionKey } = cookie;
+  // A site on https can set a cookie without Secure, so Secure alone does not say where it came from.
+  const scheme = secure || sourceScheme === "Secure" ? "https" : "http";
   return {
     name,
     value,
     path,
     httpOnly,
     secure,
-    ...(cookie.domain.startsWith(".") ? { domain: cookie.domain } : { url: `${secure ? "https" : "http"}://${cookie.domain}${path}` }),
+    ...(cookie.domain.startsWith(".") ? { domain: cookie.domain } : { url: `${scheme}://${cookie.domain}${path}` }),
     ...(session ? {} : { expires }),
     ...(sameSite === undefined ? {} : { sameSite }),
     ...(priority === undefined ? {} : { priority }),
@@ -126,12 +131,17 @@ export function mergeJar(jar: Jar, moved: readonly CookieParam[], now: number): 
   };
 }
 
-function cursorOf(browser: readonly Cookie[]): number {
-  return Number(browser.find((cookie) => cookie.domain === CURSOR_DOMAIN)?.value) || 0;
+function reserved(browser: readonly Cookie[], name: string): string | undefined {
+  return browser.find((cookie) => cookie.domain === CURSOR_DOMAIN && cookie.name === name)?.value;
 }
 
-// A session cookie comes back whatever the cursor says, or a login on such a site would vanish at every idle stop.
-export function planApply(jar: Jar, browser: readonly Cookie[], now: number): CookieParam[] {
+function cursorOf(browser: readonly Cookie[]): number {
+  return Number(reserved(browser, GENERATION)) || 0;
+}
+
+// A session cookie comes back when its browser has just started, whatever the cursor says, or a login on such a site would vanish at
+// every idle stop. Only then, because a session cookie that is missing from a running browser was logged out.
+export function planApply(jar: Jar, browser: readonly Cookie[], now: number, justStarted: boolean): CookieParam[] {
   const cursor = cursorOf(browser);
   const held = byKey(browser);
   return jar.cookies
@@ -139,13 +149,13 @@ export function planApply(jar: Jar, browser: readonly Cookie[], now: number): Co
       if (isPast(param, now)) {
         return generation > cursor && held.has(key);
       }
-      return generation > cursor || (param.expires === undefined && !held.has(key));
+      return generation > cursor || (justStarted && param.expires === undefined && !held.has(key));
     })
     .map((entry) => entry.param);
 }
 
-// The cookies at the start of a take-over and the browser that held them. It exists only during a take-over, and it goes last, so
-// a crash repeats the diff, and an equal value adds no generation.
+// The cookies at the start of a take-over and the browser that held them. It exists only during a take-over. It goes last, so a kill
+// repeats the diff, and an equal value adds no generation.
 type Baseline = { identity: string; cookies: Cookie[] };
 
 export type Logins = {
@@ -158,8 +168,8 @@ export type Logins = {
 
 const BROWSER_DEADLINE_MS = 10_000;
 
-export function createLogins(args: { dir: string; connector: CdpConnector; now?: () => number }): Logins {
-  const { dir, connector, now = Date.now } = args;
+export function createLogins(args: { dir: string; connector: CdpConnector; now?: () => number; browserDeadlineMs?: number }): Logins {
+  const { dir, connector, now = Date.now, browserDeadlineMs = BROWSER_DEADLINE_MS } = args;
   const jarFile = join(dir, "logins.json");
   const takeovers = join(dir, "takeovers");
   const baselineFile = (botId: string) => join(takeovers, `${botId}.json`);
@@ -181,7 +191,7 @@ export function createLogins(args: { dir: string; connector: CdpConnector; now?:
     if (client === null) {
       return null;
     }
-    const deadline = setTimeout(() => client.close(), BROWSER_DEADLINE_MS);
+    const deadline = setTimeout(() => client.close(), browserDeadlineMs);
     deadline.unref();
     try {
       return await use(client);
@@ -199,12 +209,18 @@ export function createLogins(args: { dir: string; connector: CdpConnector; now?:
         return;
       }
       const browser = await cookiesOf(client);
-      const plan = planApply(current, browser, now());
+      // This lives in the browser, so a computerd restart cannot take a running browser for a new one.
+      const justStarted = reserved(browser, STARTED_FOR) !== client.identity;
+      const plan = planApply(current, browser, now(), justStarted);
       const rejected = await setCookies(client, plan);
       // Last, and on its own. A real VM showed that Chromium writes cookies to disk in the order they were set, so a cursor on disk
       // means that the batch before it is on disk too.
-      if (current.generation > cursorOf(browser)) {
-        await client.send("Storage.setCookies", { cookies: [cursorParam(current.generation, now())] });
+      const cursors = [
+        ...(current.generation > cursorOf(browser) ? [cursorParam(GENERATION, String(current.generation), now())] : []),
+        ...(justStarted ? [cursorParam(STARTED_FOR, client.identity, now())] : []),
+      ];
+      if (cursors.length > 0) {
+        await client.send("Storage.setCookies", { cookies: cursors });
       }
       caughtUp.set(cdpPort, { identity: client.identity, generation: current.generation });
       if (plan.length > 0) {
@@ -222,39 +238,48 @@ export function createLogins(args: { dir: string; connector: CdpConnector; now?:
     return turn;
   }
 
+  // One attempt. Only a kill leaves a baseline for recover, because a baseline kept past a failure would later move what the bot has
+  // browsed since, over the other bots' sessions. Missing a move is the safer mistake, since the login stays in this bot.
   async function publish(botId: string, cdpPort: number): Promise<void> {
-    const baseline = await readBaseline(baselineFile(botId));
-    if (baseline === null) {
+    try {
+      const baseline = await readBaseline(baselineFile(botId));
+      if (baseline === null) {
+        return;
+      }
+      // A browser that restarted during the take-over can have lost a recent push. Without this, its older value would look like a change.
+      await catchUp(cdpPort);
+      const read = await withBrowser(cdpPort, async (client) => ({ identity: client.identity, cookies: await cookiesOf(client) }));
+      if (read === null) {
+        log({ level: "warn", event: "logins-publish-lost", botId });
+        return;
+      }
+      const moved = diffCookies(baseline.cookies, read.cookies, baseline.identity === read.identity, now());
+      const before = await jar;
+      const next = mergeJar(before, moved, now());
+      if (next.generation !== before.generation) {
+        await writeSecret(jarFile, next);
+      }
+      jar = Promise.resolve(next);
+      // A stopped or new bot catches up when it next starts, and a slot that changes hands during this gets the same jar.
+      await Promise.all(SLOTS.map((slot) => catchUp(desktopOf(slot).cdpPort)));
+      log({ level: "info", event: "logins-published", botId, moved: moved.length, generation: next.generation });
+    } finally {
       await rm(baselineFile(botId), { force: true });
-      return;
     }
-    const read = await withBrowser(cdpPort, async (client) => ({ identity: client.identity, cookies: await cookiesOf(client) }));
-    if (read === null) {
-      log({ level: "warn", event: "logins-publish-waits", botId });
-      return;
-    }
-    const moved = diffCookies(baseline.cookies, read.cookies, baseline.identity === read.identity, now());
-    const before = await jar;
-    const next = mergeJar(before, moved, now());
-    if (next.generation !== before.generation) {
-      await writeSecret(jarFile, next);
-    }
-    jar = Promise.resolve(next);
-    // A stopped or new bot catches up when it next starts, and a slot that changes hands during this gets the same jar.
-    await Promise.all(SLOTS.map((slot) => catchUp(desktopOf(slot).cdpPort)));
-    await rm(baselineFile(botId), { force: true });
-    log({ level: "info", event: "logins-published", botId, moved: moved.length, generation: next.generation });
   }
 
   return {
     catchUp,
     opened: (botId, cdpPort) =>
       inOrder("logins-open-failed", async () => {
-        openStreams.set(botId, (openStreams.get(botId) ?? 0) + 1);
+        const alreadyOpen = openStreams.get(botId) ?? 0;
+        openStreams.set(botId, alreadyOpen + 1);
         await catchUp(cdpPort);
-        if ((await readBaseline(baselineFile(botId))) !== null) {
+        // A newer tab keeps the first baseline. With no stream open, recover has already run, so any baseline here is out of date.
+        if (alreadyOpen > 0 && (await readBaseline(baselineFile(botId))) !== null) {
           return;
         }
+        await rm(baselineFile(botId), { force: true });
         const baseline = await withBrowser(cdpPort, async (client) => ({ identity: client.identity, cookies: await cookiesOf(client) }));
         if (baseline === null) {
           log({ level: "warn", event: "logins-no-baseline", botId });
@@ -286,6 +311,7 @@ export function createLogins(args: { dir: string; connector: CdpConnector; now?:
             }
           } catch (error) {
             warn("logins-recover-failed", error);
+            await rm(baselineFile(botId), { force: true });
           }
         }
       }),
