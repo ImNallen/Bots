@@ -20,5 +20,13 @@ export function linesBelow(box: ScrollBox): number | null {
 }
 
 export function linesBelowNote(count: number): string {
-  return `${count} more ${count === 1 ? "line" : "lines"} below. Scroll to read all of it before you answer.`;
+  return `${count} more ${count === 1 ? "line" : "lines"} below. Scroll to the end to approve.`;
+}
+
+export function hasReadToEnd(below: number | null): boolean {
+  return below === null || below === 0;
+}
+
+export function allArgumentsRead(argumentCount: number, read: ReadonlySet<number>): boolean {
+  return read.size === argumentCount;
 }

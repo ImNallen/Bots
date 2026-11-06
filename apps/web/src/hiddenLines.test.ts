@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linesBelow, linesBelowNote } from "./hiddenLines.ts";
+import { allArgumentsRead, hasReadToEnd, linesBelow, linesBelowNote } from "./hiddenLines.ts";
 
 // 40 lines of 18px with 7px of padding above and below, in a box that shows 344px, like a card at 860 tall.
 const fortyLines = { scrollHeight: 734, clientHeight: 344, scrollTop: 0, lineHeight: 18, paddingBottom: 7 };
@@ -39,7 +39,21 @@ describe("linesBelow", () => {
 
 describe("linesBelowNote", () => {
   it("says how many lines are hidden and what to do", () => {
-    expect(linesBelowNote(12)).toBe("12 more lines below. Scroll to read all of it before you answer.");
-    expect(linesBelowNote(1)).toBe("1 more line below. Scroll to read all of it before you answer.");
+    expect(linesBelowNote(12)).toBe("12 more lines below. Scroll to the end to approve.");
+    expect(linesBelowNote(1)).toBe("1 more line below. Scroll to the end to approve.");
+  });
+});
+
+describe("the Approve lock", () => {
+  it("counts text as read when it all fits or the person reached its end", () => {
+    expect(hasReadToEnd(null)).toBe(true);
+    expect(hasReadToEnd(0)).toBe(true);
+    expect(hasReadToEnd(1)).toBe(false);
+  });
+
+  it("needs every argument to be read", () => {
+    expect(allArgumentsRead(2, new Set())).toBe(false);
+    expect(allArgumentsRead(2, new Set([1]))).toBe(false);
+    expect(allArgumentsRead(2, new Set([0, 1]))).toBe(true);
   });
 });
