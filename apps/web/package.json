@@ -14,7 +14,9 @@
     "@tanstack/react-router": "1.170.46",
     "convex": "catalog:",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@bots/protocol": "workspace:*",
