@@ -1,4 +1,13 @@
 const PATHS = {
+  up: "M12 19V6M6 12l6-6 6 6",
+  stop: "M9 7h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z",
+  terminal: "M4 6.500l6 5.500-6 5.500M12 18h8",
+  file: "M6 3.500h8l4.500 4.500v12.500H6zM14 3.500V8h4.500",
+  globe: "M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0ZM3 12h18M12 3c2.800 2.700 4 5.700 4 9s-1.200 6.300-4 9c-2.800-2.700-4-5.700-4-9s1.200-6.300 4-9z",
+  lines: "M4 6h16M4 12h16M4 18h10",
+  pointer: "M6 4l12 7-5.200 1.600L10.500 18z",
+  text: "M5 6V4.500h14V6M12 4.500v15M9 19.500h6",
+  key: "M12.500 15a4.500 4.500 0 1 1-9 0a4.500 4.500 0 0 1 9 0ZM11.500 11.500L20 3M16 7l3 3",
   back: "M15 5l-7 7 7 7",
   plus: "M12 5v14M5 12h14",
   close: "M6 6l12 12M18 6L6 18",
@@ -6,7 +15,9 @@ const PATHS = {
   gear: "M12 3v2.500M12 18.500V21M3 12h2.500M18.500 12H21M5.600 5.600l1.800 1.800M16.600 16.600l1.800 1.800M5.600 18.400l1.800-1.800M16.600 7.400l1.800-1.800M15 12a3 3 0 1 1-6 0a3 3 0 0 1 6 0Z",
 };
 
-export function Icon({ name }: { name: keyof typeof PATHS }) {
+export type IconName = keyof typeof PATHS;
+
+export function Icon({ name }: { name: IconName }) {
   return (
     <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d={PATHS[name]} />

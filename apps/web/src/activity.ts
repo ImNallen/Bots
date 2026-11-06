@@ -18,7 +18,7 @@ export const FACE_STATES: Record<BotActivity["kind"], FaceState> = {
 const THINKING = "Thinking";
 const WORKING = "Working";
 
-const TOOL_STEPS: Record<ToolName, string> = {
+export const TOOL_STEPS: Record<ToolName, string> = {
   shell: "Running a command",
   read_file: "Reading a file",
   write_file: "Saving a file",
@@ -29,11 +29,11 @@ const TOOL_STEPS: Record<ToolName, string> = {
   browser_press: "Pressing a key",
 };
 
-function isToolName(tool: string): tool is ToolName {
+export function isToolName(tool: string): tool is ToolName {
   return Object.hasOwn(TOOL_STEPS, tool);
 }
 
-function friendlyStep(tool: string | null): string {
+export function friendlyStep(tool: string | null): string {
   if (tool === null) {
     return THINKING;
   }
