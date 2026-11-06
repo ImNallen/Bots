@@ -60,18 +60,19 @@ describe("NOTE_PROBLEMS", () => {
   });
 });
 
+// Keys are built at run time, because GitHub's secret scanner flags a full key shape in this public repository, even a fake one.
 describe("looksLikeSecret", () => {
   it.each([
     ["a PEM header", "-----BEGIN OPENSSH PRIVATE KEY-----"],
     ["a Mistral-style bare key", "aB3".repeat(11)],
-    ["an OpenAI-style key", "use sk-proj-abcdefghijklmnop1234"],
-    ["a Stripe key", "sk_live_51HabcdefGhijkl"],
-    ["a GitHub token", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"],
-    ["a GitLab token", "glpat-abcdefghijklmnopqrst"],
-    ["a Slack token", "xoxb-123456789012-abcdefgh"],
-    ["an AWS access key", "AKIAIOSFODNN7EXAMPLE"],
-    ["a Google key", "AIzaSyA1234567890abcdefghijklmnopqrstuv"],
-    ["a JWT", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123"],
+    ["an OpenAI-style key", `use sk-proj-${"a1".repeat(10)}`],
+    ["a Stripe key", `sk_live_${"a1".repeat(8)}`],
+    ["a GitHub token", `ghp_${"a1".repeat(18)}`],
+    ["a GitLab token", `glpat-${"a1".repeat(10)}`],
+    ["a Slack token", `xoxb-${"1".repeat(12)}-abcdefgh`],
+    ["an AWS access key", `AKIA${"A1".repeat(8)}`],
+    ["a Google key", `AIza${"a1".repeat(17)}`],
+    ["a JWT", ["eyJh", "eyJz", "abc123"].join(".")],
     ["a password pair", "password=hunter2"],
     ["a password pair with a colon and a space", "My Password: hunter2"],
     ["an API key pair", "api key = abc123"],
