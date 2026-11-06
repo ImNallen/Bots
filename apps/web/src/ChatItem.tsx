@@ -1,9 +1,10 @@
 import { api } from "@bots/convex";
 import { useMutation } from "convex/react";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { BotFace, QueuedDots } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
 import type { DisplayItem, ToolOutput } from "./conversation.ts";
+import { linesBelow, linesBelowNote } from "./hiddenLines.ts";
 import { Icon } from "./Icon.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { errorMessage } from "./session.tsx";
@@ -61,6 +62,49 @@ function ToolRow({ item }: { item: Extract<DisplayItem, { kind: "tool" }> }) {
   );
 }
 
+// A device can hide its scrollbars, and a bot can pad a command to push the dangerous part out of view, so the card says what is
+// left. At the end the note keeps its room, because the answers below it must not move under a finger that is about to tap.
+function ArgumentText({ text }: { text: string }) {
+  const box = useRef<HTMLPreElement>(null);
+  const [below, setBelow] = useState<number | null>(null);
+  const measure = () => {
+    const element = box.current;
+    if (element !== null) {
+      const { lineHeight, paddingBottom } = getComputedStyle(element);
+      const { scrollHeight, clientHeight, scrollTop } = element;
+      setBelow(
+        linesBelow({
+          scrollHeight,
+          clientHeight,
+          scrollTop,
+          lineHeight: parseFloat(lineHeight),
+          paddingBottom: parseFloat(paddingBottom),
+        }),
+      );
+    }
+  };
+  useLayoutEffect(() => {
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (box.current !== null) {
+      observer.observe(box.current);
+    }
+    return () => observer.disconnect();
+  }, [text]);
+  return (
+    <>
+      <pre ref={box} tabIndex={below === null ? undefined : 0} onScroll={measure}>
+        {text}
+      </pre>
+      {below !== null && (
+        <p className="ask-more" data-end={below === 0}>
+          {linesBelowNote(below)}
+        </p>
+      )}
+    </>
+  );
+}
+
 function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" }> }) {
   const decide = useMutation(api.approvals.decide);
   const [sent, setSent] = useState<Decision | null>(null);
@@ -87,7 +131,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
       {item.arguments.map((argument, index) => (
         <div className="ask-argument" key={argument.label ?? index}>
           {argument.label !== null && <span className="ask-label">{argument.label}</span>}
-          <pre>{argument.value}</pre>
+          <ArgumentText text={argument.value} />
         </div>
       ))}
       <div className="opts">

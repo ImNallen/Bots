@@ -997,6 +997,15 @@ button.tool:hover {
   border-radius: 8px;
 }
 
+.ask-more {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ask-more[data-end="true"] {
+  visibility: hidden;
+}
+
 .opts {
   display: flex;
   flex-direction: column;
@@ -1928,7 +1937,8 @@ button.card-row:hover {
     font-size: 16px;
   }
 
-  .ask-label {
+  .ask-label,
+  .ask-more {
     font-size: 13px;
   }
 
