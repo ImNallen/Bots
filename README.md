@@ -56,7 +56,7 @@ The orchestrator reads these optional settings from `.env.local`:
 
 CI runs `pnpm typecheck`, `pnpm test`, and `pnpm build` on every pull request and on pushes to `main`. Run the verify commands yourself before you merge a change to runs, the link, `computerd`, or auth.
 
-`pnpm verify:auth` and `pnpm verify:agent` need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about seven minutes. To run some scenarios, set `VERIFY_SCENARIOS`, as in `VERIFY_SCENARIOS=A,P pnpm verify:agent`. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
+`pnpm verify:auth` and `pnpm verify:agent` need the containers from `pnpm bootstrap`. Each starts its own orchestrator on free ports under its own test login, so it can run alongside `pnpm dev`. A dev orchestrator claims only its own login's runs, so neither touches the other's work. `pnpm verify:agent` also starts its own `computerd` containers under the Compose projects `bots-verify-agent` and `bots-verify-agent-direct`, and it removes them and their volumes when it ends. It takes about ten minutes. To run some scenarios, set `VERIFY_SCENARIOS`, as in `VERIFY_SCENARIOS=A,P pnpm verify:agent`. Each run leaves a few rows under test identities in Convex. They never appear for `dev@localhost`.
 
 ## Stop it
 
