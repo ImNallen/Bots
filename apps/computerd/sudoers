@@ -1,4 +1,4 @@
 Defaults:computerd !use_pty, !requiretty, !lecture
 computerd ALL=(agent) NOPASSWD: ALL
-computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[1-8].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[1-8].service
+computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[1-8].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[1-8].service, /usr/bin/systemctl restart --quiet computerd-input@[1-8].service
 agent ALL=(ALL) NOPASSWD: ALL

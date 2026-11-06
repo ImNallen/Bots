@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Id } from "@bots/convex/dataModel";
-import { LINK_CLOSE, MAX_INPUT_MESSAGE_BYTES, browserInputEvent, parseJsonMessage } from "@bots/protocol";
+import { LINK_CLOSE, type StreamMode } from "@bots/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { resolveIdentity, type AuthMode } from "./auth.ts";
 import type { Link } from "./link.ts";
@@ -27,6 +27,7 @@ export function isSameOrigin(headers: IncomingMessage["headers"]): boolean {
   return new URL(origin).host === host;
 }
 
+// Bytes only, and nothing here reads or logs them. During a take-over they can hold a password.
 function relay(viewer: WebSocket, computer: WebSocket): void {
   const pipe = (from: WebSocket, to: WebSocket) => {
     from.on("message", (data: Buffer, isBinary: boolean) => {
@@ -52,43 +53,29 @@ function relay(viewer: WebSocket, computer: WebSocket): void {
 export function attachScreens(args: {
   server: Pick<Server, "on">;
   authMode: AuthMode;
-  link: Pick<Link, "openStream" | "sendInput">;
+  link: Pick<Link, "openStream">;
   ownerForViewer: (botId: string, viewerSubject: string) => Promise<{ ownerId: Id<"users">; takeoverUntil: number } | null>;
   log: (fields: LogFields) => void;
+  takeoverCheckMs?: number;
 }): void {
-  const { server, authMode, link, ownerForViewer, log } = args;
+  const { server, authMode, link, ownerForViewer, log, takeoverCheckMs = TAKEOVER_CHECK_MS } = args;
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_VIEWER_MESSAGE_BYTES });
-  const inputSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_INPUT_MESSAGE_BYTES });
 
-  // Input goes to one bot's page through CDP, so it cannot reach another bot's window whatever X focus does.
-  // A message can hold a password, so nothing here logs its content.
-  function serveInput(args: { socket: WebSocket; ownerId: Id<"users">; botId: string; subject: string }): void {
-    const { socket, ownerId, botId, subject } = args;
-    socket.on("error", (error) => {
-      log({ level: "warn", event: "screen-input-socket-error", message: error.message });
-      socket.terminate();
-    });
-    socket.on("message", (raw: Buffer, isBinary: boolean) => {
-      const event = isBinary ? null : parseJsonMessage({ raw: raw.toString("utf8"), schema: browserInputEvent });
-      if (event === null) {
-        log({ level: "warn", event: "screen-input-rejected", reason: "invalid-message" });
-        socket.close(LINK_CLOSE.invalidMessage);
-        return;
-      }
-      if (!link.sendInput({ ownerId, botId, event })) {
-        socket.close(LINK_CLOSE.noComputer);
-      }
-    });
+  // The computer's side closes at once, because a viewer that never answers the close would otherwise keep typing until the close
+  // times out. Closing it also ends the input stream, because that stream exits when its relay leaves.
+  function endWithTakeover(args: { viewer: WebSocket; computer: WebSocket; botId: string; subject: string }): void {
+    const { viewer, computer, botId, subject } = args;
     const check = setInterval(() => {
       ownerForViewer(botId, subject)
         .then((owner) => {
           if (owner === null || owner.takeoverUntil <= Date.now()) {
-            socket.close(LINK_CLOSE.takeoverEnded);
+            viewer.close(LINK_CLOSE.takeoverEnded);
+            computer.close();
           }
         })
         .catch(() => {});
-    }, TAKEOVER_CHECK_MS);
-    socket.once("close", () => clearInterval(check));
+    }, takeoverCheckMs);
+    viewer.once("close", () => clearInterval(check));
   }
 
   async function handle(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -122,15 +109,10 @@ export function attachScreens(args: {
       reject(socket, 403);
       return;
     }
-    if (match[2] !== undefined) {
-      if (owner.takeoverUntil <= Date.now()) {
-        log({ level: "warn", event: "screen-rejected", reason: "not-taken-over" });
-        reject(socket, 403);
-        return;
-      }
-      inputSockets.handleUpgrade(request, socket, head, (input) => {
-        serveInput({ socket: input, ownerId: owner.ownerId, botId, subject: identity.identity.subject });
-      });
+    const mode: StreamMode = match[2] === undefined ? "watch" : "control";
+    if (mode === "control" && owner.takeoverUntil <= Date.now()) {
+      log({ level: "warn", event: "screen-rejected", reason: "not-taken-over" });
+      reject(socket, 403);
       return;
     }
     sockets.handleUpgrade(request, socket, head, (viewer) => {
@@ -139,10 +121,10 @@ export function attachScreens(args: {
         log({ level: "warn", event: "screen-viewer-error", message: error.message });
         viewer.terminate();
       });
-      // Input that arrives before the computer attaches would be lost, so the relay starts only once both ends exist.
+      // Bytes that arrive before the computer attaches would be lost, so the relay starts only once both ends exist.
       viewer.pause();
       link
-        .openStream({ ownerId: owner.ownerId, botId })
+        .openStream({ ownerId: owner.ownerId, botId, mode })
         .then((computer) => {
           if (typeof computer === "string") {
             // A paused socket cannot finish a close handshake, so the viewer would hang for the close timeout.
@@ -156,7 +138,10 @@ export function attachScreens(args: {
           }
           relay(viewer, computer);
           viewer.resume();
-          log({ level: "info", event: "screen-opened", botId });
+          if (mode === "control") {
+            endWithTakeover({ viewer, computer, botId, subject: identity.identity.subject });
+          }
+          log({ level: "info", event: "screen-opened", botId, mode });
         })
         .catch((error: unknown) => {
           log({ level: "error", event: "screen-failed", message: error instanceof Error ? error.message : "unknown error" });

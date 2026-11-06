@@ -28,7 +28,8 @@ setInterval(() => {
   });
 }, JOURNAL_PRUNE_INTERVAL_MS);
 
-const desktops = createDesktops({ systemd: createSystemd(), runtimeDir: RUNTIME_DIR });
+const systemd = createSystemd();
+const desktops = createDesktops({ systemd, runtimeDir: RUNTIME_DIR });
 setInterval(() => {
   desktops.sweep().catch((error: unknown) => {
     log({ level: "warn", event: "desktop-sweep-failed", message: error instanceof Error ? error.message : "unknown error" });
@@ -54,13 +55,14 @@ connectLink({
   url: config.linkUrl,
   token: config.token,
   calls,
-  openScreen: (streamId, botId) => {
-    relayScreen({ linkUrl: config.linkUrl, token: config.token, streamId, acquire: () => desktops.acquire(botId) });
-  },
-  // The event can hold a password, so only the error's message reaches the log.
-  onInput: (botId, event) => {
-    browser.input(botId, event).catch((error: unknown) => {
-      log({ level: "warn", event: "screen-input-failed", message: error instanceof Error ? error.message : "unknown error" });
+  openScreen: (streamId, botId, mode) => {
+    relayScreen({
+      linkUrl: config.linkUrl,
+      token: config.token,
+      streamId,
+      mode,
+      acquire: () => desktops.acquire(botId),
+      restartInput: systemd.restartInput,
     });
   },
 });

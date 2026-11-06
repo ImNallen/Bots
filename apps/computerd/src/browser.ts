@@ -1,4 +1,4 @@
-import { capText, type BrowserInputEvent, type BrowserInvocation, type ToolResult } from "@bots/protocol";
+import { capText, type BrowserInvocation, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
 import type { Desktops } from "./desktops.ts";
 
@@ -113,10 +113,9 @@ export function nextPages(known: readonly string[], targets: readonly TargetInfo
 
 export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
-  input: (botId: string, event: BrowserInputEvent) => Promise<void>;
 };
 
-export function createBrowser(args: { desktops: Pick<Desktops, "acquire" | "hold">; connector?: CdpConnector }): Browser {
+export function createBrowser(args: { desktops: Pick<Desktops, "acquire">; connector?: CdpConnector }): Browser {
   const { desktops, connector = webSocketConnector } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
@@ -150,7 +149,7 @@ export function createBrowser(args: { desktops: Pick<Desktops, "acquire" | "hold
     sessions.set(targetId, id);
     await client.send("Page.enable", {}, id);
     await client.send("Runtime.enable", {}, id);
-    // Input through CDP needs the page to believe it has focus, and only one window can have X focus.
+    // A bot's input through CDP needs the page to believe it has focus, and only one window can have X focus.
     await client.send("Emulation.setFocusEmulationEnabled", { enabled: true }, id);
     return id;
   }
@@ -276,23 +275,6 @@ export function createBrowser(args: { desktops: Pick<Desktops, "acquire" | "hold
     }
   }
 
-  // A viewer sees the whole 1280x800 desktop, and CDP wants a point inside the page, below the panel and the window's own bars.
-  async function toViewport(args: {
-    client: Cdp;
-    sessionId: string;
-    targetId: string;
-    x: number;
-    y: number;
-  }): Promise<{ x: number; y: number } | null> {
-    const { client, sessionId, targetId, x, y } = args;
-    const { bounds } = (await client.send("Browser.getWindowForTarget", { targetId })) as {
-      bounds: { left: number; top: number };
-    };
-    const barHeight = Number(await evaluate(client, sessionId, "outerHeight - innerHeight"));
-    const point = { x: x - bounds.left, y: y - bounds.top - barHeight };
-    return point.x < 0 || point.y < 0 ? null : point;
-  }
-
   function inOrder<T>(botId: string, step: () => Promise<T>): Promise<T> {
     const previous = queues.get(botId) ?? Promise.resolve();
     const next = previous.then(step, step);
@@ -312,64 +294,6 @@ export function createBrowser(args: { desktops: Pick<Desktops, "acquire" | "hold
           }
           const message = error instanceof Error ? error.message : "unknown error";
           return { outcome: "error", output: `The browser action failed: ${message}`, truncated: false };
-        }
-      }),
-    input: (botId, event) =>
-      inOrder(botId, async () => {
-        // A pointer move must not run sudo, so a live connection needs only a hold.
-        const release = desktops.hold(botId);
-        try {
-          let connection = connections.get(botId);
-          if (connection === undefined) {
-            const lease = await desktops.acquire(botId);
-            try {
-              connection = await connectionFor(botId, lease.cdpPort);
-            } finally {
-              lease.release();
-            }
-          }
-          const { client, sessionId, targetId } = await currentPage(connection);
-          switch (event.kind) {
-            case "pointer": {
-              const point = await toViewport({ client, sessionId, targetId, x: event.x, y: event.y });
-              // The tab strip and the address bar are outside the page, and CDP input cannot reach them.
-              if (point === null) {
-                return;
-              }
-              const type = { move: "mouseMoved", down: "mousePressed", up: "mouseReleased" }[event.action];
-              const held = event.action === "down" ? 1 : 0;
-              const button = event.action === "move" ? "none" : "left";
-              await client.send(
-                "Input.dispatchMouseEvent",
-                { type, x: point.x, y: point.y, button, buttons: held, clickCount: event.action === "move" ? 0 : 1 },
-                sessionId,
-              );
-              return;
-            }
-            case "scroll": {
-              const point = await toViewport({ client, sessionId, targetId, x: event.x, y: event.y });
-              if (point === null) {
-                return;
-              }
-              await client.send(
-                "Input.dispatchMouseEvent",
-                { type: "mouseWheel", x: point.x, y: point.y, deltaX: event.dx, deltaY: event.dy },
-                sessionId,
-              );
-              return;
-            }
-            case "text":
-              await client.send("Input.insertText", { text: event.text }, sessionId);
-              return;
-            case "key":
-              await press(client, sessionId, event.key);
-              return;
-            case "navigate":
-              await client.send("Page.navigate", { url: event.url }, sessionId);
-              return;
-          }
-        } finally {
-          release();
         }
       }),
   };

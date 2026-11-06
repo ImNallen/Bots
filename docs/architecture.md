@@ -148,17 +148,18 @@ The first design put every bot in one wide display with one shared browser, beca
 
 ### systemd owns every process
 
-A desktop is five files in `apps/computerd/desktop`, and a slot number from 1 to 8 is the unit's instance. `computerd` starts one name, `computerd-desktop@N.target`, and stops one name, `computerd-xvfb@N.service`. Everything binds to the display, so a stop returns only after Chromium has exited and its profile and ports are free. A test with a browser that ignored SIGTERM saw that stop take 10 seconds, which is `TimeoutStopSec`.
+A desktop is six files in `apps/computerd/desktop`, and a slot number from 1 to 8 is the unit's instance. `computerd` starts one name, `computerd-desktop@N.target`, and stops one name, `computerd-xvfb@N.service`. It also restarts `computerd-input@N.service` for a take-over. Everything binds to the display, so a stop returns only after Chromium has exited and its profile and ports are free. A test with a browser that ignored SIGTERM saw that stop take 10 seconds, which is `TimeoutStopSec`.
 
-A desktop's processes sit in their own cgroups, outside `computerd.service`, so an update that restarts `computerd` does not touch them. `computerd` needs root for two exact commands, which the sudoers file names, and `desktop-files.test.ts` fails the build if those drift from the code.
+A desktop's processes sit in their own cgroups, outside `computerd.service`, so an update that restarts `computerd` does not touch them. `computerd` needs root for three exact commands, which the sudoers file names, and `desktop-files.test.ts` fails the build if those drift from the code.
 
-`computerd` runs `systemctl start` on every browser tool call. Starting is safe on a running desktop, and it brings back a part that is down, so `computerd` has no other health check. It takes about 10 ms on a real VM. Take-over input does not do this, because a pointer move must not run `sudo`.
+`computerd` runs `systemctl start` on every browser tool call. Starting is safe on a running desktop, and it brings back a part that is down, so `computerd` has no other health check. It takes about 10 ms on a real VM. A person's input runs no `sudo`, because each event goes straight to `x11vnc`.
 
 | What dies | What systemd does | What a bot and a viewer see |
 |---|---|---|
-| `computerd` | Leaves the desktops alone, and restarts `computerd` after 2 seconds | The same screen. A viewer's relay ended, so "Try again" reconnects to it |
+| `computerd` | Leaves the desktops alone, and restarts `computerd` after 2 seconds | The same screen. A viewer's relay ended, so "Try again" reconnects to it. An input stream ended with its relay, so the take-over ended too |
 | Chromium | Kills the rest of its cgroup, and restarts it after 2 seconds | A running step fails. The next step gets the stale ref error, and the snapshot says `about:blank`. A viewer stays connected |
 | `x11vnc` | Restarts it after 2 seconds | The viewer's stream ends, and "Try again" works. The bot notices nothing |
+| The input stream's `x11vnc` | Restarts nothing | The take-over ends and the viewer goes back to watching. The next take-over starts a new one |
 | Xfce | Restarts it after 2 seconds | The panel blinks. CDP is untouched |
 | Xvfb | Stops the whole desktop, and restarts nothing | A running step fails, and the page is gone. The next use starts the whole desktop on the same profile |
 | The VM reboots | Starts no desktop, because the units have no `[Install]` | The next use starts a desktop on the bot's profile, on a blank page |
@@ -167,7 +168,7 @@ A desktop's processes sit in their own cgroups, outside `computerd.service`, so 
 
 ### Who holds a slot
 
-Each desktop's ports derive from its slot: `9300 + slot` for CDP and `5900 + slot` for the stream. Two records say the rest. systemd says which slots are live. `/run/computerd/desktop-N.env` says which bot holds a slot, and units read it at each start. It lives in `/run`, so a reboot clears it along with the processes it describes.
+Each desktop's ports derive from its slot: `9300 + slot` for CDP, `5900 + slot` for the watch stream, and `6900 + slot` for the input stream. Two records say the rest. systemd says which slots are live. `/run/computerd/desktop-N.env` says which bot holds a slot, and units read it at each start. It lives in `/run`, so a reboot clears it along with the processes it describes.
 
 `computerd` writes that file only while the slot is dead: stop, write, start. Each step is safe to repeat and safe to die after, so a crash at any point leaves one of three states, and a new `computerd` reads them all the same way. A live slot with a holder is that bot's. A live slot with no holder, or with a holder that another slot already claimed, gets stopped. A dead slot is free. A test kills `computerd` before and after every call to systemd, and no bot ever gets another bot's browser.
 
@@ -207,16 +208,34 @@ We tested a shared browser in an arm64 Debian container against a local page, an
 The results set these rules:
 
 - Bots drive the browser through CDP, not through desktop input.
-- A person's input also goes through CDP, to one page, until take-over moves to noVNC. Every VNC stream is view-only.
-- Take-over has a key bar for arrows, Enter, Esc, and Tab, because a phone has no such keys and dropdowns need them.
+- A person uses the desktop through VNC, and only during a take-over. A key cannot reach another bot's window, because each bot has its own display. Across 4 displays and 2,880 keys, none did.
+- The watch stream stays view-only, so only a stream that exists for a take-over can take input.
+- Take-over has a typing box and a key bar for arrows, Enter, Esc, and Tab, because a phone has no such keys and the noVNC library has no phone keyboard.
 
-The tests did not cover noVNC on a phone. The step 4 check does.
+Chrome with touch emulation has driven noVNC on a real VM, but no real phone has yet. The step 4 check does that.
 
 ### How a stream reaches its owner
 
 A VM accepts no inbound connections, so a stream is one more outbound connection. The web app opens a WebSocket to the orchestrator. The orchestrator asks `computerd` over the link for that bot's screen, and `computerd` dials back to the link port with its token. The orchestrator then relays bytes between the two, and it accepts a dial only for a stream that it asked for, from a computer of the bot's owner.
 
-During a take-over, the bot waits before its next tool. That state is in Convex, so a restarted orchestrator keeps waiting, and if it cannot read the state it waits too, because starting a tool while a person may be typing is the worse mistake. Input has its own WebSocket, separate from the stream. It takes only a short list of event kinds, and nothing that carries an event logs or stores it, because an event can hold a password. If the owner leaves without giving back, the take-over expires after 15 minutes and the bot carries on.
+During a take-over, the bot waits before its next tool. That state is in Convex, so a restarted orchestrator keeps waiting, and if it cannot read the state it waits too, because starting a tool while a person may be typing is the worse mistake. If the owner leaves without giving back, the take-over expires after 15 minutes and the bot carries on.
+
+A take-over swaps the view-only stream for an input stream on `/screens/<bot>/input`. The orchestrator opens that path only during a take-over, and it checks again every 5 seconds and closes both ends when the take-over ends. Past those checks it is the same byte relay as the watch stream. Nothing logs the bytes, because they can hold a password. `x11vnc` logs the keysyms it adds to the display unless it runs with `-q`, so that flag must stay.
+
+The input stream removes itself, so no code has to clean it up and no state has to survive a crash:
+
+- `-once` ends it when its viewer leaves. So a closed relay, a dead `computerd`, a dead orchestrator, and a give-back all end it through the TCP close. A real VM closed the port 757 ms after a kill of the orchestrator and 806 ms after a kill of `computerd`.
+- `-timeout 15` ends it if nobody connects.
+- It has no `Restart=`, and the desktop target does not want it, so only a new take-over brings it back.
+- `-clear_keys` releases what a viewer held. Without it, a viewer that left with Ctrl down turned the next viewer's typing into shortcuts.
+
+`computerd` restarts the unit for each take-over. That also ends an older take-over from another tab, so a desktop has at most one person's input stream, with no map to keep. The older tab sees that the take-over is no longer its own and does not give it back.
+
+x11vnc reports nothing back to the page, so the typing box decides what it can send. It refuses a character with no key, and a character past the limit in the next paragraph, before it sends anything, and it says so. A password that loses a character with no error would just be wrong.
+
+The display has a US keyboard. x11vnc adds any other character to a free key, and a real VM ran out after 17 or 18 different ones in one session, whatever the typing speed. `x11vnc` frees those keys when it exits.
+
+A VM updates after its orchestrator, and an older `computerd` closes its link on a field it does not know. So a watch stream's link message has no mode, and only control carries one. A take-over against an older `computerd` costs a 260 ms link reconnect and fails after 10 seconds, and a watch stream never notices.
 
 Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
 

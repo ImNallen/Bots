@@ -3,8 +3,8 @@ import {
   MAX_ORCHESTRATOR_MESSAGE_BYTES,
   orchestratorMessage,
   parseJsonMessage,
-  type BrowserInputEvent,
   type ComputerMessage,
+  type StreamMode,
   type ToolResult,
 } from "@bots/protocol";
 import { WebSocket } from "ws";
@@ -27,10 +27,9 @@ export function connectLink(args: {
   url: string;
   token: string;
   calls: Calls;
-  openScreen: (streamId: string, botId: string) => void;
-  onInput: (botId: string, event: BrowserInputEvent) => void;
+  openScreen: (streamId: string, botId: string, mode: StreamMode) => void;
 }): void {
-  const { url, token, calls, openScreen, onInput } = args;
+  const { url, token, calls, openScreen } = args;
   let retryMs = FIRST_RETRY_MS;
 
   function connect(): void {
@@ -81,11 +80,8 @@ export function connectLink(args: {
           answer(message.callId, calls.call(message));
           return;
         case "screenOpen":
-          log({ level: "info", event: "screen-open", botId: message.botId });
-          openScreen(message.streamId, message.botId);
-          return;
-        case "screenInput":
-          onInput(message.botId, message.event);
+          log({ level: "info", event: "screen-open", botId: message.botId, mode: message.mode ?? "watch" });
+          openScreen(message.streamId, message.botId, message.mode ?? "watch");
           return;
         case "cancelTool":
           log({ level: "info", event: "tool-cancel", callId: message.callId });

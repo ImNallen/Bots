@@ -1,7 +1,7 @@
 import { connect, type Socket } from "node:net";
-import { orchestratorMessage, parseJsonMessage } from "@bots/protocol";
+import { orchestratorMessage, parseJsonMessage, type StreamMode } from "@bots/protocol";
 import { WebSocket } from "ws";
-import type { DesktopLease } from "./desktops.ts";
+import { streamPort, type DesktopLease, type Slot } from "./desktops.ts";
 import { log } from "./log.ts";
 
 const MAX_INBOUND_BYTES = 64 * 1024;
@@ -13,22 +13,34 @@ export function relayScreen(args: {
   linkUrl: string;
   token: string;
   streamId: string;
+  mode: StreamMode;
   acquire: () => Promise<DesktopLease>;
+  restartInput: (slot: Slot) => Promise<void>;
 }): void {
-  const { linkUrl, token, streamId, acquire } = args;
+  const { linkUrl, token, streamId, mode, acquire, restartInput } = args;
   const socket = new WebSocket(linkUrl, { maxPayload: MAX_INBOUND_BYTES, handshakeTimeout: 10_000 });
   let screen: Socket | null = null;
   let lease: DesktopLease | null = null;
   let welcomed = false;
 
-  function startRelay(granted: DesktopLease): void {
-    // The viewer can leave during a slow start, and no close event will come to release this lease.
+  async function open(): Promise<void> {
+    const granted = await acquire();
+    try {
+      // The owner can leave during a slow start, and no close event will come to release this lease. A restart now would also
+      // end the take-over of a newer tab for nothing.
+      if (socket.readyState === WebSocket.OPEN && mode === "control") {
+        await restartInput(granted.slot);
+      }
+    } catch (error) {
+      granted.release();
+      throw error;
+    }
     if (socket.readyState !== WebSocket.OPEN) {
       granted.release();
       return;
     }
     lease = granted;
-    const tcp = connect(granted.vncPort, "127.0.0.1");
+    const tcp = connect(streamPort(granted.slot, mode), "127.0.0.1");
     screen = tcp;
     tcp.on("data", (chunk) => {
       if (socket.readyState !== WebSocket.OPEN) {
@@ -60,7 +72,7 @@ export function relayScreen(args: {
       return;
     }
     welcomed = true;
-    acquire().then(startRelay, (error: unknown) => {
+    open().catch((error: unknown) => {
       log({ level: "warn", event: "screen-relay-failed", message: error instanceof Error ? error.message : "unknown error" });
       socket.close();
     });

@@ -228,7 +228,7 @@ describe("streams", () => {
 
   it("opens a stream only when the computer dials back with its token", async () => {
     const computer = await connectComputer();
-    const pending = link.openStream({ ownerId: OWNER, botId: "bot" });
+    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode: "watch" });
     await until(() => screenOpenFrom(computer).length === 1);
     const opened = screenOpenFrom(computer)[0];
     if (opened?.kind !== "screenOpen") {
@@ -246,6 +246,24 @@ describe("streams", () => {
     await computer.closed;
   });
 
+  it.each([
+    ["watch", ""],
+    ["control", ',"mode":"control"'],
+  ] as const)("sends the exact bytes for a %s stream, because a computerd from before modes closes its link on a field it does not know", async (mode, field) => {
+    const computer = await connectComputer();
+    const raw = new Promise<string>((resolve) => computer.socket.once("message", (data: Buffer) => resolve(data.toString())));
+    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode });
+    const text = await raw;
+    const { streamId } = JSON.parse(text) as { streamId: string };
+    expect(text).toBe(`{"kind":"screenOpen","streamId":"${streamId}","botId":"bot"${field}}`);
+    const dial = await openSocket();
+    dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId }));
+    await pending;
+    dial.close();
+    computer.socket.close();
+    await computer.closed;
+  });
+
   it("refuses a stream nobody asked for", async () => {
     const dial = await openSocket();
     dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId: "made-up" }));
@@ -254,7 +272,7 @@ describe("streams", () => {
 
   it("refuses the right stream with a wrong token, and keeps it open for the real computer", async () => {
     const computer = await connectComputer();
-    const pending = link.openStream({ ownerId: OWNER, botId: "bot" });
+    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode: "watch" });
     await until(() => screenOpenFrom(computer).length === 1);
     const opened = screenOpenFrom(computer)[0];
     if (opened?.kind !== "screenOpen") {
@@ -273,7 +291,7 @@ describe("streams", () => {
   });
 
   it("reports no computer for an owner with none", async () => {
-    expect(await link.openStream({ ownerId: "nobody" as Id<"users">, botId: "bot" })).toBe("no-computer");
+    expect(await link.openStream({ ownerId: "nobody" as Id<"users">, botId: "bot", mode: "watch" })).toBe("no-computer");
   });
 });
 

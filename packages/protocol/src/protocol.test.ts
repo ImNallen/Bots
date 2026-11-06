@@ -16,6 +16,20 @@ function bytes(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
+describe("screenOpen", () => {
+  const parse = (fields: object) =>
+    parseJsonMessage({ raw: JSON.stringify({ kind: "screenOpen", streamId: "s", botId: "b", ...fields }), schema: orchestratorMessage });
+
+  it("reads a stream with no mode, and one with control", () => {
+    expect(parse({})).toEqual({ kind: "screenOpen", streamId: "s", botId: "b" });
+    expect(parse({ mode: "control" })).toEqual({ kind: "screenOpen", streamId: "s", botId: "b", mode: "control" });
+  });
+
+  it("refuses any other mode, so no second spelling of watch can reach a computerd", () => {
+    expect(parse({ mode: "watch" })).toBeNull();
+  });
+});
+
 describe("output cap", () => {
   it("leaves output under the cap untouched", () => {
     expect(capText("hello")).toEqual({ output: "hello", truncated: false });
