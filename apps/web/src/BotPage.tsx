@@ -1,207 +1,37 @@
 import { api } from "@bots/convex";
-import type { Doc, Id } from "@bots/convex/dataModel";
+import type { Id } from "@bots/convex/dataModel";
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import type { FunctionReturnType } from "convex/server";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { FACE_STATES } from "./activity.ts";
-import { BotFace, QueuedDots } from "./BotFace.tsx";
-import { characterOf, tintOf } from "./character.ts";
+import { BotFace } from "./BotFace.tsx";
+import { ChatItem } from "./ChatItem.tsx";
+import { characterOf, tintOf, type Character } from "./character.ts";
+import { conversationItems, isActive, type Timeline } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
-type Timeline = FunctionReturnType<typeof api.threads.timeline>;
-type TimelineRun = Timeline["runs"][number];
-type EventBody = Doc<"runEvents">["body"];
-type AssistantTurn = Extract<EventBody, { kind: "assistantTurn" }>;
-type ToolResult = Extract<EventBody, { kind: "toolResult" }>;
-
 const STICK_TO_BOTTOM_PX = 80;
 
-function isActive(run: TimelineRun): boolean {
-  return run.state.kind === "queued" || run.state.kind === "running";
-}
-
-function argumentsSummary(raw: string): string {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null) {
-      const first = Object.values(parsed).find((value) => typeof value === "string");
-      if (first !== undefined) {
-        return first;
-      }
-    }
-  } catch {
-    // A malformed call shows as it arrived, because the model has to correct exactly this text.
-  }
-  return raw;
-}
-
-// A person can only approve what they can read, so this shows every argument in full. A single string shows as it is, so a
-// shell command keeps its line breaks.
-function fullArguments(raw: string): string {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null) {
-      const values = Object.values(parsed);
-      if (values.length === 1 && typeof values[0] === "string") {
-        return values[0];
-      }
-      return JSON.stringify(parsed, null, 2);
-    }
-  } catch {
-    // A malformed call shows as it arrived.
-  }
-  return raw;
-}
-
-function ApprovalButtons({ approvalId }: { approvalId: Id<"approvals"> }) {
-  const decide = useMutation(api.approvals.decide);
-  const [problem, setProblem] = useState<string | null>(null);
-  const answer = (decision: "approved" | "denied") => {
-    decide({ approvalId, decision }).catch((error: unknown) => setProblem(errorMessage(error)));
-  };
-  return (
-    <div className="tool-approval" role="group" aria-label="This call needs your approval">
-      <button type="button" className="btn btn-go" onClick={() => answer("approved")}>
-        Approve
-      </button>
-      <button type="button" className="btn" onClick={() => answer("denied")}>
-        Deny
-      </button>
-      {problem !== null && (
-        <span className="error" role="alert">
-          {problem}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function ToolCallView(props: {
-  call: AssistantTurn["toolCalls"][number];
-  result: ToolResult | undefined;
-  active: boolean;
-  approvalId: Id<"approvals"> | undefined;
-}) {
-  const { call, result, active, approvalId } = props;
-  const waiting = result === undefined && approvalId !== undefined;
-  const status = result?.outcome ?? (waiting ? "needs approval" : active ? "running" : "no result");
-  return (
-    <div className="tool-call" data-outcome={status}>
-      <div className="tool-call-head">
-        <code className="tool-call-name">{call.name}</code>
-        <code className="tool-call-args">{argumentsSummary(call.arguments)}</code>
-        <span className="tool-call-status" role="status">
-          {status}
-        </span>
-      </div>
-      {waiting && (
-        <>
-          <pre className="tool-approval-args" aria-label="What this call will do">
-            {fullArguments(call.arguments)}
-          </pre>
-          <ApprovalButtons approvalId={approvalId} />
-        </>
-      )}
-      {result !== undefined && (
-        <details>
-          <summary>
-            Output
-            {result.exitCode !== undefined && `, exit code ${result.exitCode}`}
-            {result.truncated && ", truncated"}
-          </summary>
-          <pre>{result.output === "" ? "(no output)" : result.output}</pre>
-        </details>
-      )}
-    </div>
-  );
-}
-
-function Reasoning({ text }: { text: string }) {
-  return (
-    <details className="reasoning">
-      <summary>Reasoning</summary>
-      <p className="message-text">{text}</p>
-    </details>
-  );
-}
-
-function RunView({ run, approvals }: { run: TimelineRun; approvals: Map<string, Id<"approvals">> }) {
-  const active = isActive(run);
-  const results = new Map(
-    run.events
-      .map((event) => event.body)
-      .filter((body) => body.kind === "toolResult")
-      .map((body) => [body.toolCallId, body]),
-  );
-  return (
-    <>
-      {run.events.map((event) => {
-        const { body } = event;
-        switch (body.kind) {
-          case "userMessage":
-            return (
-              <p key={event._id} className="message message-user message-text">
-                {body.text}
-              </p>
-            );
-          case "assistantTurn":
-            return (
-              <div key={event._id} className="message message-assistant">
-                {body.reasoning !== undefined && <Reasoning text={body.reasoning} />}
-                {body.text !== "" && <p className="message-text">{body.text}</p>}
-                {body.toolCalls.map((call) => (
-                  <ToolCallView
-                    key={call.id}
-                    call={call}
-                    result={results.get(call.id)}
-                    active={active}
-                    approvalId={approvals.get(`${run._id}:${call.id}`)}
-                  />
-                ))}
-              </div>
-            );
-          case "toolResult":
-            return null;
-        }
-      })}
-      {run.stream !== null && (
-        <div className="message message-assistant message-streaming" aria-live="polite">
-          {run.stream.reasoning !== undefined && <Reasoning text={run.stream.reasoning} />}
-          {run.stream.text === "" ? (
-            <p className="muted">Thinking</p>
-          ) : (
-            <p className="message-text">{run.stream.text}</p>
-          )}
-        </div>
-      )}
-      {run.state.kind === "queued" && (
-        <p className="muted run-waiting" role="status">
-          <QueuedDots />
-          Waiting to start.
-        </p>
-      )}
-      {run.state.kind === "failed" && (
-        <p className="error run-failure" role="alert">
-          {run.state.reason}
-        </p>
-      )}
-      {run.state.kind === "cancelled" && <p className="muted">Stopped.</p>}
-    </>
-  );
-}
-
-function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | undefined }) {
-  const { threadId, activeRun } = props;
+function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][number] | undefined; botName: string }) {
+  const { threadId, activeRun, botName } = props;
   const send = useMutation(api.threads.send);
   const requestCancel = useMutation(api.runs.requestCancel);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const element = field.current;
+    if (element !== null) {
+      element.style.height = "auto";
+      element.style.height = `${element.scrollHeight}px`;
+    }
+  }, [text]);
 
   async function submit() {
     if (text.trim() === "" || sending || activeRun !== undefined) {
@@ -240,6 +70,28 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
     }
   }
 
+  function action() {
+    if (activeRun === undefined) {
+      return (
+        <button type="submit" className="send" aria-label={sending ? "Sending" : "Send"} disabled={sending || text.trim() === ""}>
+          <Icon name="up" />
+        </button>
+      );
+    }
+    if (activeRun.cancelRequested) {
+      return (
+        <button type="button" className="send send-stopping" disabled>
+          Stopping
+        </button>
+      );
+    }
+    return (
+      <button type="button" className="send send-stop" aria-label="Stop" onClick={() => void stop(activeRun._id)}>
+        <Icon name="stop" />
+      </button>
+    );
+  }
+
   return (
     <form className="composer" onSubmit={handleSubmit}>
       <label htmlFor="message" className="visually-hidden">
@@ -248,27 +100,15 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
       <div className="composer-row">
         <textarea
           id="message"
+          ref={field}
           rows={1}
           value={text}
           disabled={activeRun !== undefined}
-          placeholder={activeRun !== undefined ? "The bot is working." : "Message the bot"}
+          placeholder={activeRun !== undefined ? `${botName} is working` : `Message ${botName}`}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={handleKeyDown}
         />
-        {activeRun === undefined ? (
-          <button type="submit" className="btn btn-go" disabled={sending || text.trim() === ""}>
-            {sending ? "Sending" : "Send"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="btn"
-            disabled={activeRun.cancelRequested}
-            onClick={() => void stop(activeRun._id)}
-          >
-            {activeRun.cancelRequested ? "Stopping" : "Stop"}
-          </button>
-        )}
+        {action()}
       </div>
       {error !== null && (
         <p className="error" role="alert">
@@ -279,30 +119,46 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
   );
 }
 
-// The pane stays pinned to the newest output until the reader scrolls up, and returning to the bottom pins it again.
-function useStickToBottom(timeline: unknown, approvals: unknown) {
+// The pane stays pinned to the newest output until the reader scrolls up, and returning to the bottom pins it again. Watching
+// sizes rather than data also catches the composer growing, a phone's keyboard opening, and an error appearing in a card.
+function useStickToBottom(mounted: boolean) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const lastTop = useRef(0);
   useLayoutEffect(() => {
     const element = scroller.current;
-    if (element !== null && stick.current) {
-      element.scrollTop = element.scrollHeight;
+    if (element === null) {
+      return;
     }
-  }, [timeline, approvals]);
+    const observer = new ResizeObserver(() => {
+      if (stick.current) {
+        element.scrollTop = element.scrollHeight;
+      }
+    });
+    observer.observe(element);
+    for (const child of element.children) {
+      observer.observe(child);
+    }
+    return () => observer.disconnect();
+  }, [mounted]);
+  // A scroll event can arrive after new content did, so only moving up counts as leaving the bottom. Growth alone must not.
   const onScroll = () => {
     const element = scroller.current;
-    if (element !== null) {
-      stick.current = element.scrollHeight - element.clientHeight - element.scrollTop < STICK_TO_BOTTOM_PX;
+    if (element === null) {
+      return;
     }
+    const nearBottom = element.scrollHeight - element.clientHeight - element.scrollTop < STICK_TO_BOTTOM_PX;
+    stick.current = nearBottom || (stick.current && element.scrollTop >= lastTop.current);
+    lastTop.current = element.scrollTop;
   };
   return { scroller, onScroll };
 }
 
-function Conversation({ threadId, botId }: { threadId: Id<"threads">; botId: Id<"bots"> }) {
+function Conversation(props: { threadId: Id<"threads">; botId: Id<"bots">; botName: string; character: Character }) {
+  const { threadId, botId, botName, character } = props;
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
-  const approvals = new Map((pending ?? []).map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
-  const { scroller, onScroll } = useStickToBottom(timeline, pending);
+  const { scroller, onScroll } = useStickToBottom(timeline !== undefined);
   if (timeline === undefined) {
     return (
       <p className="session-status" role="status">
@@ -310,27 +166,34 @@ function Conversation({ threadId, botId }: { threadId: Id<"threads">; botId: Id<
       </p>
     );
   }
-  const activeRun = timeline.runs.find(isActive);
+  const items = conversationItems({ timeline, pending: pending ?? [], now: Date.now(), locale: navigator.language });
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
         <ScreenPanel botId={botId} />
         <section className="conversation" aria-label="Conversation">
-          {timeline.omittedOlder && <p className="muted">Older messages are not shown.</p>}
-          {timeline.runs.length === 0 && <p className="muted">Send a message to start.</p>}
-          {timeline.runs.map((run) => (
-            <RunView key={run._id} run={run} approvals={approvals} />
+          {timeline.omittedOlder && <div className="system-line">Older messages are not shown.</div>}
+          {timeline.runs.length === 0 && (
+            <div className="start">
+              <BotFace character={character} size={64} />
+              <strong>{botName}</strong>
+              <span>Send a message to start.</span>
+            </div>
+          )}
+          {items.map((item) => (
+            <ChatItem key={item.key} item={item} character={character} />
           ))}
         </section>
       </div>
       <div className="dock">
-        <Composer threadId={threadId} activeRun={activeRun} />
+        <Composer threadId={threadId} activeRun={timeline.runs.find(isActive)} botName={botName} />
       </div>
     </>
   );
 }
 
-function BotThread({ botId }: { botId: Id<"bots"> }) {
+function BotThread(props: { botId: Id<"bots">; botName: string; character: Character }) {
+  const { botId } = props;
   const ensureThread = useMutation(api.threads.ensureForBot);
   const [thread, setThread] = useState<
     { kind: "pending" } | { kind: "ready"; threadId: Id<"threads"> } | { kind: "failed"; message: string }
@@ -365,7 +228,7 @@ function BotThread({ botId }: { botId: Id<"bots"> }) {
     case "failed":
       return <ProblemNotice title="Could not open the conversation" message={thread.message} />;
     case "ready":
-      return <Conversation threadId={thread.threadId} botId={botId} />;
+      return <Conversation threadId={thread.threadId} {...props} />;
   }
 }
 
@@ -428,7 +291,7 @@ function BotChat({ botId }: { botId: string }) {
             <span>{bot.name}</span>
           </button>
         </header>
-        <BotThread botId={bot._id} />
+        <BotThread botId={bot._id} botName={bot.name} character={character} />
       </div>
       {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} />}
     </div>
