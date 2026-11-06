@@ -280,7 +280,7 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
 }
 
 // The pane stays pinned to the newest output until the reader scrolls up, and returning to the bottom pins it again.
-function useStickToBottom(content: unknown) {
+function useStickToBottom(timeline: unknown, approvals: unknown) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useLayoutEffect(() => {
@@ -288,7 +288,7 @@ function useStickToBottom(content: unknown) {
     if (element !== null && stick.current) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [content]);
+  }, [timeline, approvals]);
   const onScroll = () => {
     const element = scroller.current;
     if (element !== null) {
@@ -302,7 +302,7 @@ function Conversation({ threadId, botId }: { threadId: Id<"threads">; botId: Id<
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
   const approvals = new Map((pending ?? []).map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
-  const { scroller, onScroll } = useStickToBottom(timeline);
+  const { scroller, onScroll } = useStickToBottom(timeline, pending);
   if (timeline === undefined) {
     return (
       <p className="session-status" role="status">
