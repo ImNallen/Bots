@@ -168,6 +168,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A deleted bot's tool results stay in the VM's `computerd` journal for up to 7 days, where another bot with `sudo` can read them.
 - A bot with root can make its own delete hang, and the reconcile loop then waits 2 minutes on that VM on each pass, which delays every other computer. It needs a fix before step 6 brings other users.
 - A desktop that a delete stopped still counts as taken for up to an hour. If all 8 slots are claimed, the next bot can evict a live idle bot instead of that empty slot.
+- `forget-bots.sh` checks a slot's holder and then stops it, with no lock against `computerd`. If all 8 slots are claimed and another bot takes the deleted bot's slot in those few milliseconds, that bot's desktop stops. Its tool call fails, and its next use starts the desktop again.
 - A purge step that fails with an error Convex does not retry leaves that bot's history in Convex, and nothing restarts it. A deploy of an older branch during a purge is the one known trigger.
 - A deleted bot's files stay in the Docker volume on a Mac, where no reconcile loop runs.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
