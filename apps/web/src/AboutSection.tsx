@@ -15,6 +15,7 @@ export function AboutSection() {
   }
   const saved = user?.about ?? "";
   const shown = draft ?? saved;
+  const saving = save.kind === "pending";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,6 +38,7 @@ export function AboutSection() {
             className="field profile-assignment"
             rows={4}
             placeholder="Your name, your time zone, how you like to work"
+            readOnly={saving}
             value={shown}
             aria-invalid={save.kind === "failed"}
             onChange={(event) => {
@@ -46,8 +48,8 @@ export function AboutSection() {
           />
         </label>
         <div className="confirm-actions">
-          <button type="submit" className="btn btn-go" disabled={save.kind === "pending" || shown === saved}>
-            {save.kind === "pending" ? "Saving" : "Save"}
+          <button type="submit" className="btn btn-go" disabled={saving || shown === saved}>
+            {saving ? "Saving" : "Save"}
           </button>
         </div>
       </form>

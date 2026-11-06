@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stillUnsaved, hasChanges, savedProfile, shownProfile, withEdit } from "./profileEdits.ts";
+import { hasChanges, savedProfile, shownProfile, withEdit } from "./profileEdits.ts";
 
 const saved = savedProfile({ name: "Ada", title: "Scout", assignment: "Watch the news." });
 
@@ -39,23 +39,5 @@ describe("edits against a live profile", () => {
     const edits = withEdit({ saved, edits: {}, field: "title", value: "" });
     expect(hasChanges(edits)).toBe(true);
     expect(shownProfile(saved, edits).title).toBe("");
-  });
-});
-
-describe("stillUnsaved", () => {
-  it("clears the fields that were saved", () => {
-    const sent = { title: "Lead", assignment: "New." };
-    expect(hasChanges(stillUnsaved({ current: sent, sent }))).toBe(false);
-  });
-
-  it("keeps a field the person changed again during the save", () => {
-    const sent = { title: "Lead", assignment: "New." };
-    const current = { title: "Lead", assignment: "New, and more." };
-    expect(stillUnsaved({ current, sent })).toEqual({ assignment: "New, and more." });
-  });
-
-  it("keeps a field the person started during the save", () => {
-    const current = { title: "Lead", name: "Grace" };
-    expect(stillUnsaved({ current, sent: { title: "Lead" } })).toEqual({ name: "Grace" });
   });
 });

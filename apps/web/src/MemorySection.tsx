@@ -57,6 +57,7 @@ function NoteForm(props: {
         <textarea
           className="field profile-assignment"
           rows={rows}
+          readOnly={save.kind === "pending"}
           value={text}
           aria-invalid={save.kind === "failed"}
           onChange={(event) => {

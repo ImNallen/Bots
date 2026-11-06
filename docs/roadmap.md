@@ -221,6 +221,7 @@ These are open on purpose. Fix each one when the work reaches it.
 
 - After `runs.claim` answers `unavailable`, `.finally` in `consider` in `apps/orchestrator/src/runner.ts` calls `queued.forEach(consider)` at once, and the run is still in that list. So during an update fence, the runner calls `runs.claim` in a loop with no wait until the fence ends, which can take a minute. The limit of 5 attempts does not stop this, because `claim` refuses a fenced run before it counts an attempt. This comes from reading the code, and nobody has measured it.
 - Unsaved text in the panel's profile section survives closing the panel, and it goes on a reload or a move to another bot. It stays in that page only, so a second tab can save over the same field.
+- The profile's fields, About you, and a note's box are read-only while a save is in flight, so an edit cannot be lost to the save's end. On a lost connection they stay read-only until the save finishes, with the text still on screen.
 - On a computer the info panel takes no history entry, and on a phone closing it goes back in history. So a window narrowed below 760 wide with the panel open leaves the bot when the panel closes.
 - A question card locks Approve until the person has reached the end of every argument, so a very long command takes a long scroll. Automatic review, below, is the later answer.
 - A focus ring takes the bot's colour, as the prototype does. On a light page, amber, green, teal, and grey rings fall below 3:1, measured at 2.25, 2.30, 2.45, and 2.92.
