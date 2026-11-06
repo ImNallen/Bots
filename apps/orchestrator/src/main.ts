@@ -67,6 +67,7 @@ if (config.proxmox !== null) {
       commit: (await readFile(new URL("../../../.computerd-commit", import.meta.url), "utf8")).trim(),
       script: await readFile(new URL("../../../infra/proxmox/install-computerd.sh", import.meta.url), "utf8"),
     },
+    forgetScript: await readFile(new URL("../../../infra/proxmox/forget-bots.sh", import.meta.url), "utf8"),
     log,
   });
 }

@@ -24,8 +24,9 @@ guest() { # a script on stdin, then its arguments. Prints what it printed, and a
 }
 
 probe=$(base64 --wrap=0 "$here/desktop-probe.mjs")
+forget=$(base64 --wrap=0 "$here/forget-bots.sh")
 
-guest "$probe" <<'GUEST'
+guest "$probe" "$forget" <<'GUEST'
 export HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SLOT=8
 OTHER=7
@@ -50,6 +51,10 @@ NODE=/opt/bots-computerd/current/.runtime/bin/node
 PROBE=$(mktemp --suffix=.mjs)
 base64 -d <<<"$1" >"$PROBE"
 chmod 0644 "$PROBE"
+FORGET=$(mktemp)
+base64 -d <<<"$2" >"$FORGET"
+FORGOTTEN_BOT=verifyforgotten
+STUCK_BOT=verifystuck
 
 failures=0
 passes=0
@@ -130,7 +135,9 @@ hold() { # port, seconds, file. Sets held to the viewer's own pid, so a kill rea
 cleanup() {
   systemctl stop --quiet computerd-xvfb@$SLOT.service computerd-xvfb@$OTHER.service 2>/dev/null || true
   systemctl reset-failed 'computerd-*@'$SLOT'*' 'computerd-*@'$OTHER'*' 2>/dev/null || true
-  rm -rf "$PROFILE" "$PROFILE.tmp" "/home/browser/profiles/$OTHER_BOT" /run/computerd/desktop-$SLOT.env /run/computerd/desktop-$OTHER.env "$PROBE"
+  umount "/workspace/$STUCK_BOT/mount" 2>/dev/null || true
+  rm -rf "/workspace/$STUCK_BOT"
+  rm -rf "$PROFILE" "$PROFILE.tmp" "/home/browser/profiles/$OTHER_BOT" "/home/browser/profiles/$FORGOTTEN_BOT" "/workspace/$FORGOTTEN_BOT" "/var/lib/computerd/takeovers/$FORGOTTEN_BOT.json" "/home/browser/profiles/$STUCK_BOT" /run/computerd/desktop-$SLOT.env /run/computerd/desktop-$OTHER.env "$PROBE" "$FORGET"
 }
 
 for unit in computerd-xvfb@$SLOT.service computerd-xvfb@$OTHER.service; do
@@ -496,6 +503,41 @@ else
 fi
 same "base: moving logins leaves the base profile alone" "$(base_hash)" "$base_before"
 
+holder "$OTHER" "$FORGOTTEN_BOT" "$OTHER_CDP" "$OTHER_VNC"
+systemctl start --quiet computerd-desktop@$OTHER.target
+wait_for 30 cdp_up "$OTHER_CDP"
+forgotten_profile=/home/browser/profiles/$FORGOTTEN_BOT
+forgotten_workspace=/workspace/$FORGOTTEN_BOT
+forgotten_baseline=/var/lib/computerd/takeovers/$FORGOTTEN_BOT.json
+install -d -m 0755 "$forgotten_workspace"
+install -d -m 0700 -o computerd -g computerd /var/lib/computerd/takeovers
+echo '{}' >"$forgotten_baseline"
+if bash "$FORGET" "$FORGOTTEN_BOT" "$FORGOTTEN_BOT/../$BOT" 2>/dev/null; then result false "forget: refuses an id that is a path"; else result true "forget: refuses an id that is a path"; fi
+check "forget: a refused list removes nothing" test -d "$forgotten_profile"
+same "forget: a refused list stops nothing" "$(state computerd-xvfb@$OTHER.service)" active
+same "forget: removes a bot with a running desktop, and names each bot it finished" "$(bash "$FORGET" "$FORGOTTEN_BOT" nosuchbot | tr '\n' ' ')" "$FORGOTTEN_BOT nosuchbot "
+same "forget: its display stops" "$(state computerd-xvfb@$OTHER.service)" inactive
+same "forget: its browser stops" "$(state computerd-chromium@$OTHER.service)" inactive
+for gone in "$forgotten_profile" "$forgotten_workspace" "$forgotten_baseline"; do
+  check "forget: $gone is gone" test ! -e "$gone"
+done
+check "forget: another bot's profile stays" test -d "$PROFILE"
+check "forget: a rerun is safe" bash "$FORGET" "$FORGOTTEN_BOT"
+install -d -m 0755 "/workspace/$STUCK_BOT/mount" "/home/browser/profiles/$FORGOTTEN_BOT"
+mount -t tmpfs tmpfs "/workspace/$STUCK_BOT/mount"
+stuck_status=0
+stuck_output=$(bash "$FORGET" "$STUCK_BOT" "$FORGOTTEN_BOT" 2>/dev/null) || stuck_status=$?
+same "forget: a bot whose files refuse to go holds back only itself" "$stuck_output" "$FORGOTTEN_BOT"
+same "forget: that failure shows in its exit" "$stuck_status" 1
+check "forget: the next bot still went" test ! -e "/home/browser/profiles/$FORGOTTEN_BOT"
+umount "/workspace/$STUCK_BOT/mount"
+same "forget: a stuck bot goes on a later pass" "$(bash "$FORGET" "$STUCK_BOT")" "$STUCK_BOT"
+holder "$OTHER" "$OTHER_BOT" "$OTHER_CDP" "$OTHER_VNC"
+systemctl start --quiet computerd-desktop@$OTHER.target
+check "forget: its slot works for another bot" wait_for 30 cdp_up "$OTHER_CDP"
+systemctl stop --quiet computerd-xvfb@$OTHER.service
+rm -f "$FORGET"
+
 # The reboot below looks for this profile, so it stays until the last step.
 trap - EXIT
 systemctl reset-failed 'computerd-*@'$SLOT'*' 'computerd-*@'$OTHER'*' 2>/dev/null || true
@@ -526,7 +568,7 @@ GUEST
 fi
 
 guest <<'GUEST'
-rm -rf /home/browser/profiles/verifydesktop /home/browser/profiles/verifyother
+rm -rf /home/browser/profiles/verifydesktop /home/browser/profiles/verifyother /home/browser/profiles/verifyforgotten /workspace/verifyforgotten /var/lib/computerd/takeovers/verifyforgotten.json
 rm -f /run/computerd/desktop-7.env /run/computerd/desktop-8.env
 GUEST
 

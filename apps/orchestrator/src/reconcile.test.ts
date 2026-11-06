@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Proxmox, VmConfig } from "./proxmox.ts";
-import { addressFor, reconcileVm, vmidFor, type DesiredVm, type Stage } from "./reconcile.ts";
+import { addressFor, forgetBots, reconcileVm, vmidFor, type DesiredVm, type Stage } from "./reconcile.ts";
 
 const HASH = "a".repeat(64);
 const COMMIT = "c".repeat(40);
@@ -665,5 +665,34 @@ describe("reconcileVm", () => {
       expect((await pass(world, { want: removing })).stage).toBe("removed");
       expect(world.forgotten).toBe(true);
     });
+  });
+});
+
+describe("forgetBots", () => {
+  function proxmoxPrinting(stdout: string, exitCode = 0) {
+    const commands: string[][] = [];
+    const proxmox = {
+      exec: async (_vmid: number, command: string[]) => {
+        commands.push(command);
+        return { exitCode, stdout };
+      },
+    } as unknown as Proxmox;
+    return { proxmox, commands };
+  }
+
+  it("passes the script and each id as separate arguments, so no id reaches a shell string", async () => {
+    const { proxmox, commands } = proxmoxPrinting("a\nb\n");
+    await expect(forgetBots({ proxmox, vmid: 201, script: "the script", botIds: ["a", "b"] })).resolves.toEqual(["a", "b"]);
+    expect(commands).toEqual([["bash", "-c", "the script", "forget-bots", "a", "b"]]);
+  });
+
+  it("keeps a bot that the script did not finish, so one stuck bot holds back only itself", async () => {
+    const { proxmox } = proxmoxPrinting("b\n", 1);
+    await expect(forgetBots({ proxmox, vmid: 201, script: "s", botIds: ["a", "b"] })).resolves.toEqual(["b"]);
+  });
+
+  it("believes no id that it did not ask about, because a bot has root on that VM", async () => {
+    const { proxmox } = proxmoxPrinting("someoneelse\n");
+    await expect(forgetBots({ proxmox, vmid: 201, script: "s", botIds: ["a"] })).resolves.toEqual([]);
   });
 });

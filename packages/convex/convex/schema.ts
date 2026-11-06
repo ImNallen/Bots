@@ -18,6 +18,12 @@ export default defineSchema({
     approvalLevel: v.optional(approvalLevel),
   }).index("by_owner", ["ownerId"]),
 
+  // A deleted bot whose files may still be on its owner's VM. The reconcile loop removes both.
+  removedBots: defineTable({
+    ownerId: v.id("users"),
+    botId: v.id("bots"),
+  }).index("by_owner", ["ownerId"]),
+
   approvals: defineTable({
     ownerId: v.id("users"),
     botId: v.id("bots"),

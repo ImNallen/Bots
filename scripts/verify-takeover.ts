@@ -46,8 +46,11 @@ const PORT = randomInt(20_000, 40_000);
 
 type Chat = { botId: Id<"bots">; threadId: Id<"threads"> };
 
+const botIds: Id<"bots">[] = [];
+
 async function newChat(name: string): Promise<Chat> {
   const botId = await client.mutation(api.bots.create, { name: `verify-takeover-${name}-${nonce}` });
+  botIds.push(botId);
   await client.mutation(api.bots.setApprovalLevel, { botId, level: "nothing" });
   return { botId, threadId: await client.mutation(api.threads.ensureForBot, { botId }) };
 }
@@ -300,6 +303,12 @@ await client.mutation(api.threads.send, {
   threadId: watched.threadId,
   text: `Use the shell tool once with this command and then stop: pkill -f 'http.server ${PORT}' ; echo stopped`,
 }).then((runId) => settled(watched, runId)).catch(() => {});
+
+// A failed run keeps its bots, because their threads show what went wrong.
+if (failures === 0) {
+  const removals = await Promise.allSettled(botIds.map((botId) => client.mutation(api.bots.remove, { botId })));
+  report(removals.every(({ status }) => status === "fulfilled"), "a finished bot can be deleted after a take-over");
+}
 
 console.log(failures === 0 ? "verify:takeover passed" : `verify:takeover failed with ${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

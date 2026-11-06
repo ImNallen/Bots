@@ -3,6 +3,8 @@ import { mutation, query } from "./_generated/server.js";
 import { requireService, upsertUser } from "./identity.js";
 
 // Slot n is VM 200 + n at 10.77.0.(20 + n), so 200 slots stay inside the user network.
+// A VM holds at most 8 desktops, so a stop of each fits one call of the script, however many bots it names.
+const MAX_REMOVED_BOTS_PER_PASS = 64;
 const MAX_SLOT = 200;
 // Longer than the activate step, which swaps a symlink and restarts one service.
 const UPDATE_FENCE_MS = 60 * 1000;
@@ -132,10 +134,21 @@ export const desiredVms = query({
         owners.add(run.ownerId);
       }
     }
-    return computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }) =>
+    const withVms = computers.flatMap(({ _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit }) =>
       desiredVm === undefined
         ? []
         : [{ computerId: _id, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun: owners.has(ownerId) }],
+    );
+    return await Promise.all(
+      withVms.map(async (computer) => ({
+        ...computer,
+        removedBots: (
+          await ctx.db
+            .query("removedBots")
+            .withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId))
+            .take(MAX_REMOVED_BOTS_PER_PASS)
+        ).map(({ botId }) => botId),
+      })),
     );
   },
 });

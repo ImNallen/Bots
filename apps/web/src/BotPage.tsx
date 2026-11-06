@@ -1,6 +1,6 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -384,6 +384,52 @@ function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof A
   );
 }
 
+function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
+  const remove = useMutation(api.bots.remove);
+  const navigate = useNavigate();
+  const [step, setStep] = useState<
+    { kind: "idle" } | { kind: "confirming" } | { kind: "pending" } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+
+  async function confirm() {
+    setStep({ kind: "pending" });
+    try {
+      await remove({ botId });
+      await navigate({ to: "/" });
+    } catch (error) {
+      setStep({ kind: "failed", message: errorMessage(error) });
+    }
+  }
+
+  if (step.kind === "idle") {
+    return (
+      <section className="delete-bot">
+        <button type="button" className="button-secondary" onClick={() => setStep({ kind: "confirming" })}>
+          Delete bot
+        </button>
+      </section>
+    );
+  }
+  return (
+    <section className="delete-bot">
+      <p>Delete {name}? Its conversation, files, and browser profile go for good. Logins it passed to other bots stay with them.</p>
+      {step.kind === "failed" && (
+        <p className="error" role="alert">
+          {step.message}
+        </p>
+      )}
+      <div className="delete-bot-actions">
+        <button type="button" disabled={step.kind === "pending"} onClick={() => void confirm()}>
+          {step.kind === "pending" ? "Deleting" : "Delete"}
+        </button>
+        <button type="button" className="button-secondary" disabled={step.kind === "pending"} onClick={() => setStep({ kind: "idle" })}>
+          Keep
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function BotChat({ botId }: { botId: string }) {
   const bot = useQuery(api.bots.get, { botId });
   if (bot === undefined) {
@@ -408,6 +454,7 @@ function BotChat({ botId }: { botId: string }) {
       <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
       <ScreenPanel botId={bot._id} />
       <BotThread botId={bot._id} />
+      <DeleteBot botId={bot._id} name={bot.name} />
     </>
   );
 }

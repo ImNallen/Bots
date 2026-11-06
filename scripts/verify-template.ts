@@ -63,4 +63,5 @@ if (run.state.kind !== "done" || proof === undefined || proof.outcome !== "ok") 
   console.log(`verify:template failed. A shell tool result must be exactly "${expected}" in a run that ends as done.`);
   process.exit(1);
 }
-console.log(`verify:template passed. Bot ${botId} ran a tool on ${vmName} as agent.`);
+await client.mutation(api.bots.remove, { botId });
+console.log(`verify:template passed. A bot ran a tool on ${vmName} as agent, and it is deleted.`);
