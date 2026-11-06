@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Icon } from "./Icon.tsx";
 
-export function Dialog(props: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
-  const { title, onClose, children, footer } = props;
+export function DialogFrame(props: { title: string; onClose: () => void; className?: string; children: ReactNode }) {
+  const { title, onClose, className = "dialog", children } = props;
   const dialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -17,7 +17,7 @@ export function Dialog(props: { title: string; onClose: () => void; children: Re
   return (
     <dialog
       ref={dialog}
-      className="dialog"
+      className={className}
       aria-label={title}
       onClose={onClose}
       onClick={(event) => {
@@ -26,6 +26,15 @@ export function Dialog(props: { title: string; onClose: () => void; children: Re
         }
       }}
     >
+      {children}
+    </dialog>
+  );
+}
+
+export function Dialog(props: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+  const { title, onClose, children, footer } = props;
+  return (
+    <DialogFrame title={title} onClose={onClose}>
       <div className="dialog-box">
         <div className="dialog-head">
           <span>{title}</span>
@@ -36,6 +45,6 @@ export function Dialog(props: { title: string; onClose: () => void; children: Re
         <div className="dialog-body">{children}</div>
         {footer !== undefined && <div className="dialog-foot">{footer}</div>}
       </div>
-    </dialog>
+    </DialogFrame>
   );
 }

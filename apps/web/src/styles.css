@@ -1662,8 +1662,9 @@ button.card-row:hover {
   box-shadow: var(--shot-lg);
 }
 
-.dialog:has(.settings-section) {
-  width: min(100% - 32px, 440px);
+.dialog-wide {
+  width: min(100% - 32px, 700px);
+  height: min(100dvh - 32px, 500px);
 }
 
 .dialog::backdrop {
@@ -1719,12 +1720,64 @@ button.card-row:hover {
   text-align: center;
 }
 
-.settings-section > .label:first-child {
-  padding-top: 0;
+.set-box {
+  position: relative;
+  display: flex;
+  height: 100%;
 }
 
-.settings-section + .settings-section {
-  margin-top: 14px;
+.set-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+}
+
+.set-nav {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 155px;
+  padding: 10px;
+  border-right: 1px solid var(--hair);
+}
+
+.set-nav button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  text-align: left;
+  border-radius: 7px;
+}
+
+.set-nav button:hover,
+.set-nav button[aria-current="true"] {
+  background: var(--bubble);
+}
+
+.set-main {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 26px;
+  overflow: auto;
+}
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.set-section[data-open="false"] {
+  display: none;
+}
+
+.set-section h2 {
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .key-form {
@@ -2014,8 +2067,24 @@ button.card-row:hover {
     border-radius: 20px 20px 0 0;
   }
 
-  .dialog:has(.settings-section) {
-    width: 100%;
+  .dialog-wide {
+    height: 92dvh;
+  }
+
+  .set-nav {
+    display: none;
+  }
+
+  .set-main {
+    padding: 18px 18px calc(18px + var(--safe-bottom));
+  }
+
+  .set-section[data-open="false"] {
+    display: flex;
+  }
+
+  .set-section + .set-section {
+    margin-top: 16px;
   }
 
   .dialog-head {

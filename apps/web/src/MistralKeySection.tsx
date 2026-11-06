@@ -52,23 +52,18 @@ export function MistralKeySection() {
   }
 
   if (status === undefined) {
-    return (
-      <section className="settings-section">
-        <h3 className="label">Mistral key</h3>
-        <p role="status">Loading the key status.</p>
-      </section>
-    );
+    return <p role="status">Loading the key status.</p>;
   }
 
   return (
-    <section className="settings-section">
-      <h3 className="label">Mistral key</h3>
+    <>
       <div className="card">
         <div className="card-row">
           <span>
             {status.configured ? (
               <>
-                A key ending in <code>{status.last4}</code> is set.
+                Key ending in <code>{status.last4}</code>
+                <small>Bots use this to answer.</small>
               </>
             ) : (
               "No key is set. Bots need one before they can answer."
@@ -91,6 +86,7 @@ export function MistralKeySection() {
             className="field"
             type="password"
             value={key}
+            placeholder={status.configured ? "Paste a new key" : "Paste your key"}
             autoComplete="off"
             aria-invalid={submission.kind === "failed"}
             onChange={(event) => setKey(event.target.value)}
@@ -105,6 +101,6 @@ export function MistralKeySection() {
           </p>
         )}
       </form>
-    </section>
+    </>
   );
 }
