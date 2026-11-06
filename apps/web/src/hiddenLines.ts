@@ -19,8 +19,9 @@ export function linesBelow(box: ScrollBox): number | null {
   return Math.max(0, Math.ceil((textBelowFold - box.scrollTop) / box.lineHeight));
 }
 
-export function linesBelowNote(count: number): string {
-  return `${count} more ${count === 1 ? "line" : "lines"} below. Scroll to the end to approve.`;
+export function linesBelowNote(count: number, alreadyRead: boolean): string {
+  const lines = `${count} more ${count === 1 ? "line" : "lines"} below.`;
+  return alreadyRead ? lines : `${lines} Scroll to the end to approve.`;
 }
 
 export function hasReadToEnd(below: number | null): boolean {

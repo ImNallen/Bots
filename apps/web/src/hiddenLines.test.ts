@@ -39,12 +39,16 @@ describe("linesBelow", () => {
 
 describe("linesBelowNote", () => {
   it("says how many lines are hidden and what to do", () => {
-    expect(linesBelowNote(12)).toBe("12 more lines below. Scroll to the end to approve.");
-    expect(linesBelowNote(1)).toBe("1 more line below. Scroll to the end to approve.");
+    expect(linesBelowNote(12, false)).toBe("12 more lines below. Scroll to the end to approve.");
+    expect(linesBelowNote(1, false)).toBe("1 more line below. Scroll to the end to approve.");
   });
 });
 
 describe("the Approve lock", () => {
+  it("stops asking for a scroll once the person has reached the end", () => {
+    expect(linesBelowNote(28, true)).toBe("28 more lines below.");
+  });
+
   it("counts text as read when it all fits or the person reached its end", () => {
     expect(hasReadToEnd(null)).toBe(true);
     expect(hasReadToEnd(0)).toBe(true);

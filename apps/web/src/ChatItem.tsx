@@ -93,12 +93,14 @@ function ArgumentText(props: { text: string; index: number; onRead: (index: numb
     }
     return () => observer.disconnect();
   }, [text]);
-  const read = below !== undefined && hasReadToEnd(below);
+  const reachedEnd = below !== undefined && hasReadToEnd(below);
+  const [read, setRead] = useState(false);
   useEffect(() => {
-    if (read) {
+    if (reachedEnd) {
+      setRead(true);
       onRead(index);
     }
-  }, [read, index, onRead]);
+  }, [reachedEnd, index, onRead]);
   return (
     <>
       <pre ref={box} tabIndex={typeof below === "number" ? 0 : undefined} onScroll={measure}>
@@ -106,7 +108,7 @@ function ArgumentText(props: { text: string; index: number; onRead: (index: numb
       </pre>
       {typeof below === "number" && (
         <p className="ask-more" data-end={below === 0}>
-          {linesBelowNote(below)}
+          {linesBelowNote(below, read)}
         </p>
       )}
     </>
