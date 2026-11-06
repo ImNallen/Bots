@@ -2,13 +2,24 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import RFB from "@novnc/novnc";
 import { useConvex, useMutation } from "convex/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type Dispatch, type RefObject } from "react";
+import { Icon } from "./Icon.tsx";
 import { KEY_KEYSYMS, isNamedKey, planTyping, type NamedKey } from "./keysyms.ts";
-
-type ScreenState = "connecting" | "live" | "ended";
-type StreamMode = "watch" | "control";
+import {
+  INITIAL_SCREEN_STATE,
+  holdsScreen,
+  screenReducer,
+  streamFor,
+  type ScreenEvent,
+  type ScreenNotice,
+  type ScreenState,
+  type Stream,
+} from "./screenState.ts";
+import { useHasCoarsePointer, useIsPhone } from "./useIsPhone.ts";
 
 const RENEW_MS = 60_000;
+// Matches .screen in styles.css, so a stream's letterbox does not show.
+const VIEW_BACKGROUND = "#141414";
 const KEY_BAR = [
   ["Tab", "Tab"],
   ["Esc", "Escape"],
@@ -25,13 +36,8 @@ function socketUrl(path: string): string {
   return `${scheme}://${window.location.host}${path}`;
 }
 
-function ScreenView(props: {
-  botId: string;
-  mode: StreamMode;
-  onState: (state: ScreenState) => void;
-  onScreen: (screen: RFB | null) => void;
-}) {
-  const { botId, mode, onState, onScreen } = props;
+function ScreenStream(props: { botId: string; mode: "watch" | "control"; dispatch: Dispatch<ScreenEvent> }) {
+  const { botId, mode, dispatch } = props;
   const target = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,54 +45,45 @@ function ScreenView(props: {
     if (element === null) {
       return undefined;
     }
-    onState("connecting");
     const path = `/screens/${encodeURIComponent(botId)}${mode === "control" ? "/input" : ""}`;
     const rfb = new RFB(element, socketUrl(path), { shared: true });
     rfb.viewOnly = mode === "watch";
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
+    rfb.background = VIEW_BACKGROUND;
     const onConnect = () => {
-      onState("live");
-      onScreen(rfb);
+      dispatch({ type: "connected", stream: rfb });
       if (mode === "control") {
         // So a real keyboard reaches the desktop at once, and a shortcut does not reach this page instead.
         rfb.focus({ preventScroll: true });
       }
     };
-    const onDisconnect = () => {
-      onScreen(null);
-      onState("ended");
-    };
+    const onDisconnect = () => dispatch({ type: "disconnected" });
     rfb.addEventListener("connect", onConnect);
     rfb.addEventListener("disconnect", onDisconnect);
     return () => {
       rfb.removeEventListener("connect", onConnect);
       rfb.removeEventListener("disconnect", onDisconnect);
-      onScreen(null);
       rfb.disconnect();
     };
-  }, [botId, mode, onState, onScreen]);
+  }, [botId, mode, dispatch]);
 
-  return (
-    <div className={mode === "control" ? "screen-view screen-view-control" : "screen-view"}>
-      <div ref={target} aria-label="This bot's screen" />
-    </div>
-  );
+  return <div className="scr-stream" ref={target} aria-label="This bot's screen" />;
 }
 
-// While wanted is true the owner holds the screen. Leaving this state for any reason gives it back, so hiding the screen or
-// leaving the page does not keep the bot waiting.
-function useTakeover(args: { botId: Id<"bots">; wanted: boolean; onEnded: () => void }) {
-  const { botId, wanted, onEnded } = args;
+// While the state holds the screen, the owner has it. Leaving those states for any reason gives it back, and so does closing the
+// view or leaving the page, so none of them keeps the bot waiting.
+function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<ScreenEvent>) {
   const convex = useConvex();
   const takeOver = useMutation(api.bots.takeOver);
   const release = useMutation(api.bots.releaseTakeover);
-  const [granted, setGranted] = useState(false);
   const until = useRef(0);
   const replaced = useRef(false);
+  const holding = holdsScreen(state);
+  const lost = state.kind === "lost";
 
   useEffect(() => {
-    if (!wanted) {
+    if (!holding) {
       return undefined;
     }
     let cancelled = false;
@@ -99,36 +96,66 @@ function useTakeover(args: { botId: Id<"bots">; wanted: boolean; onEnded: () => 
         () => {},
       );
     }, RENEW_MS);
-    takeOver({ botId }).then((value) => {
-      until.current = value;
-      if (!cancelled) {
-        setGranted(true);
-      }
-    }, onEnded);
+    takeOver({ botId }).then(
+      (value) => {
+        until.current = value;
+        if (!cancelled) {
+          dispatch({ type: "granted" });
+        }
+      },
+      () => {
+        if (!cancelled) {
+          dispatch({ type: "refused" });
+        }
+      },
+    );
     return () => {
       cancelled = true;
       clearInterval(renew);
-      setGranted(false);
       if (!replaced.current) {
         release({ botId }).catch(() => {});
       }
     };
-  }, [botId, wanted, onEnded, release, takeOver]);
+  }, [botId, holding, dispatch, release, takeOver]);
 
   // A newer tab of this owner ends this stream by taking over. It renewed the take-over before that, so a value that is not ours
   // says so, and giving back now would take the screen from that tab.
-  const streamEnded = useCallback(() => {
-    convex
-      .query(api.bots.get, { botId })
-      .then((bot) => {
-        const current = bot?.takeoverUntil ?? 0;
-        replaced.current = current !== 0 && current !== until.current;
-      })
-      .catch(() => {})
-      .finally(onEnded);
-  }, [botId, convex, onEnded]);
+  useEffect(() => {
+    if (lost) {
+      convex
+        .query(api.bots.get, { botId })
+        .then((bot) => {
+          const current = bot?.takeoverUntil ?? 0;
+          replaced.current = current !== 0 && current !== until.current;
+        })
+        .catch(() => {})
+        .finally(() => dispatch({ type: "settled" }));
+    }
+  }, [botId, convex, dispatch, lost]);
+}
 
-  return { granted, streamEnded };
+// A phone's keyboard covers the page without resizing it, so the view follows the part that stays visible. A pinch also shrinks that
+// part, and the view must not shrink with it.
+function useFitVisibleArea(view: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const visible = window.visualViewport;
+    const element = view.current;
+    if (visible === null || element === null) {
+      return undefined;
+    }
+    const fit = () => {
+      const zoomed = visible.scale > 1.01;
+      element.style.top = zoomed ? "" : `${visible.offsetTop}px`;
+      element.style.height = zoomed ? "" : `${visible.height}px`;
+    };
+    fit();
+    visible.addEventListener("resize", fit);
+    visible.addEventListener("scroll", fit);
+    return () => {
+      visible.removeEventListener("resize", fit);
+      visible.removeEventListener("scroll", fit);
+    };
+  }, [view]);
 }
 
 const REFUSALS = {
@@ -136,7 +163,7 @@ const REFUSALS = {
   "keyboard-full": "The screen's keyboard has no room for another new character, so nothing was sent. Give back and take over again to type it.",
 } as const;
 
-function TypingBox({ screen }: { screen: RFB }) {
+function TypingBox({ stream }: { stream: Stream }) {
   const composing = useRef(false);
   const added = useRef<ReadonlySet<number>>(new Set());
   const [refusal, setRefusal] = useState<keyof typeof REFUSALS | null>(null);
@@ -152,7 +179,7 @@ function TypingBox({ screen }: { screen: RFB }) {
       return;
     }
     for (const keysym of plan.keysyms) {
-      screen.sendKey(keysym, null);
+      stream.sendKey(keysym, null);
     }
     added.current = plan.added;
     setRefusal(null);
@@ -164,7 +191,6 @@ function TypingBox({ screen }: { screen: RFB }) {
   return (
     <>
       <input
-        className="screen-typing"
         aria-label="Type on the screen"
         placeholder="Tap here to type on the screen"
         autoComplete="off"
@@ -193,7 +219,7 @@ function TypingBox({ screen }: { screen: RFB }) {
             // was refused, and none of them reach the screen, because an Enter there could submit a form without that text.
             if (event.currentTarget.value === "") {
               event.preventDefault();
-              screen.sendKey(KEY_KEYSYMS[event.key], null);
+              stream.sendKey(KEY_KEYSYMS[event.key], null);
             } else if (event.key === "Enter") {
               event.preventDefault();
             }
@@ -201,7 +227,7 @@ function TypingBox({ screen }: { screen: RFB }) {
         }}
       />
       {refusal !== null && (
-        <p className="screen-refusal" role="alert">
+        <p className="scr-refusal" role="alert">
           {REFUSALS[refusal]}
         </p>
       )}
@@ -209,96 +235,154 @@ function TypingBox({ screen }: { screen: RFB }) {
   );
 }
 
-function TakeoverControls({ screen, onGiveBack }: { screen: RFB; onGiveBack: () => void }) {
+function TouchControls({ stream }: { stream: Stream }) {
   return (
-    <div className="screen-controls">
-      <TypingBox screen={screen} />
-      <div className="screen-keys" role="group" aria-label="Keys">
+    <div className="typing">
+      <TypingBox stream={stream} />
+      {/* A key must not take focus from the box, because a phone would then close its keyboard. */}
+      <div className="keys" role="group" aria-label="Keys" onMouseDown={(event) => event.preventDefault()}>
         {KEY_BAR.map(([label, key]: readonly [string, NamedKey]) => (
-          <button key={key} type="button" aria-label={key} onClick={() => screen.sendKey(KEY_KEYSYMS[key], null)}>
+          <button key={key} type="button" aria-label={key} onClick={() => stream.sendKey(KEY_KEYSYMS[key], null)}>
             {label}
           </button>
         ))}
-      </div>
-      <div>
-        <button type="button" onClick={onGiveBack}>
-          Give back to the bot
-        </button>
       </div>
     </div>
   );
 }
 
-const STATUS: Record<ScreenState, string> = {
-  connecting: "Connecting to the screen.",
-  live: "Live. You are watching, and the bot keeps working.",
-  ended: "The screen is not connected. The computer may be starting.",
+function ControlPill({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<ScreenEvent> }) {
+  switch (state.kind) {
+    case "watching":
+    case "requesting":
+      return (
+        <div className="seg-big">
+          <span>
+            <Icon name="eye" />
+            Watching
+          </span>
+          <button type="button" disabled={state.kind === "requesting"} onClick={() => dispatch({ type: "takeControl" })}>
+            Take control
+          </button>
+        </div>
+      );
+    case "joining":
+    case "controlling":
+      return (
+        <div className="seg-big">
+          <span>You have control</span>
+          <button type="button" onClick={() => dispatch({ type: "giveBack" })}>
+            Give back
+          </button>
+        </div>
+      );
+    case "connecting":
+    case "ended":
+    case "lost":
+      return null;
+  }
+}
+
+const NOTICES: Record<ScreenNotice, string> = {
+  takeoverEnded: "Your take-over ended. You are watching, and the bot keeps working.",
+  takeoverRefused: "Could not take control. You are watching, and the bot keeps working.",
 };
 
-export function ScreenPanel({ botId }: { botId: Id<"bots"> }) {
-  const [open, setOpen] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<ScreenState>("connecting");
-  const [control, setControl] = useState(false);
-  const [screen, setScreen] = useState<RFB | null>(null);
-  const [takeoverEnded, setTakeoverEnded] = useState(false);
-  const endControl = useCallback(() => setControl(false), []);
-  const { granted, streamEnded } = useTakeover({ botId, wanted: open && control, onEnded: endControl });
-  const mode: StreamMode = granted ? "control" : "watch";
+function topLine(state: ScreenState): string | null {
+  switch (state.kind) {
+    case "joining":
+    case "controlling":
+      return "The bot waits before its next tool";
+    case "connecting":
+    case "watching":
+      return state.notice === null ? null : NOTICES[state.notice];
+    case "ended":
+    case "requesting":
+    case "lost":
+      return null;
+  }
+}
 
-  const onState = useCallback(
-    (next: ScreenState) => {
-      setState(next);
-      // Only the stream can end a take-over here. Giving back removes the listener first.
-      if (mode === "control" && next === "ended") {
-        setTakeoverEnded(true);
-        streamEnded();
-      }
-    },
-    [mode, streamEnded],
-  );
-
-  return (
-    <section className="screen-panel">
-      <div className="screen-head">
-        <button
-          type="button"
-          onClick={() => {
-            setOpen((value) => !value);
-            setControl(false);
-            setTakeoverEnded(false);
-          }}
-        >
-          {open ? "Hide screen" : "Watch screen"}
-        </button>
-        {open && !control && state === "live" && (
-          <button
-            type="button"
-            onClick={() => {
-              setTakeoverEnded(false);
-              setControl(true);
-            }}
-          >
-            Take over
-          </button>
-        )}
-        {open && (
-          <span className="screen-status" role="status">
-            {mode === "control" && state === "live"
-              ? "You control this screen. The bot waits before its next tool."
-              : takeoverEnded && state === "live"
-                ? "Your take-over ended. You are watching, and the bot keeps working."
-                : STATUS[state]}
-          </span>
-        )}
-        {open && mode === "watch" && state === "ended" && (
-          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+function Message({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<ScreenEvent> }) {
+  switch (state.kind) {
+    case "connecting":
+    case "joining":
+    case "lost":
+      return (
+        <p className="scr-note" role="status">
+          Connecting to the screen.
+        </p>
+      );
+    case "ended":
+      return (
+        <div className="scr-note">
+          <p role="status">The screen is not connected. The computer may be starting.</p>
+          <button type="button" className="scr-retry" onClick={() => dispatch({ type: "retry" })}>
             Try again
           </button>
-        )}
+        </div>
+      );
+    case "watching":
+    case "requesting":
+    case "controlling":
+      return null;
+  }
+}
+
+export function ScreenPanel({ botId, botName, onClose }: { botId: Id<"bots">; botName: string; onClose: () => void }) {
+  const [state, dispatch] = useReducer(screenReducer, INITIAL_SCREEN_STATE);
+  useTakeover(botId, state, dispatch);
+  const isPhone = useIsPhone();
+  // Not the phone's width, because a phone on its side and a tablet are wider than that and still have no real keyboard.
+  const hasTouchKeyboard = useHasCoarsePointer();
+  const view = useRef<HTMLElement>(null);
+  const [opener] = useState(() => document.activeElement);
+  useFitVisibleArea(view);
+
+  useEffect(() => {
+    view.current?.focus({ preventScroll: true });
+    return () => {
+      if (opener instanceof HTMLElement) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, [opener]);
+
+  // During a take-over, Escape belongs to the desktop.
+  const holding = holdsScreen(state);
+  useEffect(() => {
+    if (holding) {
+      return undefined;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [holding, onClose]);
+
+  const compact = isPhone || hasTouchKeyboard;
+  const mode = streamFor(state);
+  return (
+    <section ref={view} className="screen" role="dialog" aria-modal="true" aria-label={`${botName}'s screen`} tabIndex={-1} data-compact={compact}>
+      <div className="scr-top">
+        <button type="button" className="scr-x" aria-label="Close the screen" onClick={onClose}>
+          <Icon name={compact ? "back" : "shrink"} />
+        </button>
+        <span className="scr-state" role="status">
+          {topLine(state)}
+        </span>
       </div>
-      {open && <ScreenView key={`${attempt}-${mode}`} botId={botId} mode={mode} onState={onState} onScreen={setScreen} />}
-      {mode === "control" && screen !== null && <TakeoverControls screen={screen} onGiveBack={endControl} />}
+      <div className="scr-mid">
+        {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} dispatch={dispatch} />}
+        <Message state={state} dispatch={dispatch} />
+      </div>
+      <div className="scr-low">
+        {state.kind === "controlling" && hasTouchKeyboard && <TouchControls stream={state.stream} />}
+        <ControlPill state={state} dispatch={dispatch} />
+      </div>
     </section>
   );
 }

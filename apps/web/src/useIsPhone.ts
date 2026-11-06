@@ -2,12 +2,22 @@ import { useSyncExternalStore } from "react";
 
 // styles.css switches its layout at the same width.
 const phone = window.matchMedia("(max-width: 759.98px)");
+const coarsePointer = window.matchMedia("(pointer: coarse)");
 
-function subscribe(onChange: () => void): () => void {
-  phone.addEventListener("change", onChange);
-  return () => phone.removeEventListener("change", onChange);
+function useMatches(query: MediaQueryList): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      query.addEventListener("change", onChange);
+      return () => query.removeEventListener("change", onChange);
+    },
+    () => query.matches,
+  );
 }
 
 export function useIsPhone(): boolean {
-  return useSyncExternalStore(subscribe, () => phone.matches);
+  return useMatches(phone);
+}
+
+export function useHasCoarsePointer(): boolean {
+  return useMatches(coarsePointer);
 }

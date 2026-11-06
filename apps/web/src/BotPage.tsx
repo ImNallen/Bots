@@ -161,8 +161,8 @@ function useStickToBottom(mounted: boolean) {
   return { scroller, onScroll };
 }
 
-function Conversation(props: { threadId: Id<"threads">; botId: Id<"bots">; botName: string; character: Character }) {
-  const { threadId, botId, botName, character } = props;
+function Conversation(props: { threadId: Id<"threads">; botName: string; character: Character }) {
+  const { threadId, botName, character } = props;
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
   const { scroller, onScroll } = useStickToBottom(timeline !== undefined);
@@ -177,7 +177,6 @@ function Conversation(props: { threadId: Id<"threads">; botId: Id<"bots">; botNa
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
-        <ScreenPanel botId={botId} />
         <section className="conversation" aria-label="Conversation">
           {timeline.omittedOlder && <div className="system-line">Older messages are not shown.</div>}
           {timeline.runs.length === 0 && (
@@ -200,7 +199,7 @@ function Conversation(props: { threadId: Id<"threads">; botId: Id<"bots">; botNa
 }
 
 function BotThread(props: { botId: Id<"bots">; botName: string; character: Character }) {
-  const { botId } = props;
+  const { botId, botName, character } = props;
   const ensureThread = useMutation(api.threads.ensureForBot);
   const [thread, setThread] = useState<
     { kind: "pending" } | { kind: "ready"; threadId: Id<"threads"> } | { kind: "failed"; message: string }
@@ -235,14 +234,14 @@ function BotThread(props: { botId: Id<"bots">; botName: string; character: Chara
     case "failed":
       return <ProblemNotice title="Could not open the conversation" message={thread.message} />;
     case "ready":
-      return <Conversation threadId={thread.threadId} {...props} />;
+      return <Conversation threadId={thread.threadId} botName={botName} character={character} />;
   }
 }
 
 function BotChat({ botId }: { botId: string }) {
   const bot = useQuery(api.bots.get, { botId });
   const rows = useQuery(api.bots.overview);
-  const { info } = useSearch({ from: "/app/bots/$botId" });
+  const { info, screen } = useSearch({ from: "/app/bots/$botId" });
   const navigate = useNavigate();
   const router = useRouter();
   const isPhone = useIsPhone();
@@ -279,7 +278,16 @@ function BotChat({ botId }: { botId: string }) {
     }
   };
 
-  // The chat stays mounted behind a phone's info page, because unmounting it would give back a take-over.
+  // A history entry at every width, because a browser's back action should leave the view and not the bot.
+  const openScreen = () => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, screen: true }) });
+  const closeScreen = () => {
+    if (router.history.canGoBack()) {
+      router.history.back();
+    } else {
+      void navigate({ to: "/bots/$botId", params, search: ({ info: wasInfo }) => (wasInfo === true ? { info: true } : {}), replace: true });
+    }
+  };
+
   return (
     <div className="tint bot-page" {...tintOf(character.color)}>
       <div className="chat" inert={isPhone && info === true}>
@@ -297,10 +305,20 @@ function BotChat({ botId }: { botId: string }) {
             <BotFace character={character} size={isPhone ? 26 : 20} state={faceState} />
             <span>{bot.name}</span>
           </button>
+          {isPhone ? (
+            <button type="button" className="round chat-screen" aria-label={`${bot.name}'s screen`} onClick={openScreen}>
+              <Icon name="screen" />
+            </button>
+          ) : (
+            <button type="button" className="pill pill-plain chat-screen" onClick={openScreen}>
+              Screen
+            </button>
+          )}
         </header>
         <BotThread botId={bot._id} botName={bot.name} character={character} />
       </div>
       {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} />}
+      {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} onClose={closeScreen} />}
     </div>
   );
 }

@@ -196,8 +196,7 @@ pre {
 }
 
 /* Buttons and fields */
-.btn,
-.screen-panel button {
+.btn {
   flex: none;
   min-height: 30px;
   padding: 0 11px;
@@ -208,8 +207,7 @@ pre {
   border-radius: 15px;
 }
 
-.btn:hover,
-.screen-panel button:hover {
+.btn:hover {
   background: var(--sel);
 }
 
@@ -265,8 +263,7 @@ pre {
   background: var(--hover);
 }
 
-.field,
-.screen-typing {
+.field {
   width: 100%;
   min-width: 0;
   min-height: 30px;
@@ -636,7 +633,7 @@ pre {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: calc(9px + var(--safe-top)) 12px 22px;
+  padding: calc(9px + var(--safe-top)) 88px 22px;
   background: linear-gradient(var(--page) 45%, transparent);
   pointer-events: none;
 }
@@ -647,6 +644,12 @@ pre {
 
 .chat-back {
   display: none;
+}
+
+.chat-screen {
+  position: absolute;
+  top: calc(9px + var(--safe-top));
+  right: max(12px, var(--safe-right));
 }
 
 .pill {
@@ -665,6 +668,10 @@ pre {
 
 .pill:hover {
   background: var(--hover);
+}
+
+.pill-plain {
+  padding: 0 12px;
 }
 
 .pill span {
@@ -1153,69 +1160,297 @@ button.tool:hover {
   border-radius: 13px;
 }
 
-/* Screen, inline in the chat until it gets a view of its own */
-.screen-panel {
-  max-width: 70rem;
-  margin: 0 auto 16px;
-}
-
-.screen-head {
+/* Screen. Dark in both themes, like the desktop it frames. */
+.screen {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  right: 0;
+  left: 0;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  height: 100dvh;
+  background: #141414;
+  color: #eeeeee;
+  color-scheme: dark;
+  outline: 0;
+  visibility: visible;
+}
+
+/* Everything behind the view stays mounted, so a draft and a scroll position survive, and it leaves the focus order. */
+.app:has(.screen) {
+  visibility: hidden;
+}
+
+.screen :focus-visible {
+  outline-color: #ffffff;
+}
+
+.scr-top {
+  flex: none;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
   align-items: center;
-  justify-content: center;
   gap: 8px;
+  min-height: 42px;
+  padding: calc(7px + var(--safe-top)) max(10px, var(--safe-right)) 7px max(10px, var(--safe-left));
 }
 
-.screen-status {
-  color: var(--muted);
+.scr-state {
+  grid-area: 1 / 2;
+  color: #a6a6a6;
   font-size: 12px;
+  text-align: center;
 }
 
-.screen-view {
+.scr-x {
+  grid-area: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #d0d0d0;
+  border-radius: 50%;
+}
+
+.scr-x:hover {
+  background: #2a2a2a;
+}
+
+.scr-mid {
   position: relative;
-  width: 100%;
-  margin-top: 8px;
-  aspect-ratio: 1280 / 800;
-  overflow: hidden;
-  background: #111111;
-  border-radius: 8px;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  margin-inline: max(12px, var(--safe-left)) max(12px, var(--safe-right));
 }
 
 /* noVNC scales to its container, so the canvas inside must not be able to size that container. */
-.screen-view > div {
-  position: absolute !important;
+.scr-stream {
+  position: absolute;
   inset: 0;
 }
 
-.screen-view-control {
-  box-shadow: 0 0 0 2px var(--bot);
+.scr-stream canvas {
+  border-radius: 3px;
 }
 
-.screen-controls {
+.scr-note {
+  position: relative;
   display: grid;
-  gap: 8px;
-  margin-top: 8px;
+  justify-items: center;
+  gap: 12px;
+  padding: 16px;
+  color: #a6a6a6;
+  font-size: 13px;
+  text-align: center;
 }
 
-.screen-keys {
+.scr-retry {
+  min-height: 30px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: #1b1c1e;
+  font-weight: 500;
+  border-radius: 15px;
+}
+
+.scr-low {
+  flex: none;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 7px max(12px, var(--safe-right)) max(9px, var(--safe-bottom)) max(12px, var(--safe-left));
 }
 
-.screen-panel .screen-keys button {
-  min-width: 44px;
-  min-height: 44px;
-}
-
-.screen-typing {
-  min-height: 44px;
-}
-
-.screen-refusal {
-  color: var(--danger);
+.seg-big {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  background: #ffffff;
+  color: #1b1c1e;
   font-size: 12px;
+  border-radius: 16px;
+}
+
+.seg-big span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: #5c5c5c;
+  white-space: nowrap;
+}
+
+.seg-big .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.seg-big button {
+  height: 26px;
+  padding: 0 10px;
+  background: #1b1c1e;
+  color: #ffffff;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 13px;
+}
+
+.seg-big button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.screen .seg-big button:focus-visible {
+  outline-color: #1b1c1e;
+}
+
+.typing {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 620px;
+}
+
+/* 16px keeps a phone from zooming the page when the box takes focus. */
+.typing input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 13px;
+  background: #262626;
+  color: #eeeeee;
+  font-size: 16px;
+  border: 0;
+  border-radius: 22px;
+}
+
+.typing input::placeholder {
+  color: #8e8e8e;
+}
+
+.keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  gap: 5px;
+}
+
+.keys button {
+  min-height: 44px;
+  background: #262626;
+  color: #eeeeee;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
+.keys button:active {
+  background: #3c3c3c;
+}
+
+.scr-refusal {
+  color: #ff6b6b;
+  font-size: 13px;
+}
+
+.screen[data-compact="true"] .scr-top {
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  min-height: 54px;
+  padding-block: calc(7px + var(--safe-top)) 7px;
+}
+
+.screen[data-compact="true"] .scr-state {
+  font-size: 13px;
+}
+
+.screen[data-compact="true"] .scr-x {
+  grid-area: 1 / 1;
+  width: 40px;
+  height: 40px;
+  background: #262626;
+}
+
+.screen[data-compact="true"] .scr-mid {
+  margin-inline: max(8px, var(--safe-left)) max(8px, var(--safe-right));
+}
+
+.screen[data-compact="true"] .scr-note {
+  font-size: 15px;
+}
+
+.screen[data-compact="true"] .scr-retry {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 15px;
+  border-radius: 22px;
+}
+
+.screen[data-compact="true"] .scr-low {
+  min-height: 62px;
+}
+
+.screen[data-compact="true"] .seg-big {
+  padding: 3px;
+  font-size: 15px;
+  border-radius: 24px;
+}
+
+.screen[data-compact="true"] .seg-big .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.screen[data-compact="true"] .seg-big button {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 20px;
+}
+
+/* A tall free space would otherwise put the stream far from the controls. noVNC sets the canvas's margin inline. */
+@media (orientation: portrait) {
+  .screen[data-compact="true"] .scr-stream canvas {
+    margin-top: 0 !important;
+  }
+}
+
+/* On its side a phone has little height, so the stream keeps all of it and the controls go beside it. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .screen {
+    display: grid;
+    grid-template: "mid top" auto "mid low" minmax(0, 1fr) / minmax(0, 1fr) 252px;
+  }
+
+  .scr-top {
+    grid-area: top;
+    padding-left: 8px;
+  }
+
+  .scr-mid,
+  .screen[data-compact="true"] .scr-mid {
+    grid-area: mid;
+    margin-block: max(4px, var(--safe-top)) max(4px, var(--safe-bottom));
+    margin-right: 0;
+  }
+
+  .scr-low {
+    grid-area: low;
+    overflow-y: auto;
+    padding-left: 8px;
+    padding-right: max(8px, var(--safe-right));
+  }
+
+  .scr-low > :first-child {
+    margin-top: auto;
+  }
+
+  .keys {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 /* Info panel */
@@ -1566,8 +1801,12 @@ button.card-row:hover {
     display: grid;
   }
 
+  .chat-screen {
+    top: calc(10px + var(--safe-top));
+  }
+
   .pill {
-    max-width: calc(100% - 48px);
+    max-width: calc(100% - 96px);
     height: 40px;
     padding: 0 14px 0 8px;
     font-size: 16px;
@@ -1672,8 +1911,7 @@ button.card-row:hover {
     border-radius: 16px;
   }
 
-  .btn,
-  .screen-panel button {
+  .btn {
     min-height: 44px;
     padding: 0 16px;
     font-size: 15px;
@@ -1684,14 +1922,13 @@ button.card-row:hover {
     flex: 1;
   }
 
-  .field,
-  .screen-typing {
+  .field {
     min-height: 44px;
     font-size: 16px;
     border-radius: 12px;
   }
 
-  /* A page over the chat, which keeps its scroll position and any take-over. */
+  /* A page over the chat, which keeps its scroll position and a draft. */
   .info {
     position: absolute;
     inset: 0;
