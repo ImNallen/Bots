@@ -25,8 +25,6 @@ const result = (name: string): RunEventBody => ({
 
 function activity(overrides: Partial<Parameters<typeof decideActivity>[0]>) {
   return decideActivity({
-    takeoverUntil: undefined,
-    now: NOW,
     hasPendingApproval: false,
     runState: null,
     newestEvents: [],
@@ -46,16 +44,9 @@ describe("decideActivity", () => {
     expect(activity({ runState: FAILED })).toEqual({ kind: "failed" });
   });
 
-  it("puts the screen first, then approval, then the run", () => {
-    const holding = { takeoverUntil: NOW + 1, hasPendingApproval: true, runState: RUNNING };
-    expect(activity(holding)).toEqual({ kind: "ownerHasScreen" });
-    expect(activity({ ...holding, takeoverUntil: undefined })).toEqual({ kind: "needsApproval" });
-    expect(activity({ ...holding, takeoverUntil: undefined, hasPendingApproval: false }).kind).toBe("running");
-    expect(activity({ takeoverUntil: NOW + 1, runState: FAILED })).toEqual({ kind: "ownerHasScreen" });
-  });
-
-  it("stops counting a take-over at the moment it expires", () => {
-    expect(activity({ takeoverUntil: NOW })).toEqual({ kind: "idle" });
+  it("puts approval before the run", () => {
+    expect(activity({ hasPendingApproval: true, runState: RUNNING })).toEqual({ kind: "needsApproval" });
+    expect(activity({ runState: RUNNING }).kind).toBe("running");
   });
 
   it("ignores a pending approval left on a run that has ended", () => {

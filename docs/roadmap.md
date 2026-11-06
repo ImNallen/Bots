@@ -170,7 +170,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A stopped run loses the words that had streamed so far, because the timeline returns a stream only for an active run.
 - The bot list strips markdown from a last message with a few patterns, on text already cut to 140 characters, so some marks can still show.
 - A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
-- `bots.overview` compares a take-over's end with `Date.now()`, and Convex does not rerun a query because time passes. So after a closed tab or a sleeping phone, an idle bot's row says "You have the screen" until something the query reads changes. A reload does not clear it. Any new run or change to one of the owner's bots does.
+- A bot's row compares a take-over's end with the device's clock, so a device with a wrong clock shows "You have the screen" for too long or too short a time. The orchestrator decides what the bot does with its own clock.
 - In a long conversation, the inline screen panel scrolls out of sight at the top of the chat. Its own unit in the redesign replaces it.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
 - Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.

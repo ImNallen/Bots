@@ -3,7 +3,7 @@ import type { Id } from "@bots/convex/dataModel";
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { FACE_STATES } from "./activity.ts";
+import { FACE_STATES, useShownActivity } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
 import { ChatItem } from "./ChatItem.tsx";
 import { characterOf, tintOf, type Character } from "./character.ts";
@@ -15,6 +15,7 @@ import { ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
 const STICK_TO_BOTTOM_PX = 80;
+const NO_ROW = { activity: { kind: "idle" }, takeoverUntil: null } as const;
 
 function fitToContent(field: HTMLTextAreaElement | null) {
   if (field !== null) {
@@ -245,6 +246,7 @@ function BotChat({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const router = useRouter();
   const isPhone = useIsPhone();
+  const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW).kind;
   if (bot === undefined) {
     return (
       <p className="session-status" role="status">
@@ -264,7 +266,6 @@ function BotChat({ botId }: { botId: string }) {
   }
   const params = { botId };
   const character = characterOf(bot);
-  const activity = rows?.find((row) => row._id === bot._id)?.activity.kind ?? "idle";
   // The badge belongs in the list, where it marks one bot among many.
   const faceState = activity === "needsApproval" ? "idle" : FACE_STATES[activity];
 

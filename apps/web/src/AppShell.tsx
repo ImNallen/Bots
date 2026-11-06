@@ -2,7 +2,7 @@ import { api } from "@bots/convex";
 import { Link, Outlet, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { createContext, useContext, useState } from "react";
-import { FACE_STATES, subLineOf, type BotRow } from "./activity.ts";
+import { FACE_STATES, subLineOf, useShownActivity, type BotRow } from "./activity.ts";
 import { BotFace, QueuedDots } from "./BotFace.tsx";
 import { characterOf } from "./character.ts";
 import { Icon } from "./Icon.tsx";
@@ -19,11 +19,12 @@ export function useOpenNewBot(): () => void {
 
 function BotRowLink({ row }: { row: BotRow }) {
   const isPhone = useIsPhone();
-  const { text, tone } = subLineOf(row);
-  const queued = row.activity.kind === "queued";
+  const activity = useShownActivity(row);
+  const { text, tone } = subLineOf({ activity, lastMessage: row.lastMessage });
+  const queued = activity.kind === "queued";
   return (
     <Link className="row" to="/bots/$botId" params={{ botId: row._id }} search={true}>
-      <BotFace character={characterOf(row)} size={isPhone ? 44 : 32} state={FACE_STATES[row.activity.kind]} />
+      <BotFace character={characterOf(row)} size={isPhone ? 44 : 32} state={FACE_STATES[activity.kind]} />
       <span className="row-text">
         <span className="row-name">{row.name}</span>
         {(text !== null || queued) && (

@@ -6,7 +6,6 @@ export type BotActivity =
   | { kind: "queued" }
   | { kind: "running"; tool: string | null }
   | { kind: "needsApproval" }
-  | { kind: "ownerHasScreen" }
   | { kind: "failed" };
 
 const MAX_LAST_MESSAGE_LENGTH = 140;
@@ -25,16 +24,11 @@ function runningTool(newestEvents: readonly RunEventBody[]): string | null {
 }
 
 export function decideActivity(args: {
-  takeoverUntil: number | undefined;
-  now: number;
   hasPendingApproval: boolean;
   runState: RunState | null;
   newestEvents: readonly RunEventBody[];
 }): BotActivity {
-  const { takeoverUntil, now, hasPendingApproval, runState, newestEvents } = args;
-  if ((takeoverUntil ?? 0) > now) {
-    return { kind: "ownerHasScreen" };
-  }
+  const { hasPendingApproval, runState, newestEvents } = args;
   // An approval stays pending on a run that ended without an answer, and nobody can answer it any more.
   if (hasPendingApproval && runState !== null && isActive(runState)) {
     return { kind: "needsApproval" };

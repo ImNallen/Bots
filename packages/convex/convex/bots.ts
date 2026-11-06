@@ -95,7 +95,6 @@ export const overview = query({
       .collect();
     const runsWithPendingApproval = new Set<string>(pending.map((approval) => approval.runId));
     const budget = { bytes: OVERVIEW_EVENT_BYTES };
-    const now = Date.now();
     const rows = [];
     for (const bot of bots) {
       const thread = await ctx.db
@@ -118,9 +117,9 @@ export const overview = query({
           name: bot.name,
           shape: bot.shape,
           color: bot.color,
+          // The end time and not a comparison, because Convex does not rerun a query as time passes. The page decides when it ends.
+          takeoverUntil: bot.takeoverUntil ?? null,
           activity: decideActivity({
-            takeoverUntil: bot.takeoverUntil,
-            now,
             hasPendingApproval: run !== null && runsWithPendingApproval.has(run._id),
             runState: run?.state ?? null,
             newestEvents,

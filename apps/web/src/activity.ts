@@ -1,12 +1,14 @@
 import type { api } from "@bots/convex";
 import type { FunctionReturnType } from "convex/server";
 import type { ToolName } from "@bots/protocol";
+import { useEffect, useState } from "react";
 import type { FaceState } from "./BotFace.tsx";
 
 export type BotRow = FunctionReturnType<typeof api.bots.overview>[number];
-export type BotActivity = BotRow["activity"];
+type RowState = Pick<BotRow, "activity" | "takeoverUntil">;
+export type ShownActivity = BotRow["activity"] | { kind: "ownerHasScreen" };
 
-export const FACE_STATES: Record<BotActivity["kind"], FaceState> = {
+export const FACE_STATES: Record<ShownActivity["kind"], FaceState> = {
   idle: "idle",
   queued: "idle",
   running: "working",
@@ -50,7 +52,31 @@ function withoutMarkdown(message: string): string {
 
 export type SubLine = { text: string | null; tone: "plain" | "ask" | "bad" };
 
-export function subLineOf({ activity, lastMessage }: Pick<BotRow, "activity" | "lastMessage">): SubLine {
+export function shownActivity({ activity, takeoverUntil }: RowState, now: number): ShownActivity {
+  return takeoverUntil !== null && takeoverUntil > now ? { kind: "ownerHasScreen" } : activity;
+}
+
+// A timer in a sleeping phone can stop with the phone, so waking it checks the time as well.
+export function useShownActivity(row: RowState): ShownActivity {
+  const { takeoverUntil } = row;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (takeoverUntil === null) {
+      return undefined;
+    }
+    const check = () => setNow(Date.now());
+    // Never less than the end time, because a timer can fire a moment early and no second one would follow.
+    const timer = setTimeout(() => setNow(Math.max(Date.now(), takeoverUntil)), Math.max(0, takeoverUntil - Date.now()));
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [takeoverUntil]);
+  return shownActivity(row, now);
+}
+
+export function subLineOf({ activity, lastMessage }: { activity: ShownActivity; lastMessage: string | null }): SubLine {
   switch (activity.kind) {
     case "needsApproval":
       return { text: "Needs your approval", tone: "ask" };
