@@ -63,9 +63,9 @@ The user chose to update `computerd` in place, because bots and users install th
 1. Done. A test on a real VM settled how screens and input work. The architecture document has the results.
 2. Done. `computerd` gives each bot a browser window, and bots use it through the `browser_*` tools. `pnpm verify:browser` runs two bots at once on real sites.
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it. A real phone has not opened it yet.
-4. Done. An owner can take over a screen. Input goes through CDP to the bot's page, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
+4. Done. An owner can take over a screen, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. A real phone has not used it yet.
 5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
-6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 3 and 4 of the next section's list come next, and then the step's check on a real phone. Step 4 is not done until that check passes.
+6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 2 and 3 of the next section's list are now done too: a take-over is the bot's real desktop through noVNC. Item 4 comes next, and then the step's check on a real phone. Step 4 is not done until that check passes.
 
 ## Next: a desktop for each bot
 
@@ -98,8 +98,8 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 ### What to build
 
 1. Done. Give each active bot a display, an Xfce desktop, and its own Chromium, started on demand and stopped when idle. Keep the sandbox on.
-2. Half done. Each display has a view-only stream for watching. It still needs a separate input stream that opens only during a take-over.
-3. Make take-over the real desktop through noVNC, and remove the CDP input path and its custom touch controls. Check on a real phone whether noVNC's keyboard and touch are enough, and keep a key bar if they are not.
+2. Done. Each display has a view-only stream for watching and a separate input stream that exists only during a take-over. `infra/proxmox/verify-desktop.sh` proves this on a real VM.
+3. Done, apart from a real phone. A take-over is the real desktop through noVNC, and the CDP input path and its custom touch controls are gone. The noVNC library has no phone keyboard, so a typing box and a key bar stay. The owner decides on a real phone whether the key bar can go.
 4. Half done. A new bot starts from a copy of the base, `/home/browser/profile`. Next, move logins. When the owner gives back a take-over, copy the bot's cookies to the base profile and to every running browser through CDP. A site that keeps its session in localStorage needs that bot's browser restarted from a new copy.
 5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
 6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed against desktops. Run them again after items 3 and 4, because take-over adds an input stream. Then run the step's check on a real phone, with two bots.
@@ -169,9 +169,9 @@ These are open on purpose. Fix each one when the work reaches it.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.
 - No test has used noVNC on a phone. The step 4 check does.
-- Any bot can reach CDP on loopback, so it can drive another bot's browser on the same computer, and read the logins in that browser. Those bots have one owner, so this crosses no user's boundary.
+- Any bot can reach CDP on loopback, so it can drive another bot's browser on the same computer, and read the logins in that browser. It can also reach an input stream for the 15 seconds before its viewer connects, which takes that take-over's place. Those bots have one owner, so this crosses no user's boundary.
 - A browser snapshot hides password fields, but it shows the first 300 characters of a page's URL. A site that puts a secret in its URL shows that secret to the bot and the model.
-- A mouse click cannot choose an option in a dropdown through CDP. The keyboard can.
+- A bot's mouse click cannot choose an option in a dropdown through CDP. Its keyboard can. A person's mouse click can, through the desktop.
 - A login that the owner types during a take-over stays in that bot's profile, so no other bot can use it until logins move. A login from before desktops is in the base, so every new bot starts with it.
 - Chromium writes a new cookie to disk about 30 seconds after it changes, and SIGTERM does not make it write sooner. A test lost a cookie set 20 seconds before a stop and kept one set 35 seconds before. So a stop soon after a login loses that login, which includes the update that replaces the shared browser.
 - A pending approval has no signal that reaches a desktop. After an hour with no tool, the desktop stops, and a ninth bot can take its slot sooner. The approved click then gets the stale ref error, so it clicks nothing wrong, and the bot starts again on a blank page.
@@ -180,11 +180,15 @@ These are open on purpose. Fix each one when the work reaches it.
 - A viewer whose phone loses its network holds its desktop until TCP gives up, because a viewer's socket has no ping.
 - A Chromium that cannot start, for example with a damaged profile, restarts every 2 seconds until the idle stop. Each `browser_*` call waits 45 seconds for it and then answers that there is no running browser.
 - A bot can take a slot's display number or port before a slot needs it. That display then fails to start, and its bots on that computer report no running browser.
-- The `browser` user has `nologin` as its shell, so an Xfce terminal may exit at once. Nobody can reach a terminal until take-over uses noVNC.
 - A new desktop has a fixed list of fonts, so some scripts show as empty boxes. example.com's Arabic and Hebrew text did on a real VM.
 - A tool that is running when the owner takes over keeps running. The bot waits only before its next tool.
 - A closed tab or a sleeping phone leaves the bot waiting for up to 15 minutes, because only the renewal stopping can show that the owner left.
-- The keys that a person can send are text and the key bar, so no shortcut with Ctrl or Cmd reaches the page. The address bar and tabs of the window cannot be clicked, so take-over has its own address box.
-- A screen on a phone is small, and take-over uses touch for taps and scrolling, so pinch zoom does not work on it.
+- A screen on a phone is small, about 358 by 224 pixels at phone width. During a take-over, a pinch zooms the page on the desktop and not the owner's view of the desktop, so the panel and the window's bars stay small.
+- A phone has no Ctrl key. It reaches the address bar and the tabs by tapping them.
+- A browser keeps some shortcuts for itself, such as Ctrl+W, so a real keyboard cannot send those to the desktop. Nobody has measured which ones.
+- During one take-over, x11vnc can type about 17 different characters that the display's US keyboard lacks, and it drops the next one with no error. The typing box refuses the 17th and says so. A real keyboard on the screen has no such check. A new take-over frees the room.
+- A person who opens a tab makes it the newest page, so the bot follows it. A person who only switches tabs does not change the bot's page, so the bot can act on a tab the person left. After a `computerd` restart, the order of tabs with no opener comes from Chromium, so the bot can land on another tab.
+- If a VM's connection to the orchestrator is cut with no close, as in a network outage, an input stream stays open until a new take-over replaces it. Nothing can reach it except on the VM's loopback.
+- A kill of the input stream's `x11vnc` with a key held leaves that key down until the next viewer leaves. A viewer that only leaves or is replaced releases its keys.
 - Streams carry no limit on bandwidth, and a bot that reads its own link token can send its owner false video.
 - A site can block the browser. GitLab stopped it at a Cloudflare check during testing.
