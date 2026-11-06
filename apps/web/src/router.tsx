@@ -5,6 +5,7 @@ import {
   createRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import { AppShell } from "./AppShell.tsx";
 import { useAuthReconnecting } from "./auth.tsx";
 import { BotPage } from "./BotPage.tsx";
 import { Home } from "./Home.tsx";
@@ -13,17 +14,12 @@ function RootLayout() {
   const reconnecting = useAuthReconnecting();
   return (
     <>
-      <header className="site-header">
-        <h1>Bots</h1>
-        {reconnecting && (
-          <p className="reconnecting" role="status">
-            Reconnecting
-          </p>
-        )}
-      </header>
-      <main>
-        <Outlet />
-      </main>
+      {reconnecting && (
+        <p className="reconnecting" role="status">
+          Reconnecting
+        </p>
+      )}
+      <Outlet />
     </>
   );
 }
@@ -50,20 +46,27 @@ function NotFound() {
 
 const rootRoute = createRootRoute({ component: RootLayout });
 
-const indexRoute = createRoute({
+const appRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: "app",
+  component: AppShell,
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => appRoute,
   path: "/",
   component: Home,
 });
 
 const botRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => appRoute,
   path: "/bots/$botId",
+  validateSearch: (search: Record<string, unknown>): { info?: true } => (search.info === true ? { info: true } : {}),
   component: BotPage,
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, botRoute]),
+  routeTree: rootRoute.addChildren([appRoute.addChildren([indexRoute, botRoute])]),
   defaultErrorComponent: RouteError,
   defaultNotFoundComponent: NotFound,
 });

@@ -8,8 +8,8 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 1b | Done, with gaps listed below | Control VM, `tailscale serve`, and Tailscale mode, on Proxmox | A second Tailscale account and a phone browser see the same live query, each as its own user |
 | 2 | Done | Agent loop and shell and file tools, with `computerd` in Docker | A user chats with a bot in the web UI, and killing the orchestrator mid-tool resumes the run with no duplicate side effects |
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
-| 4 | **Next** | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
-| 4b | | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
+| 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
+| 4b | **Next** | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
 | 5 | | Schedules, the memory UI, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
 | 6 | | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
@@ -66,7 +66,7 @@ The user chose to update `computerd` in place, because bots and users install th
 3. Done. Each screen streams to its owner in the web app, view-only, over the link port. `pnpm verify:screen` checks the stream and who can open it.
 4. Done. An owner can take over a screen, and the bot starts no tool until the owner gives back or 15 minutes pass with no renewal. `pnpm verify:takeover` checks this on a real page. The owner used a take-over on a real phone on 2026-11-06.
 5. Done. Each bot has an approval setting, which defaults to asking before shell commands and browser actions that change something. The orchestrator decides, and only the owner can answer.
-6. In progress. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 2, 3, and 4 of the next section's list are now done too: a take-over is the bot's real desktop through noVNC, and a login typed there reaches the computer's other bots. The checks in item 6 passed again after the last deploy. Next comes the step's check on a real phone with two bots. Step 4 is not done until that check passes.
+6. Done. Each active bot now has a display, an Xfce desktop, its own Chromium, and a view-only stream, started on demand and stopped when idle. `infra/proxmox/verify-desktop.sh` proves this on a real VM, and a clone of the old template migrated with no hand steps. VM 201 also migrated with no hand steps in a real deploy, and `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check all passed against desktops. Items 2, 3, and 4 of the next section's list are now done too: a take-over is the bot's real desktop through noVNC, and a login typed there reaches the computer's other bots. The checks in item 6 passed again after the last deploy. The owner reported on 2026-11-06 that the step's check on a real phone passed.
 
 ## Next: a desktop for each bot
 
@@ -103,7 +103,7 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 3. Done. A take-over is the real desktop through noVNC, and the CDP input path and its custom touch controls are gone. The noVNC library has no phone keyboard, so a typing box and a key bar stay. The owner confirmed on a real phone on 2026-11-06 that a take-over works and that the key bar is still needed.
 4. Done. A new bot starts from a copy of the base, `/home/browser/profile`, plus the logins that have moved since. When a take-over ends, `computerd` moves the cookies that it changed to every running browser through CDP, and a stopped or new bot gets them when it starts. The base stays as it is, because nothing opens it, so writing it would take a throwaway Chromium for each change and make a second record of the same logins. `infra/proxmox/verify-desktop.sh` proves this on a real VM. localStorage does not move, so a site that keeps its session there needs its own login in each bot.
 5. Keep what still fits: the stream relay and its origin and owner checks, the take-over state and the pause in the runner, approvals, the update and repair path, and the `browser_*` tools through CDP.
-6. Half done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed again after items 3 and 4, and `verify:takeover` now also checks that another bot gets a login typed in a take-over. Next, run the step's check on a real phone, with two bots. During it, log in to a real site, because no real site's login has moved between bots yet.
+6. Done. `verify:screen`, `verify:browser`, `verify:takeover`, and the full network check passed again after items 3 and 4, and `verify:takeover` now also checks that another bot gets a login typed in a take-over. The owner reported on 2026-11-06 that the step's check on a real phone passed. That report does not say whether a real site's login moved between bots, so treat that as untested.
 
 ### Follow-ups, in this order
 
@@ -130,12 +130,26 @@ The web app works but looks basic. The owner wants it redesigned to match Grok B
 3. Rebuild the home page, the bot page, and the screen panel in the new design. Keep the phone typing box and key bar, because noVNC has no phone keyboard.
 4. Render markdown in chat, which closes that known gap.
 
-This step changes only the web app. It adds no features, and the backend and the link stay as they are. Step 5 builds the memory UI and the Activity view in the new design, and step 7's apps reuse it.
+This step adds no features, and the link stays as it is. Step 5 builds the memory UI and the Activity view in the new design, and step 7's apps reuse it.
 
-These are proposals, so change them if you find a better answer:
+The owner decided these on 2026-11-06, after trying a prototype:
 
-- Match Grok Bot's layout and flows, with this project's own name, visuals, and copy.
+- Match Grok Bot's layout, flows, and style closely. Colours and proportions come from measuring the references. Keep this project's own name and copy, and draw the bot shapes here instead of tracing Grok Bot's, because this repository is public.
+- Bots have 13 shapes and 11 colours, as in Grok Bot's create dialog. Two optional fields on `bots` store them, and a bot without them takes its look from its id.
+- One read-only query gives the bot list each bot's activity and last message.
+- The backend changes for this step stop at those two things.
+- Grok Bot's top grid holds its built-in bots. Bots has none, so every bot is a row. Pinning would be a new feature.
+
+This is a proposal, so change it if you find a better answer:
+
 - Add screens that Grok Bot lacks where Bots needs them. Reviews say it has no way to inspect or edit individual memories, for example.
+
+### Progress on the redesign
+
+1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stays inline in the chat until its own unit, and tested on a Mac only in its "not connected" state, because Docker's `computerd` has no desktop.
+2. Next. Chat with markdown.
+3. The screen panel.
+4. Final settings polish.
 
 ## After step 3: deploy from `main`
 
@@ -151,6 +165,9 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 These are open on purpose. Fix each one when the work reaches it.
 
 - The web UI shows raw markdown.
+- A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
+- `bots.overview` compares a take-over's end with `Date.now()`, and Convex does not rerun a query because time passes. So after a closed tab or a sleeping phone, an idle bot's row says "You have the screen" until something the query reads changes. A reload does not clear it. Any new run or change to one of the owner's bots does.
+- In a long conversation, the inline screen panel scrolls out of sight at the top of the chat. Its own unit in the redesign replaces it.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
 - Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
 - At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
@@ -163,7 +180,6 @@ These are open on purpose. Fix each one when the work reaches it.
 - Meta files in the journal never expire, so the journal grows slowly. Pruning 200,000 of them took 158 ms.
 - An error body cut at 300 characters can split an emoji. Convex then rejects the failure reason, so the run makes 5 model calls before it stops.
 - Redaction matches only the whole, exact key. An upstream that echoes part of a key could put that part in a failure reason.
-- `.run-failure` in `apps/web/src/styles.css` has no `overflow-wrap`, so a long unbroken error widens the page.
 - The orchestrator's dev guard checks four forwarding headers and the host name. Binding to loopback is the real boundary.
 - Vite's default CORS lets any page on a localhost port read a dev token from `/auth/token`. Setting `server.cors` to `false` closes this.
 - The orchestrator sends no CSP, `X-Frame-Options`, or `nosniff` header.

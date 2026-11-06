@@ -8,13 +8,15 @@
   },
   "scripts": {
     "dev": "convex dev",
-    "typecheck": "tsc --project convex/tsconfig.json"
+    "typecheck": "tsc --project convex/tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "convex": "catalog:"
   },
   "devDependencies": {
     "typescript": "catalog:",
-    "@types/node": "catalog:"
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
   }
 }

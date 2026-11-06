@@ -1,10 +1,11 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { isActive } from "./threads.js";
-import { approvalLevel } from "./validators.js";
+import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
 const MAX_NAME_LENGTH = 64;
 const DEFAULT_APPROVAL_LEVEL = "outside";
@@ -12,6 +13,10 @@ const DEFAULT_APPROVAL_LEVEL = "outside";
 const TAKEOVER_MS = 15 * 60 * 1000;
 // One event is at most 1 MiB, so a batch stays well under what a mutation may read.
 const PURGE_BATCH = 8;
+const OVERVIEW_EVENTS_PER_BOT = 6;
+// A query may read 16 MiB and one event can be 1 MiB. Past this, a bot's row has no tool or message, and the list still loads.
+const OVERVIEW_EVENT_BYTES = 8 * 1024 * 1024;
+const encoder = new TextEncoder();
 
 export const list = query({
   args: {},
@@ -41,9 +46,96 @@ export const get = query({
   },
 });
 
+async function newestEventsOfRun(ctx: QueryCtx, runId: Id<"runs">, budget: { bytes: number }): Promise<RunEventBody[]> {
+  if (budget.bytes <= 0) {
+    return [];
+  }
+  const events: RunEventBody[] = [];
+  const spend = (event: { body: RunEventBody }) => {
+    budget.bytes -= encoder.encode(JSON.stringify(event)).length;
+    events.push(event.body);
+  };
+  for await (const event of ctx.db
+    .query("runEvents")
+    .withIndex("by_run_seq", (q) => q.eq("runId", runId))
+    .order("desc")) {
+    spend(event);
+    if (events.length === OVERVIEW_EVENTS_PER_BOT || budget.bytes <= 0) {
+      break;
+    }
+  }
+  // A long tool loop can fill the window with turns that have no text. Every run starts with its user's message.
+  if (lastMessageOf(events) === null && budget.bytes > 0) {
+    const first = await ctx.db
+      .query("runEvents")
+      .withIndex("by_run_seq", (q) => q.eq("runId", runId))
+      .first();
+    if (first !== null) {
+      spend(first);
+    }
+  }
+  return events;
+}
+
+export const overview = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireIdentity(ctx);
+    if (user === null) {
+      return [];
+    }
+    const bots = await ctx.db
+      .query("bots")
+      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      .order("desc")
+      .collect();
+    const pending = await ctx.db
+      .query("approvals")
+      .withIndex("by_owner_state", (q) => q.eq("ownerId", user._id).eq("state", "pending"))
+      .collect();
+    const runsWithPendingApproval = new Set<string>(pending.map((approval) => approval.runId));
+    const budget = { bytes: OVERVIEW_EVENT_BYTES };
+    const now = Date.now();
+    const rows = [];
+    for (const bot of bots) {
+      const thread = await ctx.db
+        .query("threads")
+        .withIndex("by_bot", (q) => q.eq("botId", bot._id))
+        .first();
+      const run =
+        thread === null
+          ? null
+          : await ctx.db
+              .query("runs")
+              .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+              .order("desc")
+              .first();
+      const newestEvents = run === null ? [] : await newestEventsOfRun(ctx, run._id, budget);
+      rows.push({
+        lastRunAt: run?._creationTime ?? 0,
+        row: {
+          _id: bot._id,
+          name: bot.name,
+          shape: bot.shape,
+          color: bot.color,
+          activity: decideActivity({
+            takeoverUntil: bot.takeoverUntil,
+            now,
+            hasPendingApproval: run !== null && runsWithPendingApproval.has(run._id),
+            runState: run?.state ?? null,
+            newestEvents,
+          }),
+          lastMessage: lastMessageOf(newestEvents),
+        },
+      });
+    }
+    return rows.sort((a, b) => b.lastRunAt - a.lastRunAt).map(({ row }) => row);
+  },
+});
+
 export const create = mutation({
-  args: { name: v.string() },
-  handler: async (ctx, { name }) => {
+  args: { name: v.string(), shape: v.optional(botShape), color: v.optional(botColor) },
+  handler: async (ctx, { name, shape, color }) => {
     const { user } = await requireIdentity(ctx);
     if (user === null) {
       throw new ConvexError("Call users.ensureCurrent before creating a bot");
@@ -55,7 +147,7 @@ export const create = mutation({
     if (trimmed.length > MAX_NAME_LENGTH) {
       throw new ConvexError(`Name cannot be longer than ${MAX_NAME_LENGTH} characters`);
     }
-    return await ctx.db.insert("bots", { ownerId: user._id, name: trimmed });
+    return await ctx.db.insert("bots", { ownerId: user._id, name: trimmed, shape, color });
   },
 });
 
@@ -121,6 +213,14 @@ export const setApprovalLevel = mutation({
   handler: async (ctx, { botId, level }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, { approvalLevel: level });
+  },
+});
+
+export const setCharacter = mutation({
+  args: { botId: v.id("bots"), shape: botShape, color: botColor },
+  handler: async (ctx, { botId, shape, color }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, { shape, color });
   },
 });
 

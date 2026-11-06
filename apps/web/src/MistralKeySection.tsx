@@ -53,49 +53,51 @@ export function MistralKeySection() {
 
   if (status === undefined) {
     return (
-      <section>
-        <h2>Mistral key</h2>
+      <section className="settings-section">
+        <h3 className="label">Mistral key</h3>
         <p role="status">Loading the key status.</p>
       </section>
     );
   }
 
   return (
-    <section className="key-section">
-      <h2>Mistral key</h2>
-      <p className={status.configured ? undefined : "muted"}>
-        {status.configured ? (
-          <>
-            A key ending in <code>{status.last4}</code> is set.
-          </>
-        ) : (
-          "No key is set. Bots need one before they can answer."
-        )}
-      </p>
-      <form className="create-bot" onSubmit={handleSubmit}>
-        <label htmlFor="mistral-key">{status.configured ? "Replace the key" : "Add a key"}</label>
-        <div className="create-bot-row">
+    <section className="settings-section">
+      <h3 className="label">Mistral key</h3>
+      <div className="card">
+        <div className="card-row">
+          <span>
+            {status.configured ? (
+              <>
+                A key ending in <code>{status.last4}</code> is set.
+              </>
+            ) : (
+              "No key is set. Bots need one before they can answer."
+            )}
+          </span>
+          {status.configured && (
+            <button type="button" className="btn" disabled={busy} onClick={() => void change({ method: "DELETE" })}>
+              {submission.kind === "removing" ? "Removing" : "Remove key"}
+            </button>
+          )}
+        </div>
+      </div>
+      <form className="key-form" onSubmit={handleSubmit}>
+        <label className="label" htmlFor="mistral-key">
+          {status.configured ? "Replace the key" : "Add a key"}
+        </label>
+        <div className="key-form-row">
           <input
             id="mistral-key"
+            className="field"
             type="password"
             value={key}
             autoComplete="off"
             aria-invalid={submission.kind === "failed"}
             onChange={(event) => setKey(event.target.value)}
           />
-          <button type="submit" disabled={busy || key.trim() === ""}>
+          <button type="submit" className="btn btn-go" disabled={busy || key.trim() === ""}>
             {submission.kind === "saving" ? "Checking" : status.configured ? "Replace key" : "Save key"}
           </button>
-          {status.configured && (
-            <button
-              type="button"
-              className="button-secondary"
-              disabled={busy}
-              onClick={() => void change({ method: "DELETE" })}
-            >
-              {submission.kind === "removing" ? "Removing" : "Remove key"}
-            </button>
-          )}
         </div>
         {submission.kind === "failed" && (
           <p className="error" role="alert">

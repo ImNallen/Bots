@@ -49,6 +49,7 @@ export const runState = v.union(
 );
 
 export type RunState = Infer<typeof runState>;
+export type RunEventBody = Infer<typeof runEventBody>;
 
 export const desiredVm = v.object({
   slot: v.number(),
@@ -68,3 +69,33 @@ export const approvalLevel = v.union(v.literal("everything"), v.literal("outside
 export type ApprovalLevel = Infer<typeof approvalLevel>;
 
 export const approvalState = v.union(v.literal("pending"), v.literal("approved"), v.literal("denied"), v.literal("expired"));
+
+export const botShape = v.union(
+  v.literal("ball"),
+  v.literal("bun"),
+  v.literal("tile"),
+  v.literal("sparkle"),
+  v.literal("clover"),
+  v.literal("heart"),
+  v.literal("flower"),
+  v.literal("egg"),
+  v.literal("bean"),
+  v.literal("peak"),
+  v.literal("gem"),
+  v.literal("burst"),
+  v.literal("hex"),
+);
+
+export const botColor = v.union(
+  v.literal("black"),
+  v.literal("brown"),
+  v.literal("red"),
+  v.literal("orange"),
+  v.literal("amber"),
+  v.literal("green"),
+  v.literal("teal"),
+  v.literal("blue"),
+  v.literal("purple"),
+  v.literal("pink"),
+  v.literal("grey"),
+);
