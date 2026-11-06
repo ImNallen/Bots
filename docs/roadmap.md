@@ -146,10 +146,10 @@ This is a proposal, so change it if you find a better answer:
 
 ### Progress on the redesign
 
-1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stays inline in the chat until its own unit, and tested on a Mac only in its "not connected" state, because Docker's `computerd` has no desktop.
+1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stayed inline in the chat until its own unit.
 2. Done. Chat with markdown: `conversation.ts` turns the timeline into display items, bot output renders as markdown with no raw HTML, no remote images, and only `http`, `https`, and `mailto` links, approvals are question cards, and the composer has its new design. Tested with a scripted fake model at 1280 and 412 wide, in light and dark.
-3. Next. The screen panel.
-4. Final settings polish.
+3. Done. The screen is a full-screen view, opened from the chat's header or the info panel and tracked in the URL, so a back gesture leaves it. One reducer in `screenState.ts` decides its states. On a device with a coarse pointer it has the typing box and key bar, and a phone on its side has the stream beside its controls. A bot's row now carries `takeoverUntil`, and a timer in the page ends "You have the screen" at that moment. Docker's `computerd` has no desktop, so this was tested with a fake `RFB` class and with the real noVNC library against a fake VNC server, at 1280 wide, 412 by 860, and 844 by 390. A real stream, real input on a desktop, a real phone, and a real on-screen keyboard are untested until the owner accepts this step.
+4. Next. Final settings polish.
 
 ## After step 3: deploy from `main`
 
@@ -171,7 +171,9 @@ These are open on purpose. Fix each one when the work reaches it.
 - The bot list strips markdown from a last message with a few patterns, on text already cut to 140 characters, so some marks can still show.
 - A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
 - A bot's row compares a take-over's end with the device's clock, so a device with a wrong clock shows "You have the screen" for too long or too short a time. The orchestrator decides what the bot does with its own clock.
-- In a long conversation, the inline screen panel scrolls out of sight at the top of the chat. Its own unit in the redesign replaces it.
+- On a phone on its side with the keyboard open, the controls do not all fit. They scroll beside the stream, so the second row of keys and the Give back button can start out of sight. This was simulated, not seen on a phone.
+- A tablet with a real keyboard still gets the typing box and key bar, because `pointer: coarse` says nothing about a keyboard.
+- A reload during a take-over does not give the screen back, so the bot waits for up to 15 minutes, and the view that comes back says "Watching". Taking control and giving back ends it.
 - Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
 - Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
 - At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
@@ -240,7 +242,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A new desktop has a fixed list of fonts, so some scripts show as empty boxes. example.com's Arabic and Hebrew text did on a real VM.
 - A tool that is running when the owner takes over keeps running. The bot waits only before its next tool. A cookie that it changes during the take-over moves as if the owner had changed it. So does one that a shell tool changes through CDP after the take-over ends, because only browser tools wait for the cookies to be read.
 - A closed tab or a sleeping phone leaves the bot waiting for up to 15 minutes, because only the renewal stopping can show that the owner left.
-- A screen on a phone is small, about 358 by 224 pixels at phone width. During a take-over, a pinch zooms the page on the desktop and not the owner's view of the desktop, so the panel and the window's bars stay small.
+- A screen on a phone is small, 396 by 248 pixels at 412 wide. During a take-over, a pinch zooms the page on the desktop and not the owner's view of the desktop, so the view and the window's bars stay small.
 - A phone has no Ctrl key. It reaches the address bar and the tabs by tapping them.
 - A browser keeps some shortcuts for itself, such as Ctrl+W, so a real keyboard cannot send those to the desktop. Nobody has measured which ones.
 - During one take-over, x11vnc can type about 17 different characters that the display's US keyboard lacks, and it drops the next one with no error. The typing box refuses the 17th and says so. A real keyboard on the screen has no such check. A new take-over frees the room.
