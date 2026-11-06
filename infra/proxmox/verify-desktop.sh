@@ -7,7 +7,7 @@ set -euo pipefail
 
 vm=${1:?usage: verify-desktop.sh VMID}
 here=$(dirname "$(realpath "$0")")
-GUEST_TIMEOUT=600
+GUEST_TIMEOUT=1500
 
 field() {
   python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""), end="")' "$1"
@@ -470,6 +470,13 @@ else
 fi
 rm -rf /home/browser/profiles/verifydesktopsa /home/browser/profiles/verifydesktopsb
 same "base: nothing changed the base profile after that" "$(base_hash)" "$base_before"
+
+if (cd /opt/bots-computerd/current && "$NODE" scripts/verify-logins.ts); then
+  result true "a login moves between bots, through computerd's own code"
+else
+  result false "a login moves between bots, through computerd's own code"
+fi
+same "base: moving logins leaves the base profile alone" "$(base_hash)" "$base_before"
 
 # The reboot below looks for this profile, so it stays until the last step.
 trap - EXIT
