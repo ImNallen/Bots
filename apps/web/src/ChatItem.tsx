@@ -1,9 +1,10 @@
 import { api } from "@bots/convex";
 import { useMutation } from "convex/react";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BotFace, QueuedDots } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
 import type { DisplayItem, ToolOutput } from "./conversation.ts";
+import { allArgumentsRead, hasReadToEnd, linesBelow, linesBelowNote } from "./hiddenLines.ts";
 import { Icon } from "./Icon.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { errorMessage } from "./session.tsx";
@@ -61,10 +62,68 @@ function ToolRow({ item }: { item: Extract<DisplayItem, { kind: "tool" }> }) {
   );
 }
 
+// A device can hide its scrollbars, and a bot can pad a command to push the dangerous part out of view, so the card says what is
+// left. At the end the note keeps its room, because the answers below it must not move under a finger that is about to tap.
+function ArgumentText(props: { text: string; index: number; onRead: (index: number) => void }) {
+  const { text, index, onRead } = props;
+  const box = useRef<HTMLPreElement>(null);
+  // Undefined until measured, so nothing counts as read before the browser has laid it out.
+  const [below, setBelow] = useState<number | null | undefined>(undefined);
+  const measure = () => {
+    const element = box.current;
+    if (element !== null) {
+      const { lineHeight, paddingBottom } = getComputedStyle(element);
+      const { scrollHeight, clientHeight, scrollTop } = element;
+      setBelow(
+        linesBelow({
+          scrollHeight,
+          clientHeight,
+          scrollTop,
+          lineHeight: parseFloat(lineHeight),
+          paddingBottom: parseFloat(paddingBottom),
+        }),
+      );
+    }
+  };
+  useLayoutEffect(() => {
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (box.current !== null) {
+      observer.observe(box.current);
+    }
+    return () => observer.disconnect();
+  }, [text]);
+  const reachedEnd = below !== undefined && hasReadToEnd(below);
+  const [read, setRead] = useState(false);
+  useEffect(() => {
+    if (reachedEnd) {
+      setRead(true);
+      onRead(index);
+    }
+  }, [reachedEnd, index, onRead]);
+  return (
+    <>
+      <pre ref={box} tabIndex={typeof below === "number" ? 0 : undefined} onScroll={measure}>
+        {text}
+      </pre>
+      {typeof below === "number" && (
+        <p className="ask-more" data-end={below === 0}>
+          {linesBelowNote(below, read)}
+        </p>
+      )}
+    </>
+  );
+}
+
 function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" }> }) {
   const decide = useMutation(api.approvals.decide);
   const [sent, setSent] = useState<Decision | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // Scrolling back up does not take away what the person has already read.
+  const [read, setRead] = useState<ReadonlySet<number>>(new Set());
+  const markRead = useCallback((index: number) => {
+    setRead((current) => (current.has(index) ? current : new Set(current).add(index)));
+  }, []);
   // Set before the next render, so a second click in the same instant still finds it.
   const sending = useRef(false);
   const answer = (decision: Decision) => {
@@ -87,7 +146,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
       {item.arguments.map((argument, index) => (
         <div className="ask-argument" key={argument.label ?? index}>
           {argument.label !== null && <span className="ask-label">{argument.label}</span>}
-          <pre>{argument.value}</pre>
+          <ArgumentText text={argument.value} index={index} onRead={markRead} />
         </div>
       ))}
       <div className="opts">
@@ -97,7 +156,8 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
             type="button"
             className="opt"
             data-on={sent === decision}
-            disabled={sent !== null}
+            // A bot can pad a command to push its dangerous part out of view, so nobody approves text they have not reached.
+            disabled={sent !== null || (decision === "approved" && !allArgumentsRead(item.arguments.length, read))}
             onClick={() => answer(decision)}
           >
             <i aria-hidden="true">{letter}</i>

@@ -9,8 +9,8 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 2 | Done | Agent loop and shell and file tools, with `computerd` in Docker | A user chats with a bot in the web UI, and killing the orchestrator mid-tool resumes the run with no duplicate side effects |
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
-| 4b | **Next** | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
-| 5 | | Schedules, the memory UI, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
+| 4b | Done, with gaps listed below | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
+| 5 | **Next** | Schedules, the memory UI, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
 | 6 | | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
 | 8 | | OAuth connectors, the independent reviewer, and the Vault | Bots use saved logins without seeing the passwords, and bots no longer have passwordless `sudo` |
@@ -110,7 +110,15 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 1. Let bots use the desktop as well as the user. The owner wants this. A bot needs tools for screenshots, the mouse, and the keyboard, and a model that can read images. These tools must go through approvals, and they count as actions that change something.
 2. Let a user reset a computer. A computer is not a permanent store, so a reset deletes its workspaces and browser logins, and the button must say so. It can reuse the removal path and clone a new VM into the same slot.
 3. Let a bot ask for a take-over, for example at a login page. Grok Bot calls this a secure handoff.
-4. Consider "Always allow" on an approval. Grok Bot has it. Always allowing shell would turn approvals off for that bot, so it needs care.
+4. Add automatic review, so most actions need no card. The owner wants this later, in place of asking about everything. What Grok Bot does, according to its documentation, as the owner gave it on 2026-11-06:
+   - An automatic check runs before a bot runs a command, uses a connected app, or drives its computer. Most actions go through, and the rest show an approval card with the operation and its inputs.
+   - The owner's own messages count as permission. Text from an email or a web page does not.
+   - Cards offer Allow once, Always allow, which saves a rule, and Deny, which stops the bot retrying until the owner sends another message.
+   - Custom rules can say "ask first" or "allow". Ask first wins a conflict, and built-in safety checks apply even over an allow rule. Turning review off keeps the rules unused.
+   - A card from a chat waits for an answer. A card from background work expires after about 30 minutes. A new message or a change to the review settings closes open cards.
+   - Commands on a person's own computer have a separate setting. Bots have no such thing yet.
+
+   Always allowing shell would turn approvals off for that bot, so it needs care. Keep the Approve lock on a long command until this replaces it.
 
 
 ## After step 4: the redesign
@@ -149,7 +157,8 @@ This is a proposal, so change it if you find a better answer:
 1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stayed inline in the chat until its own unit.
 2. Done. Chat with markdown: `conversation.ts` turns the timeline into display items, bot output renders as markdown with no raw HTML, no remote images, and only `http`, `https`, and `mailto` links, approvals are question cards, and the composer has its new design. Tested with a scripted fake model at 1280 and 412 wide, in light and dark.
 3. Done. The screen is a full-screen view, opened from the chat's header or the info panel and tracked in the URL, so a back gesture leaves it. One reducer in `screenState.ts` decides its states. On a device with a coarse pointer it has the typing box and key bar, and a phone on its side has the stream beside its controls. A bot's row now carries `takeoverUntil`, and a timer in the page ends "You have the screen" at that moment. Docker's `computerd` has no desktop, so this was tested with a fake `RFB` class and with the real noVNC library against a fake VNC server, at 1280 wide, 412 by 860, and 844 by 390. A real stream, real input on a desktop, a real phone, and a real on-screen keyboard are untested until the owner accepts this step.
-4. Next. Final settings polish.
+4. Done. Settings has a left navigation with General and Mistral key on a computer, and one column on a phone. A question card says how many rendered lines of an argument are below its box, counting wrapped lines, and updates as the person scrolls. The sign-in, reconnecting, problem, and not-found notices share one look, a focus ring inside a card or the bot list is no longer clipped, and five bubble colours are darker so white text reaches 4.5:1, which a test now holds. Tested with a scripted fake model at 1280 and 412 wide, in light and dark. A real phone's touch scrolling and hidden scrollbars are untested until the owner accepts this step.
+5. Done. `verify:screen` and `verify:takeover` passed on the control VM, a real model and the real desktop worked in the new design, and the owner accepted it on 2026-11-06. A Convex export from just before the first deploy of this design is at `/root/backups/bots-before-redesign-2026-11-06.zip` on that VM. Going back to a commit before this redesign would need that export or a cleanup of stored bot looks, because the older schema has no `shape` or `color`.
 
 ## After step 3: deploy from `main`
 
@@ -164,7 +173,8 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
-- A long argument in a question card scrolls inside the card, and a device that hides scrollbars gives no sign that more exists. A bot can pad a command to push its dangerous part out of view.
+- A question card locks Approve until the person has reached the end of every argument, so a very long command takes a long scroll. Automatic review, below, is the later answer.
+- A focus ring takes the bot's colour, as the prototype does. On a light page, amber, green, teal, and grey rings fall below 3:1, measured at 2.25, 2.30, 2.45, and 2.92.
 - A question card shows an argument's text as it is, so Unicode bidirectional controls may change how a command reads. Nobody has tested this.
 - A markdown link's text can differ from where it goes, and a phone has no hover to show the address. An image shows its URL, and a link does not.
 - A stopped run loses the words that had streamed so far, because the timeline returns a stream only for an active run.
