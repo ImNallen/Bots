@@ -104,7 +104,7 @@ export async function applyMemoryCall(
   run: Doc<"runs">,
   call: MemoryCall,
 ): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
-  const result = (outcome: "ok" | "error", output: string) => ({
+  const result = (outcome: "ok" | "error" | "cancelled", output: string) => ({
     kind: "toolResult" as const,
     toolCallId: call.toolCallId,
     name: TOOL_OF_CALL[call.kind],
@@ -112,6 +112,10 @@ export async function applyMemoryCall(
     output,
     truncated: false,
   });
+  // The runner hears of a stop only at its next heartbeat, so only this transaction can honor one made just now.
+  if (run.cancelRequested) {
+    return result("cancelled", "The run was cancelled before this call changed your notes, so it did not run.");
+  }
   switch (call.kind) {
     case "memorySave": {
       const parsed = parseNote({ text: call.text, otherNotes: (await notesOf(ctx, run.botId)).length });

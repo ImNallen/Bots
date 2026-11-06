@@ -350,6 +350,7 @@ Notes live in Convex and not on the VM. A bot has root on its VM, so anything th
 | After the commit, with the reply lost | The result, so the call is not pending | Nothing repeats, and a resend fails the sequence check |
 | While the call waits for approval | The same request and the same answer | It applies the call once, if the answer was yes |
 | A stale runner wakes up | Nothing new, because `requireLease` throws | The whole mutation aborts, with no note |
+| The owner stops the run just before the call | A result with outcome `cancelled`, because the mutation reads the owner's request itself | No change to any note, even though the runner hears of the stop only at its next heartbeat |
 | `claim` gives up after 5 attempts | `closeUnansweredCalls` recorded `unavailable` | No note, and the next run's prompt holds the true list |
 
 A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no control or text-direction characters, and nothing that `looksLikeSecret` refuses.

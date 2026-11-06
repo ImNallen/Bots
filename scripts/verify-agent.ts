@@ -1232,9 +1232,21 @@ try {
       });
       await check("the new holder's memory call writes one note", async () => {
         await service.mutation(api.runs.append, { runId: frozenRun, leaseToken: takeover.leaseToken, expectedSeq: takeover.nextSeq, body: frozenSave });
-        await service.mutation(api.runs.finish, { runId: frozenRun, leaseToken: takeover.leaseToken, state: { kind: "cancelled" } });
         assert.deepEqual(await textsOf(frozen), [frozenNote]);
       });
+      await check("after a stop that no heartbeat has carried yet, a memory call changes nothing and records cancelled", async () => {
+        await first.mutation(api.runs.requestCancel, { runId: frozenRun });
+        const [note] = await notesOf(frozen);
+        assert.ok(note !== undefined);
+        const appendAt = (expectedSeq: number, body: { kind: "memorySave"; toolCallId: string; text: string } | { kind: "memoryForget"; toolCallId: string; noteId: string }) =>
+          service.mutation(api.runs.append, { runId: frozenRun, leaseToken: takeover.leaseToken, expectedSeq, body });
+        const save = await appendAt(takeover.nextSeq + 1, { kind: "memorySave", toolCallId: "frozenId2", text: `after stop ${nonce}` });
+        const forget = await appendAt(takeover.nextSeq + 2, { kind: "memoryForget", toolCallId: "frozenId3", noteId: note._id });
+        assert.equal(save.kind === "toolResult" ? save.outcome : save.kind, "cancelled");
+        assert.equal(forget.kind === "toolResult" ? forget.outcome : forget.kind, "cancelled");
+        assert.deepEqual(await textsOf(frozen), [frozenNote]);
+      });
+      await service.mutation(api.runs.finish, { runId: frozenRun, leaseToken: takeover.leaseToken, state: { kind: "cancelled" } });
 
       const away = await chatAt("memory-no-computer", "nothing");
       const awayNote = `no computer ${nonce}`;

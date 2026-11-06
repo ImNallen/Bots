@@ -15,7 +15,6 @@ const ASKS_AT_OUTSIDE: Record<ToolEffect, (touchedComputer: boolean) => boolean>
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
 export const EXPIRED_OUTPUT = "The user did not answer in time, so this call did not run.";
 export const NOT_SENT_CANCELLED_OUTPUT = "The run was cancelled while this call waited for approval, so it did not run.";
-export const MEMORY_CANCELLED_OUTPUT = "The run was cancelled before this call changed your notes, so it did not run.";
 
 export function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }): boolean {
   switch (args.level) {
