@@ -367,6 +367,11 @@ export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
     identity: debuggerUrl.split("/").at(-1) as string,
     send: (method, params = {}, sessionId) =>
       new Promise((resolve, reject) => {
+        // ws drops a send on a closed socket with no error, and the close has already ended every waiter, so this would never settle.
+        if (socket.readyState !== WebSocket.OPEN) {
+          reject(new Error("the browser closed the connection"));
+          return;
+        }
         const id = nextId;
         nextId += 1;
         pending.set(id, { resolve, reject });
