@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { api } from "@bots/convex";
 import { ConvexHttpClient } from "convex/browser";
@@ -30,9 +31,7 @@ const { token } = (await response.json()) as { token: string };
 const client = new ConvexHttpClient(`https://${new URL(origin).hostname}:${CONVEX_PORT}`);
 client.setAuth(token);
 await client.mutation(api.users.ensureCurrent, {});
-const bots = await client.query(api.bots.list, {});
-const bot = bots[0];
-assert.ok(bot !== undefined, "this account has no bot");
+const botId = await client.mutation(api.bots.create, { name: `verify-screen-${randomBytes(4).toString("hex")}` });
 
 function rejectedWith(args: { path: string; headers: Record<string, string> }): Promise<number | "connected"> {
   return new Promise((resolve) => {
@@ -46,7 +45,7 @@ function rejectedWith(args: { path: string; headers: Record<string, string> }): 
   });
 }
 
-const path = `/screens/${bot._id}`;
+const path = `/screens/${botId}`;
 const crossSite = await rejectedWith({ path, headers: { Origin: "https://evil.example" } });
 report(crossSite === 403, "a page from another site cannot open the screen, even with this device's identity", String(crossSite));
 const noOrigin = await rejectedWith({ path, headers: {} });
@@ -126,6 +125,11 @@ const after = await rfbSession();
 report(health.status === 200 && after.width === 1280, "a malformed frame from one viewer leaves the orchestrator serving others", `healthz ${health.status}`);
 after.socket.removeAllListeners("close");
 after.socket.close();
+
+// A failed run keeps its bot, so its screen can still be looked at.
+if (failures === 0) {
+  await client.mutation(api.bots.remove, { botId });
+}
 
 console.log(failures === 0 ? "verify:screen passed" : `verify:screen failed with ${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

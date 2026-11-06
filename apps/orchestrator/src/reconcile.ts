@@ -6,6 +6,8 @@ const TOKEN_TIMEOUT_MS = 30 * 1000;
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 // Shorter than the fence in computers.ts, so computerd is back before a run can be claimed again.
 const ACTIVATE_TIMEOUT_MS = 40 * 1000;
+// A browser that ignores SIGTERM holds a stop for 10 seconds, and a VM has at most 8 of them.
+const FORGET_TIMEOUT_MS = 2 * 60 * 1000;
 // Longer than a VM takes to boot and connect, so a slow start is not mistaken for a broken computerd.
 const REPAIR_AFTER_MS = 2 * 60 * 1000;
 const FIREWALL_OPTIONS = {
@@ -151,6 +153,15 @@ async function assertFiltersHold(proxmox: Proxmox, vmid: number, address: string
   if (entries?.length !== 1 || entries[0] !== address || options.enable !== 1 || options.ipfilter !== 1 || options.macfilter !== 1) {
     throw new Error(`VM ${vmid} does not hold its firewall filters, so it must not start`);
   }
+}
+
+// Through the guest agent, so a bot's files go even from a VM whose computerd is older than this code.
+// Returns the bots that are gone. A bot has root on that VM, so its answer can only ever name a bot that was asked about.
+export async function forgetBots<T extends string>(args: { proxmox: Proxmox; vmid: number; script: string; botIds: T[] }): Promise<T[]> {
+  const { proxmox, vmid, script, botIds } = args;
+  const { stdout } = await proxmox.exec(vmid, ["bash", "-c", script, "forget-bots", ...botIds], FORGET_TIMEOUT_MS);
+  const finished = new Set(stdout.split("\n"));
+  return botIds.filter((botId) => finished.has(botId));
 }
 
 export async function reconcileVm(args: {

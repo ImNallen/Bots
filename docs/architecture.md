@@ -191,6 +191,21 @@ A bot's profile is `/home/browser/profiles/<botId>`, and it starts as a copy of 
 
 A new bot is that copy plus a replay of the logins that have moved since. So the base never needs a write, which would take a throwaway Chromium for each change and make a second record of the same logins.
 
+### Deleting a bot
+
+The bot page deletes a bot, and it refuses during a run or a take-over, because either would lose its desktop midway.
+
+| Where | What goes | When |
+|---|---|---|
+| Convex | The bot's row | At once, in the mutation, so nothing new can start on it |
+| Convex | Its thread, runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. The thread goes last |
+| The VM | Its desktop, profile, workspace, and any take-over baseline | Within about 15 seconds, by the reconcile loop |
+| The VM | Its tool results in the `computerd` journal | At the journal's own limit of 7 days |
+
+`bots.remove` adds a `removedBots` row in the same mutation, and the loop deletes that row only after `infra/proxmox/forget-bots.sh` has succeeded. So a VM that is off, or a kill at any point, repeats the removal, which is safe. The script runs as root through the guest agent, as an update does. So it needs no new sudo rule or link message, and it works on a VM whose `computerd` is older than the orchestrator. `computerd` can keep an idle claim on the slot that the script stopped, and its sweep ends that claim within an hour. The script prints each bot it finished, so a bot whose files refuse to go holds back only itself, and the loop tries it again on each pass.
+
+A login that a bot passed on stays with the other bots and in the jar, because it is the owner's login and not the bot's.
+
 ### How a login moves
 
 The owner logs in once during a take-over, and every bot on that computer can use the login, whether it is running, stopped, or not created yet. Each browser keeps its own profile, because a profile admits one process, and one process across displays is the shared browser we rejected. So a login moves as cookies, through CDP.

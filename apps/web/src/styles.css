@@ -458,6 +458,17 @@ textarea:disabled {
   min-height: 2.75rem;
 }
 
+.delete-bot {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+}
+
+.delete-bot-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
 .bot-waiting {
   color: var(--color-accent);
   font-size: 0.875rem;

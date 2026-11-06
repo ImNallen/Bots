@@ -1496,6 +1496,9 @@ try {
     await check("threads.send during an active run is rejected", async () => {
       await assertRejected(chat.send(`second message ${nonce}`), /already has an active run/);
     });
+    await check("a bot with an active run cannot be deleted", async () => {
+      await assertRejected(first.mutation(api.bots.remove, { botId: chat.botId }), /active run/);
+    });
     await check("the timeline shows no lease token to the user", async () => {
       const raw = JSON.stringify(await first.query(api.threads.timeline, { threadId: chat.threadId }));
       assert.ok(!raw.includes("leaseToken"));
@@ -1877,6 +1880,10 @@ try {
       await assertRejected(second.mutation(api.threads.ensureForBot, { botId: chat.botId }), /Bot not found/);
       assert.equal(await second.query(api.bots.get, { botId: chat.botId }), null);
     });
+    await check("another identity cannot delete the bot", async () => {
+      await assertRejected(second.mutation(api.bots.remove, { botId: chat.botId }), /Bot not found/);
+      assert.notEqual(await first.query(api.bots.get, { botId: chat.botId }), null);
+    });
     await check("another identity sees its own credentials status, not the first user's", async () => {
       assert.deepEqual(await first.query(api.credentials.status, {}), {
         configured: true,
@@ -1933,6 +1940,7 @@ try {
           }),
       ],
       ["credentials.remove", (client) => client.mutation(api.credentials.remove, { ownerId })],
+      ["bots.recordForgotten", (client) => client.mutation(api.bots.recordForgotten, { ownerId, botIds: [chat.botId] })],
       ["credentials.ciphertextFor", (client) => client.query(api.credentials.ciphertextFor, { ownerId })],
       [
         "users.ensureForService",
@@ -2492,6 +2500,50 @@ try {
       assert.ok(shown.length > 0 && shown.length < 21, `showed ${shown.length} events`);
       const newest = shown.at(-1)?.body;
       assert.equal(newest?.kind === "toolResult" ? newest.toolCallId : "", "wide19");
+    });
+    await check("deleting a bot takes a history too large for one mutation to read", async () => {
+      await second.mutation(api.bots.remove, { botId: chat.botId });
+      await waitFor({
+        description: "the wide thread to be purged",
+        timeoutMs: 60_000,
+        probe: () => second.query(api.threads.timeline, { threadId: chat.threadId }).then(() => null, () => true),
+      });
+    });
+  });
+
+  await scenario("R. deleting a bot", async () => {
+    const chat = await newChat({ client: first, name: "delete" });
+    const text = `delete ${nonce}`;
+    fake.script(text, () => ({ kind: "text", text: "finished" }));
+    await chat.settled(await chat.send(text));
+    const kept = await newChat({ client: first, name: "kept" });
+    await first.mutation(api.bots.takeOver, { botId: chat.botId });
+    await check("a bot under a take-over cannot be deleted", async () => {
+      await assertRejected(first.mutation(api.bots.remove, { botId: chat.botId }), /Give back/);
+    });
+    await first.mutation(api.bots.releaseTakeover, { botId: chat.botId });
+    await first.mutation(api.bots.remove, { botId: chat.botId });
+    await check("the bot is gone at once", async () => {
+      assert.equal(await first.query(api.bots.get, { botId: chat.botId }), null);
+      const bots = await first.query(api.bots.list, {});
+      assert.ok(!bots.some((bot) => bot._id === chat.botId));
+    });
+    await check("nothing can start on it, even before its history is gone", async () => {
+      await assertRejected(chat.send("again"), /not found/);
+      await assertRejected(first.mutation(api.threads.ensureForBot, { botId: chat.botId }), /Bot not found/);
+    });
+    await check("a second delete finds no bot", async () => {
+      await assertRejected(first.mutation(api.bots.remove, { botId: chat.botId }), /Bot not found/);
+    });
+    await check("its history goes, ending with its thread", async () => {
+      await waitFor({
+        description: "the thread to be purged",
+        timeoutMs: 30_000,
+        probe: () => first.query(api.threads.timeline, { threadId: chat.threadId }).then(() => null, () => true),
+      });
+    });
+    await check("another bot keeps its thread", async () => {
+      await first.query(api.threads.timeline, { threadId: kept.threadId });
     });
   });
 } catch (error) {

@@ -2,7 +2,7 @@ import { api } from "@bots/convex";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
 import type { Proxmox } from "./proxmox.ts";
-import { reconcileVm, vmidFor } from "./reconcile.ts";
+import { forgetBots, reconcileVm, vmidFor } from "./reconcile.ts";
 import type { Service } from "./service.ts";
 
 const INTERVAL_MS = 15_000;
@@ -15,14 +15,15 @@ export function startReconciler(args: {
   proxmox: Proxmox;
   linkUrl: string;
   install: { commit: string; script: string };
+  forgetScript: string;
   log: (fields: LogFields) => void;
 }): void {
-  const { service, link, proxmox, linkUrl, install, log } = args;
+  const { service, link, proxmox, linkUrl, install, forgetScript, log } = args;
 
   async function pass(): Promise<void> {
     const computers = await service.query(api.computers.desiredVms, {});
     for (const computer of computers) {
-      const { computerId, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun } = computer;
+      const { computerId, ownerId, tokenHash, desiredVm, observedVm, computerdCommit, hasActiveRun, removedBots } = computer;
       let reported = observedVm?.stage;
       const record = async (stage: string, detail?: string) => {
         if (stage !== reported || detail !== undefined) {
@@ -64,6 +65,20 @@ export function startReconciler(args: {
         await record("failed", detail).catch((reportError: unknown) => {
           log({ level: "error", event: "vm-report-failed", computerId, message: String(reportError) });
         });
+      }
+      // Apart from the stage, because a VM that cannot do this still runs its bots. The rows stay, so the next pass tries again.
+      if (removedBots.length > 0 && reported === "ready") {
+        try {
+          const forgotten = await forgetBots({ proxmox, vmid: vmidFor(desiredVm.slot), script: forgetScript, botIds: removedBots });
+          await service.mutation(api.bots.recordForgotten, { ownerId, botIds: forgotten });
+          log({ level: "info", event: "bots-forgotten", computerId, count: forgotten.length });
+          const stuck = removedBots.filter((botId) => !forgotten.includes(botId));
+          if (stuck.length > 0) {
+            log({ level: "warn", event: "bots-forget-stuck", computerId, botIds: stuck });
+          }
+        } catch (error) {
+          log({ level: "warn", event: "bots-forget-failed", computerId, message: error instanceof Error ? error.message : "unknown error" });
+        }
       }
     }
   }

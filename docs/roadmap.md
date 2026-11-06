@@ -162,7 +162,15 @@ These are open on purpose. Fix each one when the work reaches it.
 - A disk that grows on a running VM reaches the guest's filesystem at the VM's next boot. A size change that also changes memory or cores restarts the VM, and a change to the disk alone does not.
 - VM 110 has no firewall of its own, and SSH and LLMNR listen on its `10.78.0.2` address. Only `bots_guard` stops a user VM from reaching them. `verify-network.sh` fails if that table is missing, and guests do not autostart without it.
 - The rules limit where a bot connects, not how much it sends. A bot can flood the link port, and it can connect to port 25 on any public address from the home IP address.
-- Bots cannot be deleted, so `pnpm verify:tailnet` leaves `verify-tailnet-*` bots in the user's list.
+- A check that fails or times out before its end leaves its `verify-*` bots in the user's list. The bot page deletes them.
+- Deleting a bot does not end a background process that the bot left running, and a process can keep a deleted file open. A computer reset will end them.
+- A screen that opens in the instant before a delete can bring back an empty profile for that bot, and nothing removes it.
+- A deleted bot's tool results stay in the VM's `computerd` journal for up to 7 days, where another bot with `sudo` can read them.
+- A bot with root can make its own delete hang, and the reconcile loop then waits 2 minutes on that VM on each pass, which delays every other computer. It needs a fix before step 6 brings other users.
+- A desktop that a delete stopped still counts as taken for up to an hour. If all 8 slots are claimed, the next bot can evict a live idle bot instead of that empty slot.
+- `forget-bots.sh` checks a slot's holder and then stops it, with no lock against `computerd`. If all 8 slots are claimed and another bot takes the deleted bot's slot in those few milliseconds, that bot's desktop stops. Its tool call fails, and its next use starts the desktop again.
+- A purge step that fails with an error Convex does not retry leaves that bot's history in Convex, and nothing restarts it. A deploy of an older branch during a purge is the one known trigger.
+- A deleted bot's files stay in the Docker volume on a Mac, where no reconcile loop runs.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
 - CI is not a required check on `main`. That is a repository setting.

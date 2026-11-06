@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createConnection } from "node:net";
 import { api } from "@bots/convex";
+import type { Id } from "@bots/convex/dataModel";
 import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { decodeJwt } from "jose";
 
@@ -79,6 +80,7 @@ await check("Convex refuses a query with no token", async () => {
 
 await check("a live query updates over a WebSocket through tailscale serve", async () => {
   const name = `verify-tailnet-${randomBytes(4).toString("hex")}`;
+  let creation: Promise<Id<"bots">> | undefined;
   const http = new ConvexHttpClient(convexUrl);
   http.setAuth(token);
   await http.mutation(api.users.ensureCurrent, {});
@@ -91,7 +93,8 @@ await check("a live query updates over a WebSocket through tailscale serve", asy
       live.onUpdate(api.bots.list, {}, (bots) => {
         if (!created) {
           created = true;
-          http.mutation(api.bots.create, { name }).catch(reject);
+          creation = http.mutation(api.bots.create, { name });
+          creation.catch(reject);
         }
         if (bots.some((bot) => bot.name === name)) {
           clearTimeout(timer);
@@ -102,6 +105,8 @@ await check("a live query updates over a WebSocket through tailscale serve", asy
   } finally {
     await live.close();
   }
+  // The live update can arrive before the mutation's own answer.
+  await http.mutation(api.bots.remove, { botId: await (creation as unknown as Promise<Id<"bots">>) });
 });
 
 if (lanAddress !== undefined) {

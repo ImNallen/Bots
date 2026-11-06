@@ -28,8 +28,11 @@ function report(ok: boolean, name: string, detail = ""): void {
   console.log(`${ok ? "ok  " : "FAIL"}  ${name}${detail === "" ? "" : `: ${detail}`}`);
 }
 
+const botIds: Id<"bots">[] = [];
+
 async function ask(name: string, text: string) {
   const botId: Id<"bots"> = await client.mutation(api.bots.create, { name: `verify-browser-${name}-${randomBytes(3).toString("hex")}` });
+  botIds.push(botId);
   const threadId = await client.mutation(api.threads.ensureForBot, { botId });
   const runId = await client.mutation(api.threads.send, { threadId, text });
   const deadline = Date.now() + RUN_TIMEOUT_MS;
@@ -58,6 +61,13 @@ report(secondResult?.outcome === "ok" && /iana\.org/.test(secondResult.output), 
 const screenOf = (output: string | undefined) => /^Screen (\d+)/.exec(output ?? "")?.[1];
 const [screenA, screenB] = [screenOf(firstResult?.output), screenOf(secondResult?.output)];
 report(screenA !== undefined && screenB !== undefined && screenA !== screenB, "two bots working at once have different screens", `${screenA} and ${screenB}`);
+
+// A failed run keeps its bots, because their threads show what went wrong.
+if (failures === 0) {
+  await Promise.all(botIds.map((botId) => client.mutation(api.bots.remove, { botId })));
+  const left = await Promise.all(botIds.map((botId) => client.query(api.bots.get, { botId })));
+  report(left.every((bot) => bot === null), "deleting a bot that has finished removes it");
+}
 
 console.log(failures === 0 ? "verify:browser passed" : `verify:browser failed with ${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

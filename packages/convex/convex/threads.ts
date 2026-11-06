@@ -20,7 +20,7 @@ async function requireOwnedThread(ctx: QueryCtx, threadId: Id<"threads">): Promi
   return thread;
 }
 
-function isActive(state: RunState): boolean {
+export function isActive(state: RunState): boolean {
   return state.kind === "queued" || state.kind === "running";
 }
 
@@ -44,6 +44,10 @@ export const send = mutation({
   args: { threadId: v.id("threads"), text: v.string() },
   handler: async (ctx, { threadId, text }) => {
     const thread = await requireOwnedThread(ctx, threadId);
+    // A deleted bot's thread lasts until its purge ends, and a run started there would bring back the bot's files.
+    if ((await ctx.db.get(thread.botId)) === null) {
+      throw new ConvexError("Bot not found");
+    }
     const trimmed = text.trim();
     if (trimmed === "") {
       throw new ConvexError("Message cannot be empty");
