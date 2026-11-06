@@ -40,6 +40,14 @@ export function friendlyStep(tool: string | null): string {
   return isToolName(tool) ? TOOL_STEPS[tool] : WORKING;
 }
 
+// The list shows one line of plain text, and a bot's last message is markdown that has already lost its line breaks.
+function withoutMarkdown(message: string): string {
+  return message
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^(#{1,6}|>|[-*+]|\d+[.)])\s+/, "")
+    .replace(/\*\*|__|~~|`/g, "");
+}
+
 export type SubLine = { text: string | null; tone: "plain" | "ask" | "bad" };
 
 export function subLineOf({ activity, lastMessage }: Pick<BotRow, "activity" | "lastMessage">): SubLine {
@@ -54,6 +62,6 @@ export function subLineOf({ activity, lastMessage }: Pick<BotRow, "activity" | "
       return { text: "Stopped with an error", tone: "bad" };
     case "queued":
     case "idle":
-      return { text: lastMessage, tone: "plain" };
+      return { text: lastMessage === null ? null : withoutMarkdown(lastMessage), tone: "plain" };
   }
 }
