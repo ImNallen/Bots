@@ -188,11 +188,14 @@ function TypingBox({ screen }: { screen: RFB }) {
         onKeyDown={(event) => {
           // During composition these keys choose or confirm a word for the keyboard, and they are not meant for the page.
           if (isNamedKey(event.key) && !composing.current && !event.nativeEvent.isComposing) {
-            event.preventDefault();
             flush(event.currentTarget);
-            // Text that was refused stays in the box, and an Enter now could submit a form without it.
+            // Text that was refused stays in the box. These keys then edit it here, so a person can remove the character that
+            // was refused, and none of them reach the screen, because an Enter there could submit a form without that text.
             if (event.currentTarget.value === "") {
+              event.preventDefault();
               screen.sendKey(KEY_KEYSYMS[event.key], null);
+            } else if (event.key === "Enter") {
+              event.preventDefault();
             }
           }
         }}
