@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { approvalLevel, approvalState, desiredVm, observedVm, runEventBody, runState } from "./validators.js";
+import { approvalLevel, approvalState, botColor, botShape, desiredVm, observedVm, runEventBody, runState } from "./validators.js";
 
 export default defineSchema({
   users: defineTable({
@@ -16,6 +16,9 @@ export default defineSchema({
     takeoverUntil: v.optional(v.number()),
     // A bot with no value uses the default, which is "outside".
     approvalLevel: v.optional(approvalLevel),
+    // A bot with no value takes its look from its id.
+    shape: v.optional(botShape),
+    color: v.optional(botColor),
   }).index("by_owner", ["ownerId"]),
 
   // A deleted bot whose files may still be on its owner's VM. The reconcile loop removes both.

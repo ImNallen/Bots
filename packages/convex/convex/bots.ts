@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { isActive } from "./threads.js";
-import { approvalLevel } from "./validators.js";
+import { approvalLevel, botColor, botShape } from "./validators.js";
 
 const MAX_NAME_LENGTH = 64;
 const DEFAULT_APPROVAL_LEVEL = "outside";
@@ -42,8 +42,8 @@ export const get = query({
 });
 
 export const create = mutation({
-  args: { name: v.string() },
-  handler: async (ctx, { name }) => {
+  args: { name: v.string(), shape: v.optional(botShape), color: v.optional(botColor) },
+  handler: async (ctx, { name, shape, color }) => {
     const { user } = await requireIdentity(ctx);
     if (user === null) {
       throw new ConvexError("Call users.ensureCurrent before creating a bot");
@@ -55,7 +55,7 @@ export const create = mutation({
     if (trimmed.length > MAX_NAME_LENGTH) {
       throw new ConvexError(`Name cannot be longer than ${MAX_NAME_LENGTH} characters`);
     }
-    return await ctx.db.insert("bots", { ownerId: user._id, name: trimmed });
+    return await ctx.db.insert("bots", { ownerId: user._id, name: trimmed, shape, color });
   },
 });
 
@@ -121,6 +121,14 @@ export const setApprovalLevel = mutation({
   handler: async (ctx, { botId, level }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, { approvalLevel: level });
+  },
+});
+
+export const setCharacter = mutation({
+  args: { botId: v.id("bots"), shape: botShape, color: botColor },
+  handler: async (ctx, { botId, shape, color }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, { shape, color });
   },
 });
 
