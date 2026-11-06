@@ -5,7 +5,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
-import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
+import { DENIED_OUTPUT, EXPIRED_OUTPUT, MEMORY_CANCELLED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
@@ -225,7 +225,7 @@ async function runTool(args: {
   }
   if (isMemoryInvocation(invocation)) {
     if (lease.cancel.aborted) {
-      return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+      return { ...base, outcome: "cancelled", output: MEMORY_CANCELLED_OUTPUT, truncated: false };
     }
     return invocation.name === "memory_save"
       ? { kind: "memorySave", toolCallId: call.id, text: invocation.args.text }
