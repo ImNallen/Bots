@@ -68,7 +68,8 @@ export function NewBotDialog({ onClose }: { onClose: () => void }) {
           value={name}
           onChange={(event) => {
             setName(event.target.value);
-            setSubmission({ kind: "idle" });
+            // Only a failure clears. Clearing a pending create would let a second click make a second bot.
+            setSubmission((current) => (current.kind === "failed" ? { kind: "idle" } : current));
           }}
         />
         <CharacterPicker character={character} onChange={setCharacter} />
