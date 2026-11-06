@@ -19,3 +19,6 @@ ExecStartPost=/bin/bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/690%i) 2>/dev/null
 # x11vnc exits with 2 on SIGTERM, which a restart or a stop should not record as a failure.
 SuccessExitStatus=2
 TimeoutStartSec=15
+# x11vnc sometimes hangs on SIGTERM with a viewer connected. A real VM saw 13 in 130, stuck on a futex. Without this limit, a newer tab
+# waits out computerd's 75 seconds and then fails. A normal stop takes about 140 ms and lets x11vnc release a viewer's keys.
+TimeoutStopSec=3

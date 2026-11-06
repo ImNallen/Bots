@@ -18,9 +18,12 @@ const KEY_CODES: Record<string, number> = {
   ArrowRight: 39,
 };
 
-type Cdp = {
+export type Cdp = {
+  // The browser's GUID, which changes at each start.
+  identity: string;
   send: (method: string, params?: Record<string, unknown>, sessionId?: string) => Promise<Record<string, unknown>>;
   onClose: (listener: () => void) => void;
+  close: () => void;
 };
 
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
@@ -115,8 +118,12 @@ export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
 };
 
-export function createBrowser(args: { desktops: Pick<Desktops, "acquire">; connector?: CdpConnector }): Browser {
-  const { desktops, connector = webSocketConnector } = args;
+export function createBrowser(args: {
+  desktops: Pick<Desktops, "acquire">;
+  connector?: CdpConnector;
+  takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
+}): Browser {
+  const { desktops, connector = webSocketConnector, takeoverSettled } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
@@ -218,6 +225,8 @@ export function createBrowser(args: { desktops: Pick<Desktops, "acquire">; conne
 
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<string> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
+    signal.throwIfAborted();
+    await takeoverSettled?.(botId, signal);
     signal.throwIfAborted();
     const lease = await desktops.acquire(botId);
     try {
@@ -323,7 +332,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function webSocketConnector(cdpPort: number): Promise<Cdp> {
+export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
   let debuggerUrl: string;
   try {
     const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS) });
@@ -331,7 +340,7 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
   } catch {
     throw new Error("this computer has no running browser");
   }
-  const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024 });
+  const socket = new WebSocket(debuggerUrl, { perMessageDeflate: false, maxPayload: 64 * 1024 * 1024, handshakeTimeout: CDP_CONNECT_TIMEOUT_MS });
   await new Promise((resolve, reject) => {
     socket.once("open", resolve);
     socket.once("error", reject);
@@ -361,8 +370,14 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
     pending.clear();
   });
   return {
+    identity: debuggerUrl.split("/").at(-1) as string,
     send: (method, params = {}, sessionId) =>
       new Promise((resolve, reject) => {
+        // ws drops a send on a closed socket with no error, and the close has already ended every waiter, so this would never settle.
+        if (socket.readyState !== WebSocket.OPEN) {
+          reject(new Error("the browser closed the connection"));
+          return;
+        }
         const id = nextId;
         nextId += 1;
         pending.set(id, { resolve, reject });
@@ -376,5 +391,6 @@ async function webSocketConnector(cdpPort: number): Promise<Cdp> {
         listener();
       }
     },
+    close: () => socket.terminate(),
   };
 }

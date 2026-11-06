@@ -6,6 +6,7 @@ import { desktopOf, streamPort, type DesktopLease, type Slot } from "./desktops.
 import { relayScreen } from "./screens.ts";
 
 const SLOT: Slot = 8;
+const CDP_PORT = desktopOf(SLOT).cdpPort;
 const until = async (condition: () => boolean) => {
   while (!condition()) {
     await new Promise((done) => setTimeout(done, 5));
@@ -66,9 +67,21 @@ describe("relayScreen", () => {
     mode: StreamMode;
     acquire?: () => Promise<DesktopLease>;
     restartInput?: (slot: Slot) => Promise<void>;
+    opened?: () => Promise<void>;
+    closed?: () => Promise<void>;
   }) {
-    // Each relay has its own count, so a release from the test before cannot land in this one.
-    const leases = { released: 0, lease: { ...desktopOf(SLOT), release: () => (leases.released += 1) } };
+    // Each relay has its own count and list, so a release from the test before cannot land in this one.
+    const seen = events;
+    const leases = {
+      released: 0,
+      lease: {
+        ...desktopOf(SLOT),
+        release: () => {
+          leases.released += 1;
+          seen.push("release");
+        },
+      },
+    };
     const { port } = link.address() as { port: number };
     relayScreen({
       linkUrl: `ws://127.0.0.1:${port}`,
@@ -79,8 +92,18 @@ describe("relayScreen", () => {
       restartInput:
         args.restartInput ??
         (async (slot) => {
-          events.push(`restart ${slot}`);
+          seen.push(`restart ${slot}`);
         }),
+      logins: {
+        opened: async (cdpPort) => {
+          seen.push(`opened ${cdpPort}`);
+          await args.opened?.();
+        },
+        closed: async (cdpPort) => {
+          seen.push(`closed ${cdpPort}`);
+          await args.closed?.();
+        },
+      },
     });
     return leases;
   }
@@ -94,7 +117,65 @@ describe("relayScreen", () => {
   it("restarts the input stream before it dials, and dials the control port", async () => {
     relay({ mode: "control" });
     await until(() => dialed.length === 1);
-    expect(events).toEqual([`restart ${SLOT}`, "dial control"]);
+    expect(events).toEqual([`opened ${CDP_PORT}`, `restart ${SLOT}`, "dial control"]);
+  });
+
+  it("keeps the lease until the logins have moved, however long that takes", async () => {
+    let moved: () => void = () => {};
+    const leases = relay({ mode: "control", closed: () => new Promise((resolve) => (moved = resolve)) });
+    await until(() => dialed.length === 1);
+    (orchestratorSide[0] as WebSocket).close();
+    await until(() => events.includes(`closed ${CDP_PORT}`));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(leases.released).toBe(0);
+    moved();
+    await until(() => leases.released === 1);
+    expect(events.slice(-2)).toEqual([`closed ${CDP_PORT}`, "release"]);
+  });
+
+  it("moves the logins when the stream ends by itself, as a phone that drops makes it do", async () => {
+    const leases = relay({ mode: "control" });
+    await until(() => dialed.length === 1);
+    (dialed[0] as { socket: Socket }).socket.destroy();
+    await until(() => leases.released === 1);
+    expect(events.filter((event) => event.startsWith("closed"))).toEqual([`closed ${CDP_PORT}`]);
+  });
+
+  it("moves no logins for a watch stream", async () => {
+    const leases = relay({ mode: "watch" });
+    await until(() => dialed.length === 1);
+    (orchestratorSide[0] as WebSocket).close();
+    await until(() => leases.released === 1);
+    expect(events).toEqual(["dial watch", "release"]);
+  });
+
+  it("closes the count it opened when the input stream cannot start", async () => {
+    const leases = relay({ mode: "control", restartInput: () => Promise.reject(new Error("no sudo")) });
+    await until(() => leases.released === 1);
+    expect(events).toEqual([`opened ${CDP_PORT}`, `closed ${CDP_PORT}`, "release"]);
+  });
+
+  it("does not end a newer tab's take-over for an owner who left while the baseline was written", async () => {
+    let written: () => void = () => {};
+    const leases = relay({ mode: "control", opened: () => new Promise((resolve) => (written = resolve)) });
+    await until(() => events.includes(`opened ${CDP_PORT}`));
+    (orchestratorSide[0] as WebSocket).close();
+    await until(() => closes.count === 1);
+    written();
+    await until(() => leases.released === 1);
+    expect(events).toEqual([`opened ${CDP_PORT}`, `closed ${CDP_PORT}`, "release"]);
+  });
+
+  it("closes the count it opened when the owner leaves during the restart", async () => {
+    let restarted: () => void = () => {};
+    const leases = relay({ mode: "control", restartInput: () => new Promise((resolve) => (restarted = resolve)) });
+    await until(() => events.includes(`opened ${CDP_PORT}`));
+    await new Promise((done) => setTimeout(done, 20));
+    (orchestratorSide[0] as WebSocket).close();
+    await until(() => closes.count === 1);
+    restarted();
+    await until(() => leases.released === 1);
+    expect(events).toEqual([`opened ${CDP_PORT}`, `closed ${CDP_PORT}`, "release"]);
   });
 
   it("carries bytes both ways, and ignores a text frame", async () => {
@@ -146,7 +227,7 @@ describe("relayScreen", () => {
     await new Promise((done) => setTimeout(done, 20));
     grant(leases.lease);
     await until(() => leases.released === 1);
-    expect(events).toEqual([]);
+    expect(events).toEqual(["release"]);
   });
 
   it("frees the desktop and dials nothing when the owner leaves during the restart", async () => {

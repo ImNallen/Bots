@@ -156,7 +156,7 @@ A desktop's processes sit in their own cgroups, outside `computerd.service`, so 
 
 | What dies | What systemd does | What a bot and a viewer see |
 |---|---|---|
-| `computerd` | Leaves the desktops alone, and restarts `computerd` after 2 seconds | The same screen. A viewer's relay ended, so "Try again" reconnects to it. An input stream ended with its relay, so the take-over ended too |
+| `computerd` | Leaves the desktops alone, and restarts `computerd` after 2 seconds | The same screen. A viewer's relay ended, so "Try again" reconnects to it. An input stream ended with its relay, so the take-over ended too, and what the owner typed still moves to the other bots |
 | Chromium | Kills the rest of its cgroup, and restarts it after 2 seconds | A running step fails. The next step gets the stale ref error, and the snapshot says `about:blank`. A viewer stays connected |
 | `x11vnc` | Restarts it after 2 seconds | The viewer's stream ends, and "Try again" works. The bot notices nothing |
 | The input stream's `x11vnc` | Restarts nothing | The take-over ends and the viewer goes back to watching. The next take-over starts a new one |
@@ -187,7 +187,55 @@ Each browser belongs to one bot, so every page in it is that bot's. `computerd` 
 
 ### Where a profile comes from
 
-A bot's profile is `/home/browser/profiles/<botId>`, and it starts as a copy of `/home/browser/profile`, the base. Nothing opens the base, so nothing can damage a login in it. VM 201's logins became the base without moving. A real cookie written by the old shared browser reads back from a copied profile, with `--password-store=basic`. The copy goes to `<botId>.tmp` and is renamed when whole, so a kill midway leaves nothing that a later start could use by mistake. The update stops the old browser before anything can copy the base.
+A bot's profile is `/home/browser/profiles/<botId>`, and it starts as a copy of `/home/browser/profile`, the base. Nothing opens or writes the base, so nothing can damage a login in it. VM 201's logins became the base without moving. A real cookie written by the old shared browser reads back from a copied profile, with `--password-store=basic`. The copy goes to `<botId>.tmp` and is renamed when whole, so a kill midway leaves nothing that a later start could use by mistake. The update stops the old browser before anything can copy the base.
+
+A new bot is that copy plus a replay of the logins that have moved since. So the base never needs a write, which would take a throwaway Chromium for each change and make a second record of the same logins.
+
+### How a login moves
+
+The owner logs in once during a take-over, and every bot on that computer can use the login, whether it is running, stopped, or not created yet. Each browser keeps its own profile, because a profile admits one process, and one process across displays is the shared browser we rejected. So a login moves as cookies, through CDP.
+
+Only what a take-over changed moves. Copying all of a bot's cookies would let an old session in one bot overwrite a newer one in another. `computerd` records a bot's cookies when a take-over opens, compares them when it ends, and merges the difference into a jar. A logout is an entry with a past expiry and no value, so one code path sets and deletes. Only a control stream takes part, so a bot's own browsing never moves anything.
+
+`apps/computerd/src/logins.ts` owns all of this, and nothing else reads its files. They are mode 0600 in `/var/lib/computerd`, which the `browser` user cannot read.
+
+| Record | Where | What it does |
+|---|---|---|
+| The jar | `logins.json` | One entry for each cookie's name, host, path, and partition, and a generation that comes from the clock and only rises |
+| A baseline | `takeovers/<botId>.json` | The cookies when a take-over opened, and which browser held them. It goes last, so a crash repeats the diff, and an equal value adds no generation |
+| A cursor | A cookie on `logins.bots.invalid`, in each browser | How far that browser has come. `.invalid` cannot resolve, so no site receives it |
+
+The cursor lives in the browser so that it dies with what it describes. A stop within 30 seconds of a push loses the new cookies and the cursor together, so the next start applies them again. A stop after the flush keeps both, so a cookie that the bot has since rotated stays as the bot left it. A real VM showed the order this needs, in the table below. A session cookie has no such protection, because a restart drops it. So it comes back once for each start of a browser, unless it was logged out. A second reserved cookie names the browser that last had this, so a restart of `computerd` cannot take a running browser for a new one and undo a logout.
+
+| Event | What happens |
+|---|---|
+| A take-over opens | Catch up, write the baseline unless a newer tab is taking over from a stream that is still open, and count this stream. All of this comes before the input stream restarts, so the baseline comes before any key |
+| A give-back, an expiry, or a phone that drops | The relay closes. When no stream of that bot is left, catch up, diff, merge, push, and delete the baseline. It gets one attempt. A baseline kept past a failure would later move what the bot has browsed since, over the other bots' sessions, so missing a move is the safer mistake. The relay keeps its lease until then, so the desktop cannot stop during the read |
+| A bot's browser tool arrives | It waits until that bot has no input stream and its cookies are read, for up to 15 seconds. The runner resumes a bot as soon as a take-over ends, and the stream can close up to 5 seconds later, so without this a cookie that the bot changes would move as if the owner had changed it |
+| A newer tab | It counts before its restart ends the older tab, so the older close leaves the count at 1, and the first baseline stays |
+| `computerd` restarts | Only a kill leaves a baseline. `recover` runs first at startup and publishes it |
+| A stopped or new bot starts | It catches up inside `acquire`, after systemd starts its browser and before anything can use it. A failed catch-up logs and goes on, because a bot without a login is better than a bot without a browser |
+
+A push is a catch-up on each of the 8 CDP ports, so it needs nothing from the desktops code, and a refused port is just a stopped slot. A catch-up uses its own short socket and browser-level `Storage` calls, so it skips the per-bot queues and reloads no page. Every `acquire` makes one, so it first compares the browser's GUID and the jar's generation with what it last applied, and returns if neither changed. That connection takes about 1 ms on a real VM. A push into a bot under take-over cannot come back as a new change, because an equal value adds no generation.
+
+A logout stays in the jar for 400 days. Chromium keeps no cookie longer, so after that no browser can still hold what it was for, and a stopped bot has no schedule that a shorter limit could rely on.
+
+`computerd` logs counts and never a cookie's name or value. A JSON parse error quotes its input, so an unreadable jar logs only that it happened. It then starts empty, which is safe, because the next generation comes from the clock and is still ahead of every browser's cursor.
+
+We tested these on a real VM, on Chromium 156, before building this:
+
+| Test | Result |
+|---|---|
+| `Storage.setCookies` with a past expiry | Deletes plain, domain, HttpOnly, `__Host-`, session, and partitioned cookies. A logout for a cookie that a browser lacks is accepted |
+| A batch with one invalid cookie | Chromium refuses all of it and sets none, so a refused batch retries one cookie at a time |
+| A cookie on a `.invalid` domain | Accepted, and kept across a stop and a start |
+| A cursor set last, in 20 stops and kills placed around the flush | Never on disk ahead of its batch. A batch that split, 256 of 300 and 511 of 600, reached disk as a prefix with no cursor. A batch sent 20 seconds before a stop was lost whole, with its cursor |
+| Session cookies across a restart | A stop drops them. A kill keeps those already flushed, so a kill is not a reliable way to test this |
+| The GUID in `/json/version` | Changes at a stop and start, at a kill, and at systemd's own restart |
+| `__Host-`, SameSite, and partitioned cookies through `getCookies` then `setCookies` | Read back the same in every field, and a real request sends them |
+| More than 180 cookies on one registrable domain | Chromium evicts the oldest. This made an early flush test look like a failure |
+
+`infra/proxmox/verify-desktop.sh` proves this on a real VM through `scripts/verify-logins.ts`. That script runs the real `main.ts` under a private unit, with a private state directory and a link on loopback, so a kill is real, it needs no route through the guard, and no test cookie enters the VM's real jar. `pnpm verify:takeover` checks the same thing through the real orchestrator after a deploy.
 
 ### What the browser tests showed
 
@@ -212,7 +260,7 @@ The results set these rules:
 - The watch stream stays view-only, so only a stream that exists for a take-over can take input.
 - Take-over has a typing box and a key bar for arrows, Enter, Esc, and Tab, because a phone has no such keys and the noVNC library has no phone keyboard.
 
-Chrome with touch emulation has driven noVNC on a real VM, but no real phone has yet. The step 4 check does that.
+The owner used a take-over on a real phone on 2026-11-06. It works, and the key bar is still needed. The step 4 check still has to run on a phone with two bots.
 
 ### How a stream reaches its owner
 
@@ -229,7 +277,7 @@ The input stream removes itself, so no code has to clean it up and no state has 
 - It has no `Restart=`, and the desktop target does not want it, so only a new take-over brings it back.
 - `-clear_keys` releases what a viewer held. Without it, a viewer that left with Ctrl down turned the next viewer's typing into shortcuts.
 
-`computerd` restarts the unit for each take-over. That also ends an older take-over from another tab, so a desktop has at most one person's input stream, with no map to keep. The older tab sees that the take-over is no longer its own and does not give it back.
+`computerd` restarts the unit for each take-over. That also ends an older take-over from another tab, so a desktop has at most one person's input stream, with no map to keep. x11vnc sometimes hangs on SIGTERM with a viewer connected. A real VM saw this in 13 of 130 restarts, stuck on a futex, so the unit has a 3-second stop limit, and a newer tab no longer waits out `computerd`'s 75 seconds and fails. The older tab sees that the take-over is no longer its own and does not give it back.
 
 x11vnc reports nothing back to the page, so the typing box decides what it can send. It refuses a character with no key, and a character past the limit in the next paragraph, before it sends anything, and it says so. A password that loses a character with no error would just be wrong.
 
@@ -264,7 +312,7 @@ The orchestrator signs a short-lived JWT with the subject `service:orchestrator`
 
 `computerd` holds only its link token. A VM is untrusted, so the orchestrator validates every link message, closes the socket on an invalid one, accepts a result only for a call it sent on that socket, and caps output again.
 
-Logins that a user types into a bot's browser stay in that bot's profile on the VM, and [the roadmap](roadmap.md) plans how to copy them to the VM's other bots. A user logs in through take-over until the Vault ships, so passwords never enter the chat. When the Vault ships, bots lose passwordless `sudo`. Otherwise a bot could read a filled password from browser memory.
+Logins that a user types into a bot's browser during a take-over stay on the VM. They move to that VM's other bots, and `computerd` keeps the cookies, not the password, in a file that the browser cannot read. A bot with `sudo` can read that file, as it can already read a browser's logins through CDP, and those bots have one owner. A user logs in through take-over until the Vault ships, so passwords never enter the chat. When the Vault ships, bots lose passwordless `sudo`. Otherwise a bot could read a filled password from browser memory.
 
 Chromium and `computerd` run under their own Linux user from the first version to keep that later change small.
 
