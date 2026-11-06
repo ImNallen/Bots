@@ -178,7 +178,9 @@ async function openRfb(path: string) {
 }
 
 // The select sits at the top so its menu opens below it, over the fields, at a place the check can name.
-const form = `<!doctype html><title>Login</title><style>body{margin:0}select{position:fixed;left:40px;top:40px;width:400px;font:24px sans-serif}input{position:fixed;left:0;width:100%;height:30%;font-size:40px}#u{top:40%}#p{top:70%}</style><select aria-label=Pick><option>one<option>two<option>three<option>four</select><input id=u aria-label=Name><input id=p type=password aria-label=Secret>`;
+// The name field stands for a login. What the person types becomes a cookie, which another bot must then have.
+const form = `<!doctype html><title>Login</title><style>body{margin:0}select{position:fixed;left:40px;top:40px;width:400px;font:24px sans-serif}input{position:fixed;left:0;width:100%;height:30%;font-size:40px}#u{top:40%}#p{top:70%}</style><select aria-label=Pick><option>one<option>two<option>three<option>four</select><input id=u aria-label=Name><input id=p type=password aria-label=Secret><script>u.oninput=()=>{document.cookie="verifylogin="+u.value.slice(0,8)+";max-age=3600;path=/"}</script>`;
+const account = `<!doctype html><title>Account</title><p id=o></p><script>o.textContent="cookies: "+document.cookie</script>`;
 const watched = await newChat("watched");
 const other = await newChat("other");
 
@@ -186,7 +188,7 @@ const setup = await settled(
   watched,
   await client.mutation(api.threads.send, {
     threadId: watched.threadId,
-    text: `Do exactly these two steps and then stop, with no other tool calls.\n1. Use the shell tool once with this command:\nprintf '%s' '${form}' > form.html && (nohup python3 -m http.server ${PORT} --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1; echo started\n2. Use browser_navigate once with this URL: http://127.0.0.1:${PORT}/form.html`,
+    text: `Do exactly these two steps and then stop, with no other tool calls.\n1. Use the shell tool once with this command:\nprintf '%s' '${form}' > form.html && printf '%s' '${account}' > account.html && (nohup python3 -m http.server ${PORT} --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1; echo started\n2. Use browser_navigate once with this URL: http://127.0.0.1:${PORT}/form.html`,
   }),
 );
 const navigated = resultsOf(setup).find((result) => result.name === "browser_navigate");
@@ -279,6 +281,20 @@ report(/"Secret" value: hidden/.test(snapshot?.output ?? ""), "the password reac
 
 const { runs } = await client.query(api.threads.timeline, { threadId: watched.threadId });
 report(!JSON.stringify(runs).includes(SECRET), "the password appears nowhere in the thread that reaches the model");
+
+const otherAfter = await settled(
+  other,
+  await client.mutation(api.threads.send, {
+    threadId: other.threadId,
+    text: `Use browser_navigate once to open http://127.0.0.1:${PORT}/account.html and then stop, with no other tool calls.`,
+  }),
+);
+const otherAccount = resultsOf(otherAfter).find((result) => result.name === "browser_navigate");
+report(
+  otherAccount?.output.includes(`verifylogin=${nonce}`) === true,
+  "after the give-back, the other bot has the login that the person typed through the input stream",
+  otherAccount?.output.split("\n").find((line) => line.includes("cookies:")),
+);
 
 await client.mutation(api.threads.send, {
   threadId: watched.threadId,
