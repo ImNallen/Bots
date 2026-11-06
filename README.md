@@ -40,7 +40,7 @@ The orchestrator reads these optional settings from `.env.local`:
 | Command | What it proves |
 |---|---|
 | `pnpm typecheck` | Every package typechecks |
-| `pnpm test` | Identity, config, run decisions, message mapping, stream parsing, encryption, the journal, the output cap, a bot's activity, and a bot's look behave as specified |
+| `pnpm test` | Identity, config, run decisions, message mapping, stream parsing, encryption, the journal, the output cap, a bot's activity, a bot's look, a conversation's display items, and the safety rules for a bot's markdown behave as specified |
 | `pnpm verify:auth` | Tokens, live queries, user isolation, the dev guard, the link listener's boundary, and file serving work against the real Convex backend and the real orchestrator |
 | `pnpm verify:agent` | Key handling, tools, crash recovery with no duplicate side effects, fencing, cancel, timeouts, link security, isolation, secret placement, the network rules, and the limit on attempts with no progress work against the real Convex backend, a real orchestrator process, and a real `computerd` container, with a scripted fake Mistral |
 | `pnpm verify:tailnet <address> <LAN address>` | Identity, a forged header, live queries through `tailscale serve`, and closed LAN ports work on a real deployment. Run it from a device on the tailnet |

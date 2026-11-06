@@ -16,6 +16,16 @@ describe("subLineOf", () => {
     expect(subLineOf({ activity: { kind: "idle" }, lastMessage: null }).text).toBeNull();
   });
 
+  it("shows a last message as plain text, not markdown", () => {
+    const text = (message: string) => subLineOf({ activity: { kind: "idle" }, lastMessage: message }).text;
+    expect(text("## Train options I found **three** in `trains.md`")).toBe("Train options I found three in trains.md");
+    expect(text("See the [booking page](https://e.example/a) and ![chart](https://e.example/c.png)")).toBe(
+      "See the booking page and chart",
+    );
+    expect(text("- first item 2 * 3")).toBe("first item 2 * 3");
+    expect(text("1. first")).toBe("first");
+  });
+
   it("turns a tool into a friendly step and never shows a raw tool name", () => {
     const step = (tool: string | null) => subLineOf({ activity: { kind: "running", tool }, lastMessage }).text;
     expect(step("shell")).toBe("Running a command");

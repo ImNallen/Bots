@@ -18,7 +18,7 @@ export const FACE_STATES: Record<BotActivity["kind"], FaceState> = {
 const THINKING = "Thinking";
 const WORKING = "Working";
 
-const TOOL_STEPS: Record<ToolName, string> = {
+export const TOOL_STEPS: Record<ToolName, string> = {
   shell: "Running a command",
   read_file: "Reading a file",
   write_file: "Saving a file",
@@ -29,15 +29,23 @@ const TOOL_STEPS: Record<ToolName, string> = {
   browser_press: "Pressing a key",
 };
 
-function isToolName(tool: string): tool is ToolName {
+export function isToolName(tool: string): tool is ToolName {
   return Object.hasOwn(TOOL_STEPS, tool);
 }
 
-function friendlyStep(tool: string | null): string {
+export function friendlyStep(tool: string | null): string {
   if (tool === null) {
     return THINKING;
   }
   return isToolName(tool) ? TOOL_STEPS[tool] : WORKING;
+}
+
+// The list shows one line of plain text, and a bot's last message is markdown that has already lost its line breaks.
+function withoutMarkdown(message: string): string {
+  return message
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^(#{1,6}|>|[-*+]|\d+[.)])\s+/, "")
+    .replace(/\*\*|__|~~|`/g, "");
 }
 
 export type SubLine = { text: string | null; tone: "plain" | "ask" | "bad" };
@@ -54,6 +62,6 @@ export function subLineOf({ activity, lastMessage }: Pick<BotRow, "activity" | "
       return { text: "Stopped with an error", tone: "bad" };
     case "queued":
     case "idle":
-      return { text: lastMessage, tone: "plain" };
+      return { text: lastMessage === null ? null : withoutMarkdown(lastMessage), tone: "plain" };
   }
 }

@@ -135,10 +135,6 @@ pre {
   white-space: nowrap;
 }
 
-.muted {
-  color: var(--muted);
-}
-
 .error {
   color: var(--danger);
   overflow-wrap: anywhere;
@@ -687,131 +683,397 @@ pre {
 .conversation {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
   width: 100%;
   max-width: 752px;
   margin: 0 auto;
 }
 
-.message {
-  min-width: 0;
+.when {
+  align-self: center;
+  margin: 14px 0 10px;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
-.message-text {
-  white-space: pre-wrap;
+.system-line {
+  align-self: center;
+  max-width: 100%;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: center;
   overflow-wrap: anywhere;
 }
 
-.message-user {
-  align-self: flex-end;
+.bub {
+  align-self: flex-start;
+  min-width: 0;
   max-width: min(58%, 438px);
   padding: 6px 10px;
+  background: var(--bubble);
+  overflow-wrap: anywhere;
+  border-radius: 14px;
+}
+
+.mine {
+  align-self: flex-end;
+  margin: 14px 0 12px;
   background: var(--mine);
   color: var(--on-mine);
-  border-radius: 14px;
+  white-space: pre-wrap;
 }
 
-.message-assistant {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* No specificity, so the spacing between blocks below always wins over this. */
+:where(.bub ul, .bub ol, .bub pre, .bub blockquote, .bub hr) {
+  margin: 0;
 }
 
-.run-failure {
+.bub > * + *,
+.bub li > * + *,
+.bub blockquote > * + * {
+  margin-top: 8px;
+}
+
+.bub ul,
+.bub ol {
+  padding-left: 18px;
+}
+
+.bub li + li,
+.bub li > ul,
+.bub li > ol {
+  margin-top: 3px;
+}
+
+.bub li::marker {
+  color: var(--muted);
+}
+
+.bub h1,
+.bub h2,
+.bub h3,
+.bub h4,
+.bub h5,
+.bub h6 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.bub h1 {
+  font-size: 1.2em;
+}
+
+.bub h2 {
+  font-size: 1.1em;
+}
+
+.bub blockquote {
+  padding-left: 9px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+}
+
+.bub hr {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+}
+
+.bub a {
+  text-decoration: underline;
+}
+
+.bub code {
+  padding: 1px 4px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--muted);
+  font: 500 0.88em var(--mono);
+  border-radius: 4px;
+}
+
+.bub pre {
+  padding: 7px 9px;
+  overflow-x: auto;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  font: 400 12px/1.5 var(--mono);
+  overflow-wrap: normal;
+  border-radius: 8px;
+}
+
+.bub pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+.md-scroll {
+  overflow-x: auto;
+}
+
+/* The bubble's anywhere would shrink each column to one letter before the table could scroll. */
+.bub table {
+  overflow-wrap: break-word;
+  font-size: 0.95em;
+  border-collapse: collapse;
+}
+
+.bub th,
+.bub td {
+  padding: 3px 8px;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+}
+
+/* Without these, a narrow bubble crushes each column to one word per line before the table starts to scroll. */
+.bub td {
+  min-width: 7em;
+}
+
+.bub th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md-image-url {
+  color: var(--muted);
+  font-size: 0.88em;
+}
+
+.reasoning {
   align-self: flex-start;
   max-width: min(58%, 438px);
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--danger) 10%, var(--page));
-  border-radius: 14px;
-}
-
-.run-waiting {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-details > summary {
+  padding: 3px 6px;
   color: var(--muted);
+  font-size: 11.5px;
+}
+
+.reasoning summary {
   cursor: pointer;
 }
 
 .reasoning p {
   margin-top: 4px;
   padding-left: 8px;
-  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   border-left: 2px solid var(--line);
 }
 
-.tool-call {
-  display: grid;
-  gap: 4px;
+.tool {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
-  padding: 8px 10px;
-  background: var(--raised);
-  border-radius: 12px;
-  box-shadow: 0 0 0 1px var(--hair);
+  max-width: 100%;
+  margin: 3px 0;
+  padding: 3px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  border-radius: 7px;
 }
 
-.tool-call-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
+button.tool:hover {
+  color: var(--fg);
 }
 
-.tool-call-name {
-  font-weight: 600;
+.tool .icon {
+  width: 13px;
+  height: 13px;
 }
 
-.tool-call-args {
-  flex: 1 1 8rem;
+.tool span {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A model can name a tool anything, so the name has to give way as well as the summary. */
+.tool span:first-child,
+.tool code {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tool-call-status {
-  color: var(--muted);
-  font-size: 12px;
+.tool code {
+  max-width: 300px;
+  color: var(--fg);
+  font: 400 11.5px var(--ui);
+  opacity: 0.8;
 }
 
-.tool-call[data-outcome="error"] .tool-call-status,
-.tool-call[data-outcome="timeout"] .tool-call-status,
-.tool-call[data-outcome="interrupted"] .tool-call-status,
-.tool-call[data-outcome="unavailable"] .tool-call-status,
-.tool-call[data-outcome="invalid"] .tool-call-status {
+.tool[data-status="failed"],
+.tool[data-status="failed"] code {
   color: var(--danger);
+  opacity: 1;
 }
 
-.tool-call pre {
-  max-height: 20rem;
-  margin: 4px 0 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.tool-approval {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.tool-approval-args {
-  margin: 4px 0 0;
-  padding: 7px 9px;
-  max-height: 40vh;
+.out {
+  align-self: center;
+  width: min(100%, 460px);
+  max-height: 220px;
+  margin: 0 0 6px;
+  padding: 8px 10px;
   overflow: auto;
   background: var(--bubble);
+  color: var(--muted);
+  font: 400 11.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 10px;
+}
+
+.out-note {
+  margin-bottom: 4px;
+  color: var(--faint);
+}
+
+.err {
+  align-self: flex-start;
+  max-width: min(58%, 438px);
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--page));
+  color: var(--danger);
+  overflow-wrap: anywhere;
+  border-radius: 14px;
+}
+
+.ask {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(100%, 440px);
+  margin: 6px 0;
+  padding: 12px 12px 10px;
+  background: var(--raised);
+  overflow-wrap: anywhere;
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px var(--hair), 0 1px 4px rgb(0 0 0 / 0.04);
+}
+
+.ask h3 {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ask[data-done="true"] h3 {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ask-argument {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ask-label {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.ask pre {
+  max-height: 40vh;
+  margin: 0;
+  padding: 7px 9px;
+  overflow: auto;
+  background: var(--bubble);
+  font: 400 12px/1.5 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   border-radius: 8px;
+}
+
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-inline: -5px;
+  padding: 5px;
+  font-size: 13.5px;
+  text-align: left;
+  border-radius: 9px;
+}
+
+.opt:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.opt:disabled {
+  cursor: default;
+}
+
+.opt[data-on="false"]:disabled {
+  opacity: 0.5;
+}
+
+.opt i {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  background: var(--bubble);
+  color: var(--muted);
+  font: 500 10.5px var(--ui);
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.opt[data-on="true"] i {
+  background: var(--mine);
+  color: var(--on-mine);
+  box-shadow: none;
+}
+
+.live {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 2px 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.live b {
+  background: linear-gradient(90deg, var(--fg) 20%, var(--faint) 50%, var(--fg) 80%);
+  background-size: 220% 100%;
+  background-clip: text;
+  color: transparent;
+  font-weight: 400;
+  animation: sheen 2.2s linear infinite;
+}
+
+@keyframes sheen {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+
+/* After the rule above, which has the same specificity and would otherwise win. */
+@media (prefers-reduced-motion: reduce) {
+  .live b {
+    background: none;
+    color: var(--fg);
+    animation: none;
+  }
 }
 
 .dock {
@@ -840,13 +1102,12 @@ details > summary {
   flex: 1;
   min-width: 0;
   max-height: 120px;
-  padding: 5px 0;
+  padding: 3px 0;
   background: none;
   line-height: 20px;
   border: 0;
   outline: 0;
   resize: none;
-  field-sizing: content;
 }
 
 .composer textarea::placeholder {
@@ -855,6 +1116,41 @@ details > summary {
 
 .composer textarea:disabled {
   opacity: 0.6;
+}
+
+.send {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  background: var(--bot);
+  color: var(--on-bot);
+  border-radius: 50%;
+}
+
+.send:disabled {
+  background: var(--bubble);
+  color: var(--faint);
+  cursor: default;
+}
+
+.send .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.2;
+}
+
+.send-stop path {
+  fill: currentColor;
+  stroke: none;
+}
+
+.send-stopping {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 13px;
 }
 
 /* Screen, inline in the chat until it gets a view of its own */
@@ -1282,11 +1578,72 @@ button.card-row:hover {
     padding: calc(68px + var(--safe-top)) 12px 8px;
   }
 
-  .message-user,
-  .run-failure {
+  .bub,
+  .err {
     max-width: 86%;
     padding: 8px 12px;
     border-radius: 17px;
+  }
+
+  .bub pre {
+    font-size: 13px;
+  }
+
+  .reasoning {
+    max-width: 86%;
+    font-size: 13px;
+  }
+
+  .when,
+  .system-line {
+    font-size: 13px;
+  }
+
+  .tool,
+  .tool code {
+    font-size: 13px;
+  }
+
+  .tool code {
+    max-width: 180px;
+  }
+
+  .out {
+    font-size: 13px;
+  }
+
+  .ask {
+    width: 86%;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .ask h3 {
+    font-size: 16px;
+  }
+
+  .ask-label {
+    font-size: 13px;
+  }
+
+  .ask pre {
+    font-size: 13px;
+  }
+
+  .opt {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .opt i {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+    border-radius: 7px;
+  }
+
+  .live {
+    font-size: 15px;
   }
 
   .dock {
@@ -1299,8 +1656,20 @@ button.card-row:hover {
   }
 
   .composer textarea {
-    padding-block: 10px;
+    padding-block: 4px;
+    font-size: 16px;
     line-height: 24px;
+  }
+
+  .send {
+    width: 32px;
+    height: 32px;
+  }
+
+  .send-stopping {
+    width: auto;
+    font-size: 14px;
+    border-radius: 16px;
   }
 
   .btn,
