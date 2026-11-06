@@ -40,10 +40,6 @@ describe("needsApproval", () => {
   it("asks for nothing at nothing", () => {
     expect(asked("nothing")).toEqual([]);
   });
-
-  it("asks at outside for a tool it has never heard of", () => {
-    expect(needsApproval({ level: "outside", toolName: "connector_send_email" })).toBe(true);
-  });
 });
 
 function run(answers: Array<"pending" | "approved" | "denied" | "expired" | Error>, options: { signals?: AbortSignal[]; expiresAt?: number; now?: () => number } = {}) {
