@@ -1529,6 +1529,20 @@ button.card-row:hover {
   background: var(--hover);
 }
 
+.card-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.thumb {
+  flex: none;
+  width: 50px;
+  aspect-ratio: 1280 / 800;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--bot) 14%, var(--raised)), color-mix(in srgb, var(--bot) 42%, var(--raised)));
+  border-radius: 6px;
+}
+
 .select {
   position: relative;
   display: inline-flex;
@@ -1959,6 +1973,10 @@ button.card-row:hover {
   .card-row {
     min-height: 48px;
     font-size: 15px;
+  }
+
+  .card-row small {
+    font-size: 13px;
   }
 
   .select select {

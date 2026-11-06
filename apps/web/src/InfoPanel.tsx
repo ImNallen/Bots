@@ -129,7 +129,8 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
   );
 }
 
-export function InfoPanel({ bot, faceState, onClose }: { bot: Doc<"bots">; faceState: FaceState; onClose: () => void }) {
+export function InfoPanel(props: { bot: Doc<"bots">; faceState: FaceState; onClose: () => void; onOpenScreen: () => void }) {
+  const { bot, faceState, onClose, onOpenScreen } = props;
   const isPhone = useIsPhone();
   const character = characterOf(bot);
   return (
@@ -140,6 +141,16 @@ export function InfoPanel({ bot, faceState, onClose }: { bot: Doc<"bots">; faceS
       <div className="info-who">
         <BotFace character={character} size={isPhone ? 84 : 60} state={faceState} />
         <h2>{bot.name}</h2>
+      </div>
+      <h3 className="label">Computer</h3>
+      <div className="card">
+        <button type="button" className="card-row" onClick={onOpenScreen}>
+          <span>
+            {bot.name}'s screen
+            <small>Watch it work, or take over</small>
+          </span>
+          <span className="thumb" />
+        </button>
       </div>
       <h3 className="label">Approvals</h3>
       <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />

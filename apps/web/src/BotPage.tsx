@@ -317,7 +317,7 @@ function BotChat({ botId }: { botId: string }) {
         </header>
         <BotThread botId={bot._id} botName={bot.name} character={character} />
       </div>
-      {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} />}
+      {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} onOpenScreen={openScreen} />}
       {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} onClose={closeScreen} />}
     </div>
   );
