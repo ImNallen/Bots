@@ -79,8 +79,14 @@ export function parseHolder(text: string): string | null {
   return botId !== undefined && SAFE_BOT_ID.test(botId) ? botId : null;
 }
 
-export function createDesktops(args: { systemd: Systemd; runtimeDir: string; now?: () => number }): Desktops {
-  const { systemd, runtimeDir, now = Date.now } = args;
+export function createDesktops(args: {
+  systemd: Systemd;
+  runtimeDir: string;
+  // Gives a browser the logins it lacks, before anything uses it. It must not reject.
+  catchUp?: (cdpPort: number) => Promise<void>;
+  now?: () => number;
+}): Desktops {
+  const { systemd, runtimeDir, catchUp, now = Date.now } = args;
   const claims = new Map<string, Claim>();
   const holds = new Map<string, number>();
   // Every stop stays here until it ends, and every claim waits for the set. So a bot that comes back during its own stop finds
@@ -185,6 +191,7 @@ export function createDesktops(args: { systemd: Systemd; runtimeDir: string; now
           await claim.ready;
           // On every acquire. This one call is all the health checking computerd does.
           await systemd.start(claim.slot);
+          await catchUp?.(desktopOf(claim.slot).cdpPort);
           return { ...desktopOf(claim.slot), release };
         }
       } catch (error) {

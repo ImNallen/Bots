@@ -536,3 +536,25 @@ describe("the holder file", () => {
     expect(parseHolder("BOT_ID=a b\n")).toBeNull();
   });
 });
+
+describe("catching up on logins", () => {
+  it("gives a browser its logins after it starts and before anything can use it", async () => {
+    const order: string[] = [];
+    pid1.onCall((call) => {
+      if (call.startsWith("start")) {
+        order.push("start");
+      }
+    });
+    const desktops = createDesktops({
+      systemd: pid1.systemd,
+      runtimeDir,
+      now: () => clock,
+      catchUp: async (cdpPort) => {
+        order.push(`catch up ${cdpPort}`);
+      },
+    });
+    const lease = await desktops.acquire("a");
+    order.push("lease");
+    expect(order).toEqual(["start", `catch up ${lease.cdpPort}`, "lease"]);
+  });
+});

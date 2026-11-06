@@ -1,5 +1,5 @@
 import { isBrowserInvocation } from "@bots/protocol";
-import { createBrowser } from "./browser.ts";
+import { createBrowser, webSocketConnector } from "./browser.ts";
 import { createCalls } from "./calls.ts";
 import { parseConfig } from "./config.ts";
 import { createDesktops, createSystemd } from "./desktops.ts";
@@ -7,9 +7,11 @@ import { executeSystemTool } from "./execute.ts";
 import { openJournal } from "./journal.ts";
 import { connectLink } from "./link.ts";
 import { log } from "./log.ts";
+import { createLogins } from "./logins.ts";
 import { relayScreen } from "./screens.ts";
 
-const JOURNAL_DIR = "/var/lib/computerd/journal";
+const STATE_DIR = "/var/lib/computerd";
+const JOURNAL_DIR = `${STATE_DIR}/journal`;
 const RUNTIME_DIR = "/run/computerd";
 const JOURNAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -29,7 +31,10 @@ setInterval(() => {
 }, JOURNAL_PRUNE_INTERVAL_MS);
 
 const systemd = createSystemd();
-const desktops = createDesktops({ systemd, runtimeDir: RUNTIME_DIR });
+const logins = createLogins({ dir: STATE_DIR, connector: webSocketConnector });
+const desktops = createDesktops({ systemd, runtimeDir: RUNTIME_DIR, catchUp: logins.catchUp });
+// Not awaited, because a slow desktop should not hold back the link. It is first on its chain, so it runs ahead of any stream.
+void logins.recover(desktops.acquire);
 setInterval(() => {
   desktops.sweep().catch((error: unknown) => {
     log({ level: "warn", event: "desktop-sweep-failed", message: error instanceof Error ? error.message : "unknown error" });
@@ -63,6 +68,10 @@ connectLink({
       mode,
       acquire: () => desktops.acquire(botId),
       restartInput: systemd.restartInput,
+      logins: {
+        opened: (cdpPort) => logins.opened(botId, cdpPort),
+        closed: (cdpPort) => logins.closed(botId, cdpPort),
+      },
     });
   },
 });
