@@ -65,13 +65,13 @@ export const COLORS: Record<BotColor, { fill: string; bubble: string }> = {
   black: { fill: "#000000", bubble: "#222222" },
   brown: { fill: "#a06c3a", bubble: "#8a5b2e" },
   red: { fill: "#fb2c3e", bubble: "#d82433" },
-  orange: { fill: "#fd6910", bubble: "#d45a17" },
-  amber: { fill: "#f69313", bubble: "#c4740a" },
-  green: { fill: "#18c170", bubble: "#0f9a58" },
-  teal: { fill: "#1ab7a2", bubble: "#12917f" },
+  orange: { fill: "#fd6910", bubble: "#c55415" },
+  amber: { fill: "#f69313", bubble: "#ac6609" },
+  green: { fill: "#18c170", bubble: "#0d884e" },
+  teal: { fill: "#1ab7a2", bubble: "#118575" },
   blue: { fill: "#2186fc", bubble: "#1b6fd6" },
   purple: { fill: "#8f59f9", bubble: "#7a47e6" },
-  pink: { fill: "#fa3598", bubble: "#dc2a84" },
+  pink: { fill: "#fa3598", bubble: "#da2a83" },
   grey: { fill: "#959595", bubble: "#767676" },
 };
 
