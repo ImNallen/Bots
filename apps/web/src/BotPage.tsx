@@ -10,6 +10,7 @@ import { characterOf, tintOf, type Character } from "./character.ts";
 import { conversationItems, isActive, type Timeline } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
+import type { ProfileEdits } from "./profileEdits.ts";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
@@ -245,6 +246,7 @@ function BotChat({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const router = useRouter();
   const isPhone = useIsPhone();
+  const [profileEdits, setProfileEdits] = useState<ProfileEdits>({});
   const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW).kind;
   if (bot === undefined) {
     return (
@@ -296,7 +298,10 @@ function BotChat({ botId }: { botId: string }) {
             onClick={info === true ? closeInfo : openInfo}
           >
             <BotFace character={character} size={isPhone ? 26 : 20} state={faceState} />
-            <span>{bot.name}</span>
+            <span className="pill-who">
+              <span>{bot.name}</span>
+              {bot.title !== undefined && <small>{bot.title}</small>}
+            </span>
           </button>
           {isPhone ? (
             <button type="button" className="round chat-screen" aria-label={`${bot.name}'s screen`} onClick={openScreen}>
@@ -310,7 +315,16 @@ function BotChat({ botId }: { botId: string }) {
         </header>
         <BotThread botId={bot._id} botName={bot.name} character={character} />
       </div>
-      {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} onOpenScreen={openScreen} />}
+      {info === true && (
+        <InfoPanel
+          bot={bot}
+          faceState={faceState}
+          profileEdits={profileEdits}
+          onProfileEditsChange={setProfileEdits}
+          onClose={closeInfo}
+          onOpenScreen={openScreen}
+        />
+      )}
       {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} onClose={closeScreen} />}
     </div>
   );
