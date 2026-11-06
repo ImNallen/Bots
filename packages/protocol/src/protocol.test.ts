@@ -168,6 +168,13 @@ describe("parseToolCall", () => {
     const shell = toolDefinitions[0]?.function.parameters;
     expect(shell).toMatchObject({ required: ["command"] });
   });
+
+  it("sends the model only each tool's name, description, and parameters", () => {
+    for (const tool of toolDefinitions) {
+      expect(Object.keys(tool).sort()).toEqual(["function", "type"]);
+      expect(Object.keys(tool.function).sort()).toEqual(["description", "name", "parameters"]);
+    }
+  });
 });
 
 describe("link messages", () => {

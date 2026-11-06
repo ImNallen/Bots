@@ -1,12 +1,29 @@
 import type { Id } from "@bots/convex/dataModel";
+import type { ToolName } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 import { needsApproval, waitForApproval, type ApprovalLevel } from "./approvals.ts";
 
 const ID = "approval" as Id<"approvals">;
-const TOOLS = ["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press"];
+const LEVELS: ApprovalLevel[] = ["everything", "outside", "shell", "nothing"];
+const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
+  shell: { everything: true, outside: true, shell: true, nothing: false },
+  read_file: { everything: true, outside: false, shell: false, nothing: false },
+  write_file: { everything: true, outside: false, shell: false, nothing: false },
+  browser_navigate: { everything: true, outside: false, shell: false, nothing: false },
+  browser_snapshot: { everything: true, outside: false, shell: false, nothing: false },
+  browser_click: { everything: true, outside: true, shell: false, nothing: false },
+  browser_type: { everything: true, outside: true, shell: false, nothing: false },
+  browser_press: { everything: true, outside: true, shell: false, nothing: false },
+};
+const TOOLS = Object.keys(ANSWERS) as ToolName[];
 
 describe("needsApproval", () => {
   const asked = (level: ApprovalLevel) => TOOLS.filter((toolName) => needsApproval({ level, toolName }));
+
+  it.each(TOOLS)("gives the expected answer at every level for %s", (toolName) => {
+    const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName })]));
+    expect(answers).toEqual(ANSWERS[toolName]);
+  });
 
   it("asks for every tool at everything", () => {
     expect(asked("everything")).toEqual(TOOLS);
