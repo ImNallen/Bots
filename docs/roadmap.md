@@ -149,7 +149,8 @@ This is a proposal, so change it if you find a better answer:
 1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stayed inline in the chat until its own unit.
 2. Done. Chat with markdown: `conversation.ts` turns the timeline into display items, bot output renders as markdown with no raw HTML, no remote images, and only `http`, `https`, and `mailto` links, approvals are question cards, and the composer has its new design. Tested with a scripted fake model at 1280 and 412 wide, in light and dark.
 3. Done. The screen is a full-screen view, opened from the chat's header or the info panel and tracked in the URL, so a back gesture leaves it. One reducer in `screenState.ts` decides its states. On a device with a coarse pointer it has the typing box and key bar, and a phone on its side has the stream beside its controls. A bot's row now carries `takeoverUntil`, and a timer in the page ends "You have the screen" at that moment. Docker's `computerd` has no desktop, so this was tested with a fake `RFB` class and with the real noVNC library against a fake VNC server, at 1280 wide, 412 by 860, and 844 by 390. A real stream, real input on a desktop, a real phone, and a real on-screen keyboard are untested until the owner accepts this step.
-4. Next. Final settings polish.
+4. Done. Settings has a left navigation with General and Mistral key on a computer, and one column on a phone. A question card says how many rendered lines of an argument are below its box, counting wrapped lines, and updates as the person scrolls. The sign-in, reconnecting, problem, and not-found notices share one look, a focus ring inside a card or the bot list is no longer clipped, and five bubble colours are darker so white text reaches 4.5:1, which a test now holds. Tested with a scripted fake model at 1280 and 412 wide, in light and dark. A real phone's touch scrolling and hidden scrollbars are untested until the owner accepts this step.
+5. Next. Deploy this to the control VM, run `verify:screen` and `verify:takeover` there, and then have the owner accept it on a real phone and a real computer.
 
 ## After step 3: deploy from `main`
 
@@ -164,7 +165,8 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
-- A long argument in a question card scrolls inside the card, and a device that hides scrollbars gives no sign that more exists. A bot can pad a command to push its dangerous part out of view.
+- A question card says how many lines of a long argument are out of view, but Approve still works before the person scrolls to the end. A bot's padding can still hide the dangerous part of a command from someone who ignores that line.
+- A focus ring takes the bot's colour, as the prototype does. On a light page, amber, green, teal, and grey rings fall below 3:1, measured at 2.25, 2.30, 2.45, and 2.92.
 - A question card shows an argument's text as it is, so Unicode bidirectional controls may change how a command reads. Nobody has tested this.
 - A markdown link's text can differ from where it goes, and a phone has no hover to show the address. An image shows its URL, and a link does not.
 - A stopped run loses the words that had streamed so far, because the timeline returns a stream only for an active run.
