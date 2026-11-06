@@ -137,7 +137,7 @@ The owner decided these on 2026-11-06, after trying a prototype:
 - Match Grok Bot's layout, flows, and style closely. Colours and proportions come from measuring the references. Keep this project's own name and copy, and draw the bot shapes here instead of tracing Grok Bot's, because this repository is public.
 - Bots have 13 shapes and 11 colours, as in Grok Bot's create dialog. Two optional fields on `bots` store them, and a bot without them takes its look from its id.
 - One read-only query gives the bot list each bot's activity and last message.
-- The backend changes for this step stop at those two things.
+- The backend changes for this step stop at those two things and `createdAt`, a read-only field on each run that `threads.timeline` returns for the chat's time labels.
 - Grok Bot's top grid holds its built-in bots. Bots has none, so every bot is a row. Pinning would be a new feature.
 
 This is a proposal, so change it if you find a better answer:
@@ -147,8 +147,8 @@ This is a proposal, so change it if you find a better answer:
 ### Progress on the redesign
 
 1. Done. The foundation: the shape and colour fields, `bots.overview`, the design tokens, bot faces, the sidebar and bot page, the info panel, and the new bot and Settings dialogs. The screen panel stays inline in the chat until its own unit, and tested on a Mac only in its "not connected" state, because Docker's `computerd` has no desktop.
-2. Next. Chat with markdown.
-3. The screen panel.
+2. Done. Chat with markdown: `conversation.ts` turns the timeline into display items, bot output renders as markdown with no raw HTML, no remote images, and only `http`, `https`, and `mailto` links, approvals are question cards, and the composer has its new design. Tested with a scripted fake model at 1280 and 412 wide, in light and dark.
+3. Next. The screen panel.
 4. Final settings polish.
 
 ## After step 3: deploy from `main`
@@ -164,7 +164,11 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
-- The web UI shows raw markdown.
+- A long argument in a question card scrolls inside the card, and a device that hides scrollbars gives no sign that more exists. A bot can pad a command to push its dangerous part out of view.
+- A question card shows an argument's text as it is, so Unicode bidirectional controls may change how a command reads. Nobody has tested this.
+- A markdown link's text can differ from where it goes, and a phone has no hover to show the address. An image shows its URL, and a link does not.
+- A stopped run loses the words that had streamed so far, because the timeline returns a stream only for an active run.
+- The bot list strips markdown from a last message with a few patterns, on text already cut to 140 characters, so some marks can still show.
 - A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
 - `bots.overview` compares a take-over's end with `Date.now()`, and Convex does not rerun a query because time passes. So after a closed tab or a sleeping phone, an idle bot's row says "You have the screen" until something the query reads changes. A reload does not clear it. Any new run or change to one of the owner's bots does.
 - In a long conversation, the inline screen panel scrolls out of sight at the top of the chat. Its own unit in the redesign replaces it.
