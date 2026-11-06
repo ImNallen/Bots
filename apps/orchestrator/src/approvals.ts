@@ -5,18 +5,25 @@ export type ApprovalLevel = "everything" | "outside" | "shell" | "nothing";
 
 const POLL_MS = 2000;
 
-const ASKS_AT_OUTSIDE: Record<ToolEffect, boolean> = { reads: false, changesVm: false, changesOutside: true };
+const ASKS_AT_OUTSIDE: Record<ToolEffect, (touchedComputer: boolean) => boolean> = {
+  reads: () => false,
+  changesVm: () => false,
+  changesOutside: () => true,
+  // A save with nothing read from outside yet is the owner's own conversation. After a tool has brought something back, a page could
+  // be behind the save, so the owner sees the exact text first.
+  changesMemory: (touchedComputer) => touchedComputer,
+};
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
 export const EXPIRED_OUTPUT = "The user did not answer in time, so this call did not run.";
 export const NOT_SENT_CANCELLED_OUTPUT = "The run was cancelled while this call waited for approval, so it did not run.";
 
-export function needsApproval(args: { level: ApprovalLevel; toolName: ToolName }): boolean {
+export function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }): boolean {
   switch (args.level) {
     case "everything":
       return true;
     case "outside":
-      return ASKS_AT_OUTSIDE[toolEffect(args.toolName)];
+      return ASKS_AT_OUTSIDE[toolEffect(args.toolName)](args.touchedComputer);
     case "shell":
       return args.toolName === "shell";
     case "nothing":

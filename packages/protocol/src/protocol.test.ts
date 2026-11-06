@@ -8,9 +8,12 @@ import {
   orchestratorMessage,
   parseJsonMessage,
   isBrowserInvocation,
+  isComputerTool,
+  isMemoryInvocation,
   parseToolCall,
   toolDefinitions,
   toolEffect,
+  toolInvocation,
   type ToolEffect,
   type ToolName,
 } from "./index.ts";
@@ -163,6 +166,8 @@ describe("parseToolCall", () => {
       "browser_click",
       "browser_type",
       "browser_press",
+      "memory_save",
+      "memory_forget",
     ]);
     for (const tool of toolDefinitions) {
       expect(tool.function.parameters).toMatchObject({ type: "object" });
@@ -191,9 +196,51 @@ describe("toolEffect", () => {
       browser_click: "changesOutside",
       browser_type: "changesOutside",
       browser_press: "changesOutside",
+      memory_save: "changesMemory",
+      memory_forget: "changesMemory",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);
+  });
+});
+
+describe("memory tools", () => {
+  const save = { name: "memory_save", args: { text: "Out on Fridays." } };
+
+  it("parses a save and a forget into memory invocations", () => {
+    const parsed = parseToolCall({ name: "memory_save", arguments: JSON.stringify(save.args) });
+    expect(parsed).toEqual({ kind: "ok", invocation: save });
+    expect(parseToolCall({ name: "memory_forget", arguments: '{"id":"abc"}' })).toEqual({
+      kind: "ok",
+      invocation: { name: "memory_forget", args: { id: "abc" } },
+    });
+  });
+
+  it.each([
+    ["a save with no text", "memory_save", "{}"],
+    ["a save with a second field", "memory_save", '{"text":"a","id":"b"}'],
+    ["a forget with no id", "memory_forget", "{}"],
+    ["a forget with a number for its id", "memory_forget", '{"id":1}'],
+  ])("rejects %s", (_label, name, raw) => {
+    expect(parseToolCall({ name, arguments: raw }).kind).toBe("invalid");
+  });
+
+  it("tells a memory invocation from a computer tool's", () => {
+    expect(isMemoryInvocation({ name: "memory_save", args: { text: "a" } })).toBe(true);
+    expect(isMemoryInvocation({ name: "memory_forget", args: { id: "a" } })).toBe(true);
+    expect(isMemoryInvocation({ name: "read_file", args: { path: "a" } })).toBe(false);
+  });
+
+  it("counts every published tool but the memory tools as a computer tool, and no unknown name", () => {
+    const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
+    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press"]);
+    expect(isComputerTool("constructor")).toBe(false);
+  });
+
+  it("stays off the link's wire type, so a computerd closes the link on a memory call", () => {
+    expect(toolInvocation.safeParse(save).success).toBe(false);
+    const raw = JSON.stringify({ kind: "toolCall", callId: "a:b", botId: "bot", tool: save });
+    expect(parseJsonMessage({ raw, schema: orchestratorMessage })).toBeNull();
   });
 });
 

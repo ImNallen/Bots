@@ -1,5 +1,5 @@
 import type { Doc } from "@bots/convex/dataModel";
-import { TOOL_CALL_ID, WORKSPACE_ROOT } from "@bots/protocol";
+import { TOOL_CALL_ID, WORKSPACE_ROOT, isComputerTool } from "@bots/protocol";
 import type { MistralMessage } from "./mistral.ts";
 
 export type RunEventBody = Doc<"runEvents">["body"];
@@ -34,6 +34,16 @@ export function nextAction(events: readonly RunEventBody[]): NextAction {
     return { kind: "finish" };
   }
   return turns.length >= MAX_ASSISTANT_TURNS ? { kind: "fail", reason: "step-limit" } : { kind: "callModel" };
+}
+
+const BROUGHT_NOTHING_BACK: ReadonlySet<ToolResultBody["outcome"]> = new Set(["denied", "invalid"]);
+
+// Read from this run's stored events, so a resumed run decides the same way. A result that may have brought something back counts,
+// and that includes an unknown outcome such as unavailable.
+export function touchedComputer(events: readonly RunEventBody[]): boolean {
+  return events.some(
+    (event) => event.kind === "toolResult" && isComputerTool(event.name) && !BROUGHT_NOTHING_BACK.has(event.outcome),
+  );
 }
 
 const RUN_ENDED_EARLY = "[The previous run ended before a final reply.]";

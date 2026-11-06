@@ -55,14 +55,28 @@ export const toolInvocation = z.discriminatedUnion("name", [
 ]);
 
 export type ToolInvocation = z.infer<typeof toolInvocation>;
-export type ToolName = ToolInvocation["name"];
 export type BrowserInvocation = Extract<ToolInvocation, { name: `browser_${string}` }>;
+
+// The orchestrator runs these against Convex. toolInvocation is the link's wire type and leaves them out, so a memory call passed to
+// Link.call fails to compile, and computerd would refuse one.
+const memorySaveArgs = z.strictObject({ text: z.string() });
+const memoryForgetArgs = z.strictObject({ id: z.string() });
+
+export const memoryInvocation = z.discriminatedUnion("name", [
+  z.strictObject({ name: z.literal("memory_save"), args: memorySaveArgs }),
+  z.strictObject({ name: z.literal("memory_forget"), args: memoryForgetArgs }),
+]);
+
+export type MemoryInvocation = z.infer<typeof memoryInvocation>;
+export type ToolName = ToolInvocation["name"] | MemoryInvocation["name"];
 
 export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvocation {
   return tool.name.startsWith("browser_");
 }
 
-export type ToolEffect = "reads" | "changesVm" | "changesOutside";
+export type ToolEffect = "reads" | "changesVm" | "changesMemory" | "changesOutside";
+
+type ToolRow<Effect extends ToolEffect> = { description: string; args: z.ZodType; effect: Effect };
 
 const TOOLS = {
   shell: {
@@ -110,10 +124,31 @@ const TOOLS = {
     args: browserPressArgs,
     effect: "changesOutside",
   },
-} as const satisfies Record<ToolName, { description: string; args: z.ZodType; effect: ToolEffect }>;
+  memory_save: {
+    description:
+      "Save a short note that you will read in every later conversation. Save lasting preferences, rules your owner asked for, and facts that stay true. Never save passwords, tokens, card numbers, or contact details. Tell your owner when you save.",
+    args: memorySaveArgs,
+    effect: "changesMemory",
+  },
+  memory_forget: {
+    description:
+      'Forget one of your own notes by its id. You cannot forget a note whose by is "owner". To correct a note, forget it and save a new one.',
+    args: memoryForgetArgs,
+    effect: "changesMemory",
+  },
+} as const satisfies Record<ToolInvocation["name"], ToolRow<Exclude<ToolEffect, "changesMemory">>> &
+  Record<MemoryInvocation["name"], ToolRow<"changesMemory">>;
 
 export function toolEffect(name: ToolName): ToolEffect {
   return TOOLS[name].effect;
+}
+
+export function isMemoryInvocation(tool: ToolInvocation | MemoryInvocation): tool is MemoryInvocation {
+  return toolEffect(tool.name) === "changesMemory";
+}
+
+export function isComputerTool(name: string): boolean {
+  return Object.hasOwn(TOOLS, name) && toolEffect(name as ToolName) !== "changesMemory";
 }
 
 export const toolDefinitions = Object.entries(TOOLS).map(([name, tool]) => {
@@ -122,8 +157,10 @@ export const toolDefinitions = Object.entries(TOOLS).map(([name, tool]) => {
 });
 
 export type ParsedToolCall =
-  | { kind: "ok"; invocation: ToolInvocation }
+  | { kind: "ok"; invocation: ToolInvocation | MemoryInvocation }
   | { kind: "invalid"; reason: string };
+
+const anyInvocation = z.discriminatedUnion("name", [...toolInvocation.options, ...memoryInvocation.options]);
 
 export function parseToolCall(args: { name: string; arguments: string }): ParsedToolCall {
   if (!Object.hasOwn(TOOLS, args.name)) {
@@ -138,7 +175,7 @@ export function parseToolCall(args: { name: string; arguments: string }): Parsed
   } catch {
     return { kind: "invalid", reason: `The arguments to ${args.name} are not valid JSON.` };
   }
-  const parsed = toolInvocation.safeParse({ name: args.name, args: raw });
+  const parsed = anyInvocation.safeParse({ name: args.name, args: raw });
   if (!parsed.success) {
     return {
       kind: "invalid",

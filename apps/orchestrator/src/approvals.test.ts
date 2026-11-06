@@ -14,15 +14,40 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
   browser_click: { everything: true, outside: true, shell: false, nothing: false },
   browser_type: { everything: true, outside: true, shell: false, nothing: false },
   browser_press: { everything: true, outside: true, shell: false, nothing: false },
+  memory_save: { everything: true, outside: false, shell: false, nothing: false },
+  memory_forget: { everything: true, outside: false, shell: false, nothing: false },
 };
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
+const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget"];
 
 describe("needsApproval", () => {
-  const asked = (level: ApprovalLevel) => TOOLS.filter((toolName) => needsApproval({ level, toolName }));
+  const asked = (level: ApprovalLevel, touchedComputer = false) =>
+    TOOLS.filter((toolName) => needsApproval({ level, toolName, touchedComputer }));
 
-  it.each(TOOLS)("gives the expected answer at every level for %s", (toolName) => {
-    const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName })]));
+  it.each(TOOLS)("gives the expected answer at every level for %s, before any computer tool", (toolName) => {
+    const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, touchedComputer: false })]));
     expect(answers).toEqual(ANSWERS[toolName]);
+  });
+
+  it.each(TOOLS.filter((toolName) => !MEMORY_TOOLS.includes(toolName)))(
+    "gives %s the same answers after a computer tool",
+    (toolName) => {
+      const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, touchedComputer: true })]));
+      expect(answers).toEqual(ANSWERS[toolName]);
+    },
+  );
+
+  it.each(MEMORY_TOOLS)("asks for %s at outside only after a computer tool", (toolName) => {
+    expect(needsApproval({ level: "outside", toolName, touchedComputer: false })).toBe(false);
+    expect(needsApproval({ level: "outside", toolName, touchedComputer: true })).toBe(true);
+  });
+
+  it.each(MEMORY_TOOLS)("gives %s the same answer at the other levels, whatever the run has touched", (toolName) => {
+    for (const touchedComputer of [false, true]) {
+      expect(needsApproval({ level: "everything", toolName, touchedComputer })).toBe(true);
+      expect(needsApproval({ level: "shell", toolName, touchedComputer })).toBe(false);
+      expect(needsApproval({ level: "nothing", toolName, touchedComputer })).toBe(false);
+    }
   });
 
   it("asks for every tool at everything", () => {
@@ -33,12 +58,18 @@ describe("needsApproval", () => {
     expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press"]);
   });
 
+  it("also asks for the memory tools at outside after a computer tool", () => {
+    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget"]);
+  });
+
   it("asks only for shell at shell", () => {
     expect(asked("shell")).toEqual(["shell"]);
+    expect(asked("shell", true)).toEqual(["shell"]);
   });
 
   it("asks for nothing at nothing", () => {
     expect(asked("nothing")).toEqual([]);
+    expect(asked("nothing", true)).toEqual([]);
   });
 });
 

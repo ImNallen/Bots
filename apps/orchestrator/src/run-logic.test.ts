@@ -4,6 +4,7 @@ import {
   nextAction,
   systemPrompt,
   toMistralMessages,
+  touchedComputer,
   withUniqueToolCallIds,
   type PromptNote,
   type RunEventBody,
@@ -255,6 +256,47 @@ describe("systemPrompt", () => {
     it("has no notes block for a bot with no notes", () => {
       expect(systemPrompt({ ...base, about })).not.toContain("[Notes]");
     });
+  });
+});
+
+describe("touchedComputer", () => {
+  const body = (name: string, outcome: Extract<RunEventBody, { kind: "toolResult" }>["outcome"]): RunEventBody => ({
+    kind: "toolResult",
+    toolCallId: "a",
+    name,
+    outcome,
+    output: "",
+    truncated: false,
+  });
+
+  it("is false for a run with no tool result", () => {
+    expect(touchedComputer([user, turn([call("a")])])).toBe(false);
+  });
+
+  it.each(["ok", "error", "timeout", "interrupted", "unavailable", "cancelled"] as const)(
+    "is true once a computer tool has a result with outcome %s, because it may have brought something back",
+    (outcome) => {
+      expect(touchedComputer([user, turn([call("a")]), body("read_file", outcome)])).toBe(true);
+    },
+  );
+
+  it.each(["denied", "invalid"] as const)("is false after a computer tool's result with outcome %s, because it brought nothing back", (outcome) => {
+    expect(touchedComputer([user, turn([call("a")]), body("shell", outcome)])).toBe(false);
+  });
+
+  it("does not count a memory tool's result", () => {
+    expect(touchedComputer([user, body("memory_save", "ok"), body("memory_forget", "error")])).toBe(false);
+  });
+
+  it("does not count a name that is no tool", () => {
+    expect(touchedComputer([user, body("browse", "error")])).toBe(false);
+  });
+
+  it("stays true after later results, so a resumed run that reads the same events decides the same way", () => {
+    const events = [user, body("memory_save", "ok"), body("read_file", "ok"), body("memory_save", "denied"), body("shell", "denied")];
+    expect(touchedComputer(events)).toBe(true);
+    expect(touchedComputer(events.slice(0, 2))).toBe(false);
+    expect(touchedComputer(structuredClone(events))).toBe(true);
   });
 });
 

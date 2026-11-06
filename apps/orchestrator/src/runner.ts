@@ -1,6 +1,6 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { makeCallId, parseToolCall, toolDefinitions } from "@bots/protocol";
+import { isMemoryInvocation, makeCallId, parseToolCall, toolDefinitions } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
@@ -13,8 +13,8 @@ import {
   nextAction,
   systemPrompt,
   toMistralMessages,
+  touchedComputer,
   withUniqueToolCallIds,
-  type RunEventBody,
   type ToolCall,
 } from "./run-logic.ts";
 import { decryptApiKey } from "./secrets.ts";
@@ -34,6 +34,7 @@ const STEP_LIMIT_REASON = `The run stopped after ${MAX_ASSISTANT_TURNS} model tu
 
 type Claim = Extract<FunctionReturnType<typeof api.runs.claim>, { kind: "claimed" }>;
 type RunEvent = Pick<Doc<"runEvents">, "runId" | "body">;
+type AppendBody = FunctionArgs<typeof api.runs.append>["body"];
 
 type Lease = {
   lost: AbortSignal;
@@ -183,8 +184,9 @@ async function runTool(args: {
   claim: Claim;
   lease: Lease;
   call: ToolCall;
-}): Promise<RunEventBody> {
-  const { deps, runId, claim, lease, call } = args;
+  touched: boolean;
+}): Promise<AppendBody> {
+  const { deps, runId, claim, lease, call, touched } = args;
   const slot = deps.slotFor(runId);
   const base = { kind: "toolResult" as const, toolCallId: call.id, name: call.name };
   const parsed = parseToolCall(call);
@@ -193,10 +195,11 @@ async function runTool(args: {
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
-  if (needsApproval({ level, toolName: parsed.invocation.name })) {
+  const { invocation } = parsed;
+  if (needsApproval({ level, toolName: invocation.name, touchedComputer: touched })) {
     const decision = await waitForApproval({
       request: () =>
-        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: parsed.invocation.name }),
+        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name }),
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
       expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
       now: Date.now,
@@ -220,6 +223,15 @@ async function runTool(args: {
         return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
     }
   }
+  // A memory call touches no screen, so it does not wait for a take-over. It goes out through append, in one mutation with its result.
+  if (isMemoryInvocation(invocation)) {
+    if (lease.cancel.aborted) {
+      return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+    }
+    return invocation.name === "memory_save"
+      ? { kind: "memorySave", toolCallId: call.id, text: invocation.args.text }
+      : { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
+  }
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),
     now: Date.now,
@@ -231,12 +243,12 @@ async function runTool(args: {
   }).finally(() => slot.reclaim());
   lease.lost.throwIfAborted();
   const callId = makeCallId({ runId, toolCallId: call.id });
-  deps.log({ level: "info", event: "tool-dispatch", callId, tool: parsed.invocation.name });
+  deps.log({ level: "info", event: "tool-dispatch", callId, tool: invocation.name });
   const result = await deps.link.call({
     ownerId: claim.ownerId,
     callId,
     botId: claim.botId,
-    tool: parsed.invocation,
+    tool: invocation,
     lost: lease.lost,
     cancel: lease.cancel,
   });
@@ -252,10 +264,10 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   const events = await loadThreadEvents(service, claim.threadId);
   let nextSeq = claim.nextSeq;
 
-  async function append(body: RunEventBody): Promise<void> {
-    await service.mutation(api.runs.append, { runId, leaseToken, expectedSeq: nextSeq, body });
+  async function append(body: AppendBody): Promise<void> {
+    const stored = await service.mutation(api.runs.append, { runId, leaseToken, expectedSeq: nextSeq, body });
     nextSeq += 1;
-    events.push({ runId, body });
+    events.push({ runId, body: stored });
   }
 
   async function finish(state: FunctionArgs<typeof api.runs.finish>["state"]): Promise<void> {
@@ -279,7 +291,7 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
         await finish({ kind: "failed", reason: STEP_LIMIT_REASON });
         return;
       case "runTool":
-        await append(await runTool({ deps, runId, claim, lease, call: action.call }));
+        await append(await runTool({ deps, runId, claim, lease, call: action.call, touched: touchedComputer(runEvents) }));
         break;
       case "callModel": {
         let result: CompletionResult;
