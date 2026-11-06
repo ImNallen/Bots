@@ -16,6 +16,13 @@ import { useIsPhone } from "./useIsPhone.ts";
 
 const STICK_TO_BOTTOM_PX = 80;
 
+function fitToContent(field: HTMLTextAreaElement | null) {
+  if (field !== null) {
+    field.style.height = "auto";
+    field.style.height = `${field.scrollHeight}px`;
+  }
+}
+
 function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][number] | undefined; botName: string }) {
   const { threadId, activeRun, botName } = props;
   const send = useMutation(api.threads.send);
@@ -25,13 +32,12 @@ function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][
   const [error, setError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
 
-  useLayoutEffect(() => {
-    const element = field.current;
-    if (element !== null) {
-      element.style.height = "auto";
-      element.style.height = `${element.scrollHeight}px`;
-    }
-  }, [text]);
+  useLayoutEffect(() => fitToContent(field.current), [text]);
+  useEffect(() => {
+    const refit = () => fitToContent(field.current);
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  }, []);
 
   async function submit() {
     if (text.trim() === "" || sending || activeRun !== undefined) {
