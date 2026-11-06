@@ -11,7 +11,7 @@ import { conversationItems, isActive, type Timeline } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import { ScreenPanel } from "./ScreenPanel.tsx";
-import { ProblemNotice, errorMessage } from "./session.tsx";
+import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
 const STICK_TO_BOTTOM_PX = 80;
@@ -254,14 +254,7 @@ function BotChat({ botId }: { botId: string }) {
     );
   }
   if (bot === null) {
-    return (
-      <section className="notice">
-        <h2>Bot not found</h2>
-        <p>
-          <Link to="/">Go to your bots</Link>
-        </p>
-      </section>
-    );
+    return <NotFoundNotice title="Bot not found" />;
   }
   const params = { botId };
   const character = characterOf(bot);

@@ -1,4 +1,5 @@
 import { api } from "@bots/convex";
+import { Link } from "@tanstack/react-router";
 import { ConvexError } from "convex/values";
 import { useConvexAuth, useMutation } from "convex/react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -19,6 +20,17 @@ export function ProblemNotice({ title, message }: { title: string; message: stri
       <button type="button" className="btn btn-go" onClick={() => window.location.reload()}>
         Try again
       </button>
+    </section>
+  );
+}
+
+export function NotFoundNotice({ title }: { title: string }) {
+  return (
+    <section className="notice">
+      <h2>{title}</h2>
+      <Link to="/" className="btn btn-go">
+        Go to your bots
+      </Link>
     </section>
   );
 }

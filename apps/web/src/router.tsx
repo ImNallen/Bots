@@ -9,6 +9,7 @@ import { AppShell } from "./AppShell.tsx";
 import { useAuthReconnecting } from "./auth.tsx";
 import { BotPage } from "./BotPage.tsx";
 import { Home } from "./Home.tsx";
+import { NotFoundNotice, ProblemNotice } from "./session.tsx";
 
 function RootLayout() {
   const reconnecting = useAuthReconnecting();
@@ -25,23 +26,11 @@ function RootLayout() {
 }
 
 function RouteError({ error }: ErrorComponentProps) {
-  return (
-    <section className="notice" role="alert">
-      <h2>Something went wrong</h2>
-      <p>{error instanceof Error ? error.message : "Unknown error"}</p>
-    </section>
-  );
+  return <ProblemNotice title="Something went wrong" message={error instanceof Error ? error.message : "Unknown error"} />;
 }
 
 function NotFound() {
-  return (
-    <section className="notice">
-      <h2>Page not found</h2>
-      <p>
-        <a href="/">Go to your bots</a>
-      </p>
-    </section>
-  );
+  return <NotFoundNotice title="Page not found" />;
 }
 
 const rootRoute = createRootRoute({ component: RootLayout });
