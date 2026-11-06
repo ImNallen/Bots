@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { AboutSection } from "./AboutSection.tsx";
 import { DialogFrame } from "./Dialog.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
 import { MistralKeySection } from "./MistralKeySection.tsx";
@@ -45,6 +46,8 @@ export function SettingsDialog({ email, onClose }: { email: string; onClose: () 
             <div className="card">
               <div className="card-row">{email}</div>
             </div>
+            <h3 className="label">About you</h3>
+            <AboutSection />
           </Pane>
           <Pane id="mistralKey" open={open}>
             <MistralKeySection />
