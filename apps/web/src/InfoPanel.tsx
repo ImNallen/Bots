@@ -7,7 +7,7 @@ import { BotFace, type FaceState } from "./BotFace.tsx";
 import { characterOf, type Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Icon } from "./Icon.tsx";
-import { hasChanges, savedProfile, shownProfile, stillUnsaved, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
+import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
@@ -27,21 +27,22 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
   const saved = savedProfile(bot);
   const shown = shownProfile(saved, edits);
   const changed = hasChanges(edits);
+  const saving = save.kind === "pending";
 
   function edit(field: keyof Profile, value: string) {
     onEditsChange((current) => withEdit({ saved, edits: current, field, value }));
-    setSave((current) => (current.kind === "pending" ? current : { kind: "idle" }));
+    setSave({ kind: "idle" });
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!changed || save.kind === "pending") {
+    if (!changed || saving) {
       return;
     }
     setSave({ kind: "pending" });
     try {
       await setProfile({ botId: bot._id, ...shown });
-      onEditsChange((current) => stillUnsaved({ current, sent: edits }));
+      onEditsChange({});
       setSave({ kind: "saved" });
     } catch (error) {
       setSave({ kind: "failed", message: errorMessage(error) });
@@ -53,7 +54,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
       <form className="card profile" onSubmit={(event) => void handleSubmit(event)}>
         <label className="profile-field">
           <span>Name</span>
-          <input className="field" autoComplete="off" value={shown.name} onChange={(event) => edit("name", event.target.value)} />
+          <input className="field" autoComplete="off" readOnly={saving} value={shown.name} onChange={(event) => edit("name", event.target.value)} />
         </label>
         <label className="profile-field">
           <span>Title</span>
@@ -61,6 +62,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
             className="field"
             autoComplete="off"
             placeholder="What it does, in a few words"
+            readOnly={saving}
             value={shown.title}
             onChange={(event) => edit("title", event.target.value)}
           />
@@ -71,13 +73,14 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
             className="field profile-assignment"
             rows={6}
             placeholder="What it should do in every conversation"
+            readOnly={saving}
             value={shown.assignment}
             onChange={(event) => edit("assignment", event.target.value)}
           />
         </label>
         <div className="confirm-actions">
-          <button type="submit" className="btn btn-go" disabled={!changed || save.kind === "pending"}>
-            {save.kind === "pending" ? "Saving" : "Save"}
+          <button type="submit" className="btn btn-go" disabled={!changed || saving}>
+            {saving ? "Saving" : "Save"}
           </button>
         </div>
       </form>
