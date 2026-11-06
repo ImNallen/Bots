@@ -18,9 +18,3 @@ export function withEdit(args: { saved: Profile; edits: ProfileEdits; field: key
   const { [args.field]: _previous, ...rest } = args.edits;
   return args.value === args.saved[args.field] ? rest : { ...rest, [args.field]: args.value };
 }
-
-export function stillUnsaved(args: { current: ProfileEdits; sent: ProfileEdits }): ProfileEdits {
-  return Object.fromEntries(
-    Object.entries(args.current).filter(([field, value]) => value !== args.sent[field as keyof Profile]),
-  );
-}
