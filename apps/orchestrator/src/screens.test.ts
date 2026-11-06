@@ -135,7 +135,8 @@ describe("attachScreens", () => {
   it("relays binary data both ways between the owner and the computer", async () => {
     const socket = viewer();
     await new Promise((resolve) => socket.once("open", resolve));
-    await until(() => computerSide.length === 1);
+    // The real computer sends nothing until the link's welcome, which comes after the relay attaches. This fake has no welcome.
+    await until(() => logged.includes("screen-opened"));
     expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot", mode: "watch" }]);
     const near = computerSide[0] as WebSocket;
 
@@ -184,7 +185,7 @@ describe("attachScreens", () => {
       takeoverUntil = Date.now() + 60_000;
       const socket = viewer({ path: inputPath });
       await open(socket);
-      await until(() => computerSide.length === 1);
+      await until(() => logged.includes("screen-opened"));
       return { socket, near: computerSide[0] as WebSocket };
     }
 
