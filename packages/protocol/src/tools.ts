@@ -62,45 +62,59 @@ export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvoca
   return tool.name.startsWith("browser_");
 }
 
+export type ToolEffect = "reads" | "changesVm" | "changesOutside";
+
 const TOOLS = {
   shell: {
     description:
       "Run a bash command as the agent user. Stdout and stderr are combined and capped at 32 KiB. The working directory is the bot's workspace. A command that outlives its timeout is killed with its whole process group. Redirect the output of anything left running in the background, because the pipe closes when the command returns.",
     args: shellArgs,
+    effect: "changesOutside",
   },
   read_file: {
     description: "Read a text file, capped at 32 KiB. A relative path resolves against the bot's workspace.",
     args: readFileArgs,
+    effect: "reads",
   },
   write_file: {
     description:
       "Write a text file, replacing any existing content and creating parent directories. A relative path resolves against the bot's workspace.",
     args: writeFileArgs,
+    effect: "changesVm",
   },
   browser_navigate: {
     description:
       "Open a URL on this bot's screen, in a browser that all of this user's bots share logins with. Returns a snapshot of the page. The user can watch this screen and take it over. If a page needs a login, ask the user to take over the screen and log in. Never ask for a password in the chat.",
     args: browserNavigateArgs,
+    effect: "reads",
   },
   browser_snapshot: {
     description:
       "Read this bot's current page as text. Each element you can act on has a number in brackets, for use as the ref of browser_click and browser_type. A ref holds until the page changes, so take a new snapshot after any action that changes the page. Password values are never shown.",
     args: browserSnapshotArgs,
+    effect: "reads",
   },
   browser_click: {
     description: "Click an element from the latest snapshot. Returns a new snapshot.",
     args: browserClickArgs,
+    effect: "changesOutside",
   },
   browser_type: {
     description:
       "Replace the text in a field from the latest snapshot. Set submit to press Enter afterward. Returns a new snapshot.",
     args: browserTypeArgs,
+    effect: "changesOutside",
   },
   browser_press: {
     description: "Press one key on this bot's current page. Use the arrow keys and Enter to choose from a dropdown. Returns a new snapshot.",
     args: browserPressArgs,
+    effect: "changesOutside",
   },
-} as const satisfies Record<ToolName, { description: string; args: z.ZodType }>;
+} as const satisfies Record<ToolName, { description: string; args: z.ZodType; effect: ToolEffect }>;
+
+export function toolEffect(name: ToolName): ToolEffect {
+  return TOOLS[name].effect;
+}
 
 export const toolDefinitions = Object.entries(TOOLS).map(([name, tool]) => {
   const { $schema: _schema, ...parameters } = z.toJSONSchema(tool.args, { io: "input" });

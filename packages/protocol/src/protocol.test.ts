@@ -10,6 +10,9 @@ import {
   isBrowserInvocation,
   parseToolCall,
   toolDefinitions,
+  toolEffect,
+  type ToolEffect,
+  type ToolName,
 } from "./index.ts";
 
 function bytes(text: string): number {
@@ -174,6 +177,23 @@ describe("parseToolCall", () => {
       expect(Object.keys(tool).sort()).toEqual(["function", "type"]);
       expect(Object.keys(tool.function).sort()).toEqual(["description", "name", "parameters"]);
     }
+  });
+});
+
+describe("toolEffect", () => {
+  it("gives each published tool its effect", () => {
+    const expected: Record<ToolName, ToolEffect> = {
+      shell: "changesOutside",
+      read_file: "reads",
+      write_file: "changesVm",
+      browser_navigate: "reads",
+      browser_snapshot: "reads",
+      browser_click: "changesOutside",
+      browser_type: "changesOutside",
+      browser_press: "changesOutside",
+    };
+    const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
+    expect(Object.fromEntries(effects)).toEqual(expected);
   });
 });
 
