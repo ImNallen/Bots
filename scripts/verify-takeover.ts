@@ -39,7 +39,9 @@ function report(ok: boolean, name: string, detail = ""): void {
 
 const nonce = randomBytes(4).toString("hex");
 const SECRET = `hunter2-${randomBytes(6).toString("hex")}`;
-const PUBLIC_TEXT = `typed-by-a-person-${nonce}`;
+// Every printable ASCII character and some that the display's US keyboard lacks, because a wrong character in a password fails with
+// no explanation. The snapshot reads this back from the page. It has no space, because a snapshot collapses them.
+const PUBLIC_TEXT = `${nonce}!"#$%&'()*+,-./:;<=>?@[\\]^_\`{|}~ABCXYZabcxyz0189åäöÅÄÖ€`;
 const PORT = randomInt(20_000, 40_000);
 
 type Chat = { botId: Id<"bots">; threadId: Id<"threads"> };
@@ -160,7 +162,9 @@ async function openRfb(path: string) {
     },
     type: async (text: string) => {
       for (const character of text) {
-        await tap(character.codePointAt(0) as number);
+        const code = character.codePointAt(0) as number;
+        // X names Latin-1 by its code point and the rest of Unicode with this prefix.
+        await tap(code <= 0xff ? code : 0x01000000 + code);
       }
     },
     clickAt: async (x: number, y: number) => {
