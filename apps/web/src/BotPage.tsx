@@ -1,11 +1,17 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { FACE_STATES } from "./activity.ts";
+import { BotFace, QueuedDots } from "./BotFace.tsx";
+import { characterOf, tintOf } from "./character.ts";
+import { Icon } from "./Icon.tsx";
+import { InfoPanel } from "./InfoPanel.tsx";
 import { ScreenPanel } from "./ScreenPanel.tsx";
-import { ProblemNotice, SignedIn, errorMessage } from "./session.tsx";
+import { ProblemNotice, errorMessage } from "./session.tsx";
+import { useIsPhone } from "./useIsPhone.ts";
 
 type Timeline = FunctionReturnType<typeof api.threads.timeline>;
 type TimelineRun = Timeline["runs"][number];
@@ -60,10 +66,10 @@ function ApprovalButtons({ approvalId }: { approvalId: Id<"approvals"> }) {
   };
   return (
     <div className="tool-approval" role="group" aria-label="This call needs your approval">
-      <button type="button" onClick={() => answer("approved")}>
+      <button type="button" className="btn btn-go" onClick={() => answer("approved")}>
         Approve
       </button>
-      <button type="button" className="secondary" onClick={() => answer("denied")}>
+      <button type="button" className="btn" onClick={() => answer("denied")}>
         Deny
       </button>
       {problem !== null && (
@@ -174,7 +180,8 @@ function RunView({ run, approvals }: { run: TimelineRun; approvals: Map<string, 
         </div>
       )}
       {run.state.kind === "queued" && (
-        <p className="muted" role="status">
+        <p className="muted run-waiting" role="status">
+          <QueuedDots />
           Waiting to start.
         </p>
       )}
@@ -241,7 +248,7 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
       <div className="composer-row">
         <textarea
           id="message"
-          rows={2}
+          rows={1}
           value={text}
           disabled={activeRun !== undefined}
           placeholder={activeRun !== undefined ? "The bot is working." : "Message the bot"}
@@ -249,13 +256,13 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
           onKeyDown={handleKeyDown}
         />
         {activeRun === undefined ? (
-          <button type="submit" disabled={sending || text.trim() === ""}>
+          <button type="submit" className="btn btn-go" disabled={sending || text.trim() === ""}>
             {sending ? "Sending" : "Send"}
           </button>
         ) : (
           <button
             type="button"
-            className="button-secondary"
+            className="btn"
             disabled={activeRun.cancelRequested}
             onClick={() => void stop(activeRun._id)}
           >
@@ -272,43 +279,53 @@ function Composer(props: { threadId: Id<"threads">; activeRun: TimelineRun | und
   );
 }
 
-// The page stays pinned to the newest output until the reader scrolls up, and returning to the bottom pins it again.
-function useStickToBottom(content: unknown): void {
+// The pane stays pinned to the newest output until the reader scrolls up, and returning to the bottom pins it again.
+function useStickToBottom(content: unknown) {
+  const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  useEffect(() => {
-    const onScroll = () => {
-      const { scrollHeight, clientHeight, scrollTop } = document.documentElement;
-      stick.current = scrollHeight - clientHeight - scrollTop < STICK_TO_BOTTOM_PX;
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
   useLayoutEffect(() => {
-    if (stick.current) {
-      window.scrollTo(0, document.documentElement.scrollHeight);
+    const element = scroller.current;
+    if (element !== null && stick.current) {
+      element.scrollTop = element.scrollHeight;
     }
   }, [content]);
+  const onScroll = () => {
+    const element = scroller.current;
+    if (element !== null) {
+      stick.current = element.scrollHeight - element.clientHeight - element.scrollTop < STICK_TO_BOTTOM_PX;
+    }
+  };
+  return { scroller, onScroll };
 }
 
-function Conversation({ threadId }: { threadId: Id<"threads"> }) {
+function Conversation({ threadId, botId }: { threadId: Id<"threads">; botId: Id<"bots"> }) {
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
   const approvals = new Map((pending ?? []).map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
-  useStickToBottom(timeline);
+  const { scroller, onScroll } = useStickToBottom(timeline);
   if (timeline === undefined) {
-    return <p role="status">Loading the conversation.</p>;
+    return (
+      <p className="session-status" role="status">
+        Loading the conversation.
+      </p>
+    );
   }
   const activeRun = timeline.runs.find(isActive);
   return (
     <>
-      <section className="conversation" aria-label="Conversation">
-        {timeline.omittedOlder && <p className="muted">Older messages are not shown.</p>}
-        {timeline.runs.length === 0 && <p className="muted">Send a message to start.</p>}
-        {timeline.runs.map((run) => (
-          <RunView key={run._id} run={run} approvals={approvals} />
-        ))}
-      </section>
-      <Composer threadId={threadId} activeRun={activeRun} />
+      <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
+        <ScreenPanel botId={botId} />
+        <section className="conversation" aria-label="Conversation">
+          {timeline.omittedOlder && <p className="muted">Older messages are not shown.</p>}
+          {timeline.runs.length === 0 && <p className="muted">Send a message to start.</p>}
+          {timeline.runs.map((run) => (
+            <RunView key={run._id} run={run} approvals={approvals} />
+          ))}
+        </section>
+      </div>
+      <div className="dock">
+        <Composer threadId={threadId} activeRun={activeRun} />
+      </div>
     </>
   );
 }
@@ -340,100 +357,31 @@ function BotThread({ botId }: { botId: Id<"bots"> }) {
 
   switch (thread.kind) {
     case "pending":
-      return <p role="status">Opening the conversation.</p>;
+      return (
+        <p className="session-status" role="status">
+          Opening the conversation.
+        </p>
+      );
     case "failed":
       return <ProblemNotice title="Could not open the conversation" message={thread.message} />;
     case "ready":
-      return <Conversation threadId={thread.threadId} />;
+      return <Conversation threadId={thread.threadId} botId={botId} />;
   }
-}
-
-const APPROVAL_LEVELS = [
-  ["outside", "Shell commands and page changes"],
-  ["everything", "Everything"],
-  ["shell", "Shell commands only"],
-  ["nothing", "Nothing"],
-] as const;
-
-function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof APPROVAL_LEVELS)[number][0] }) {
-  const setLevel = useMutation(api.bots.setApprovalLevel);
-  const [problem, setProblem] = useState<string | null>(null);
-  return (
-    <label className="approval-setting">
-      <span>Ask before</span>
-      <select
-        value={level}
-        onChange={(event) => {
-          const next = event.target.value as typeof level;
-          setProblem(null);
-          setLevel({ botId, level: next }).catch((error: unknown) => setProblem(errorMessage(error)));
-        }}
-      >
-        {APPROVAL_LEVELS.map(([value, label]) => (
-          <option key={value} value={value}>
-            {label}
-          </option>
-        ))}
-      </select>
-      {problem !== null && (
-        <span className="error" role="alert">
-          {problem}
-        </span>
-      )}
-    </label>
-  );
-}
-
-function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
-  const remove = useMutation(api.bots.remove);
-  const navigate = useNavigate();
-  const [step, setStep] = useState<
-    { kind: "idle" } | { kind: "confirming" } | { kind: "pending" } | { kind: "failed"; message: string }
-  >({ kind: "idle" });
-
-  async function confirm() {
-    setStep({ kind: "pending" });
-    try {
-      await remove({ botId });
-      await navigate({ to: "/" });
-    } catch (error) {
-      setStep({ kind: "failed", message: errorMessage(error) });
-    }
-  }
-
-  if (step.kind === "idle") {
-    return (
-      <section className="delete-bot">
-        <button type="button" className="button-secondary" onClick={() => setStep({ kind: "confirming" })}>
-          Delete bot
-        </button>
-      </section>
-    );
-  }
-  return (
-    <section className="delete-bot">
-      <p>Delete {name}? Its conversation, files, and browser profile go for good. Logins it passed to other bots stay with them.</p>
-      {step.kind === "failed" && (
-        <p className="error" role="alert">
-          {step.message}
-        </p>
-      )}
-      <div className="delete-bot-actions">
-        <button type="button" disabled={step.kind === "pending"} onClick={() => void confirm()}>
-          {step.kind === "pending" ? "Deleting" : "Delete"}
-        </button>
-        <button type="button" className="button-secondary" disabled={step.kind === "pending"} onClick={() => setStep({ kind: "idle" })}>
-          Keep
-        </button>
-      </div>
-    </section>
-  );
 }
 
 function BotChat({ botId }: { botId: string }) {
   const bot = useQuery(api.bots.get, { botId });
+  const rows = useQuery(api.bots.overview);
+  const { info } = useSearch({ from: "/app/bots/$botId" });
+  const navigate = useNavigate();
+  const router = useRouter();
+  const isPhone = useIsPhone();
   if (bot === undefined) {
-    return <p role="status">Loading the bot.</p>;
+    return (
+      <p className="session-status" role="status">
+        Loading the bot.
+      </p>
+    );
   }
   if (bot === null) {
     return (
@@ -445,21 +393,50 @@ function BotChat({ botId }: { botId: string }) {
       </section>
     );
   }
+  const params = { botId };
+  const character = characterOf(bot);
+  const activity = rows?.find((row) => row._id === bot._id)?.activity.kind ?? "idle";
+  // The badge belongs in the list, where it marks one bot among many.
+  const faceState = activity === "needsApproval" ? "idle" : FACE_STATES[activity];
+
+  // On a phone the panel is a page of its own, so it takes a history entry and the back gesture leaves it.
+  const openInfo = () => void navigate({ to: "/bots/$botId", params, search: { info: true }, replace: !isPhone });
+  const closeInfo = () => {
+    if (isPhone && router.history.canGoBack()) {
+      router.history.back();
+    } else {
+      void navigate({ to: "/bots/$botId", params, search: {}, replace: true });
+    }
+  };
+
+  // The chat stays mounted behind a phone's info page, because unmounting it would give back a take-over.
   return (
-    <>
-      <nav className="bot-nav">
-        <Link to="/">Your bots</Link>
-        <h2>{bot.name}</h2>
-      </nav>
-      <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
-      <ScreenPanel botId={bot._id} />
-      <BotThread botId={bot._id} />
-      <DeleteBot botId={bot._id} name={bot.name} />
-    </>
+    <div className="tint bot-page" {...tintOf(character.color)}>
+      <div className="chat" inert={isPhone && info === true}>
+        <header className="chat-head">
+          <Link to="/" className="round chat-back" aria-label="Your bots">
+            <Icon name="back" />
+          </Link>
+          <button
+            type="button"
+            className="pill"
+            aria-expanded={info === true}
+            aria-label={`About ${bot.name}`}
+            onClick={info === true ? closeInfo : openInfo}
+          >
+            <BotFace character={character} size={isPhone ? 26 : 20} state={faceState} />
+            <span>{bot.name}</span>
+          </button>
+        </header>
+        <BotThread botId={bot._id} />
+      </div>
+      {info === true && <InfoPanel bot={bot} faceState={faceState} onClose={closeInfo} />}
+    </div>
   );
 }
 
 export function BotPage() {
-  const { botId } = useParams({ from: "/bots/$botId" });
-  return <SignedIn>{() => <BotChat botId={botId} />}</SignedIn>;
+  const { botId } = useParams({ from: "/app/bots/$botId" });
+  // Keyed, so a draft, a confirmation, or a take-over of one bot never carries over to the next.
+  return <BotChat key={botId} botId={botId} />;
 }

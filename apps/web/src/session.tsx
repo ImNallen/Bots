@@ -16,7 +16,7 @@ export function ProblemNotice({ title, message }: { title: string; message: stri
     <section className="notice" role="alert">
       <h2>{title}</h2>
       <p>{message}</p>
-      <button type="button" onClick={() => window.location.reload()}>
+      <button type="button" className="btn btn-go" onClick={() => window.location.reload()}>
         Try again
       </button>
     </section>
@@ -53,7 +53,11 @@ function EnsuredUser({ children }: { children: (args: { email: string }) => Reac
 
   switch (session.kind) {
     case "pending":
-      return <p role="status">Loading your account.</p>;
+      return (
+        <p className="session-status" role="status">
+          Loading your account.
+        </p>
+      );
     case "failed":
       return <ProblemNotice title="Could not load your account" message={session.message} />;
     case "ready":
@@ -68,7 +72,11 @@ export function SignedIn({ children }: { children: (args: { email: string }) => 
     return <ProblemNotice title="Could not sign in" message={failure} />;
   }
   if (isLoading) {
-    return <p role="status">Signing in.</p>;
+    return (
+      <p className="session-status" role="status">
+        Signing in.
+      </p>
+    );
   }
   if (!isAuthenticated) {
     return <ProblemNotice title="Could not sign in" message="Convex did not accept the token." />;
