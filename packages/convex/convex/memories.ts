@@ -1,7 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireOwnedBot } from "./identity.js";
+import type { MemoryCall, RunEventBody } from "./validators.js";
 
 const MAX_NOTES = 40;
 const MAX_NOTE_LENGTH = 500;
@@ -93,6 +94,52 @@ export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"me
     .query("memories")
     .withIndex("by_bot", (q) => q.eq("botId", botId))
     .collect();
+}
+
+const TOOL_OF_CALL: Record<MemoryCall["kind"], string> = { memorySave: "memory_save", memoryForget: "memory_forget" };
+
+// Only runs.append calls this, and it has no endpoint. So the change and its tool result share one mutation behind the lease and the
+// sequence check, and a kill leaves both or neither. A refusal is a result for the model, so nothing the model sent can throw here.
+export async function applyMemoryCall(
+  ctx: MutationCtx,
+  run: Doc<"runs">,
+  call: MemoryCall,
+): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
+  const result = (outcome: "ok" | "error", output: string) => ({
+    kind: "toolResult" as const,
+    toolCallId: call.toolCallId,
+    name: TOOL_OF_CALL[call.kind],
+    outcome,
+    output,
+    truncated: false,
+  });
+  switch (call.kind) {
+    case "memorySave": {
+      const parsed = parseNote({ text: call.text, otherNotes: (await notesOf(ctx, run.botId)).length });
+      if (parsed.kind === "refused") {
+        return result("error", NOTE_PROBLEMS[parsed.problem].bot);
+      }
+      const noteId = await ctx.db.insert("memories", {
+        botId: run.botId,
+        text: parsed.text,
+        source: { kind: "bot", runId: run._id },
+      });
+      return result("ok", `Saved note ${noteId}.`);
+    }
+    case "memoryForget": {
+      const noteId = ctx.db.normalizeId("memories", call.noteId);
+      const note = noteId === null ? null : await ctx.db.get(noteId);
+      if (note === null || note.botId !== run.botId) {
+        return result("error", "You have no note with that id. Your system prompt lists your notes.");
+      }
+      if (note.source.kind === "owner") {
+        return result("error", `Note ${note._id} is your owner's, so you cannot forget it. Your owner can edit it in your info panel.`);
+      }
+      await ctx.db.delete(note._id);
+      // The text survives in the chat, because a forget is otherwise the end of it, and it may be the injected call.
+      return result("ok", `Forgot note ${note._id}. Its text was: ${note.text}`);
+    }
+  }
 }
 
 export const list = query({

@@ -2,7 +2,8 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
-import { runEventBody, terminalRunState } from "./validators.js";
+import { applyMemoryCall } from "./memories.js";
+import { memoryCall, runEventBody, terminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
@@ -166,16 +167,18 @@ export const heartbeat = mutation({
 });
 
 export const append = mutation({
-  args: { ...fence, expectedSeq: v.number(), body: runEventBody },
+  args: { ...fence, expectedSeq: v.number(), body: v.union(runEventBody, memoryCall) },
   handler: async (ctx, { runId, leaseToken, expectedSeq, body }) => {
     await requireService(ctx);
     const run = await requireLease(ctx, { runId, leaseToken });
     if (run.nextSeq !== expectedSeq) {
       throw new ConvexError(`Expected seq ${run.nextSeq}, got ${expectedSeq}`);
     }
-    await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body });
+    const stored = body.kind === "memorySave" || body.kind === "memoryForget" ? await applyMemoryCall(ctx, run, body) : body;
+    await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body: stored });
     await ctx.db.patch(runId, { nextSeq: expectedSeq + 1 });
     await deleteStream(ctx, runId);
+    return stored;
   },
 });
 
