@@ -428,12 +428,6 @@ pre {
   .dots i {
     animation: none !important;
   }
-
-  .live b {
-    background: none;
-    color: var(--fg);
-    animation: none;
-  }
 }
 
 /* Shell */
@@ -1070,6 +1064,15 @@ button.tool:hover {
   }
   to {
     background-position: -110% 0;
+  }
+}
+
+/* After the rule above, which has the same specificity and would otherwise win. */
+@media (prefers-reduced-motion: reduce) {
+  .live b {
+    background: none;
+    color: var(--fg);
+    animation: none;
   }
 }
 
