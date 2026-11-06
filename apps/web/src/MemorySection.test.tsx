@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Id } from "@bots/convex/dataModel";
 import { NoteText, noteAuthor } from "./MemorySection.tsx";
 
-// auth.tsx opens a real connection to Convex when it loads.
 vi.mock("./auth.tsx", () => ({ useAuthFailure: () => null }));
 
 const now = new Date(2026, 10, 6, 15, 0).getTime();

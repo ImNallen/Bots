@@ -38,8 +38,6 @@ export function nextAction(events: readonly RunEventBody[]): NextAction {
 
 const BROUGHT_NOTHING_BACK: ReadonlySet<ToolResultBody["outcome"]> = new Set(["denied", "invalid"]);
 
-// Read from this run's stored events, so a resumed run decides the same way. A result that may have brought something back counts,
-// and that includes an unknown outcome such as unavailable.
 export function touchedComputer(events: readonly RunEventBody[]): boolean {
   return events.some(
     (event) => event.kind === "toolResult" && isComputerTool(event.name) && !BROUGHT_NOTHING_BACK.has(event.outcome),
@@ -154,7 +152,6 @@ export function systemPrompt(args: {
           args.about,
           "[End of about your owner]",
         ]),
-    // One JSON array on one line, so a note cannot end its block or pass for a line of this prompt, whatever it holds.
     ...(args.notes.length === 0 ? [] : ["Your notes are below, oldest first, as one JSON array.", "[Notes]", JSON.stringify(args.notes), "[End of notes]"]),
   ].join("\n");
 }

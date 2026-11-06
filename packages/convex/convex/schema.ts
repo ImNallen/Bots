@@ -7,7 +7,6 @@ export default defineSchema({
     authSubject: v.string(),
     email: v.string(),
     displayName: v.string(),
-    // What the owner wrote about themselves. Every bot of this owner reads it, and only the owner writes it.
     about: v.optional(v.string()),
   }).index("by_auth_subject", ["authSubject"]),
 
@@ -25,7 +24,6 @@ export default defineSchema({
     assignment: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),
 
-  // Rows are immutable, so an owner's edit cannot interleave with a bot's forget. An edit deletes and inserts in one mutation.
   memories: defineTable({
     botId: v.id("bots"),
     text: v.string(),

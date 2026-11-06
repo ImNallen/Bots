@@ -1124,8 +1124,7 @@ try {
       const lostText = `memory reply lost ${nonce}`;
       scripted(lostText, [tools(saveCall(lostNote))]);
       const committed = Promise.withResolvers<FunctionArgs<typeof api.runs.append>>();
-      // HTTP only, so the runner finds the queued run by its poll. The reply to the save never comes back, as in a kill at that instant.
-      const dropsTheReply = createServer((incoming, response) => {
+      const httpProxyThatDropsTheSaveReply = createServer((incoming, response) => {
         const parts: Buffer[] = [];
         incoming.on("data", (part: Buffer) => parts.push(part));
         incoming.on("end", () => {
@@ -1150,8 +1149,8 @@ try {
         });
       });
       const proxyPort = await new Promise<number>((resolve) => {
-        dropsTheReply.listen(0, LOOPBACK, () => {
-          const address = dropsTheReply.address();
+        httpProxyThatDropsTheSaveReply.listen(0, LOOPBACK, () => {
+          const address = httpProxyThatDropsTheSaveReply.address();
           resolve(typeof address === "object" && address !== null ? address.port : 0);
         });
       });
@@ -1165,8 +1164,8 @@ try {
       });
       const lostRun = await lost.send(lostText);
       const lostAppend = await committed.promise;
-      dropsTheReply.closeAllConnections();
-      dropsTheReply.close();
+      httpProxyThatDropsTheSaveReply.closeAllConnections();
+      httpProxyThatDropsTheSaveReply.close();
       await check("a SIGKILL after the commit and before its reply leaves the note and the result together", async () => {
         const run = await lost.run(lostRun);
         assert.equal(orchestrator, null);

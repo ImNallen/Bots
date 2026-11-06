@@ -57,8 +57,6 @@ export const toolInvocation = z.discriminatedUnion("name", [
 export type ToolInvocation = z.infer<typeof toolInvocation>;
 export type BrowserInvocation = Extract<ToolInvocation, { name: `browser_${string}` }>;
 
-// The orchestrator runs these against Convex. toolInvocation is the link's wire type and leaves them out, so a memory call passed to
-// Link.call fails to compile, and computerd would refuse one.
 const memorySaveArgs = z.strictObject({ text: z.string() });
 const memoryForgetArgs = z.strictObject({ id: z.string() });
 

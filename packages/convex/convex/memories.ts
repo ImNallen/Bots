@@ -8,8 +8,9 @@ const MAX_NOTES = 40;
 const MAX_NOTE_LENGTH = 500;
 const MAX_ABOUT_LENGTH = 2000;
 
-// These catch careless saves. "My password is hunter2" passes, so the tool description and the prompt also carry the rule.
-const SECRET_PATTERNS: readonly RegExp[] = [
+const TOKEN_RUN_WITHOUT_SLASH_OR_DOT = /[A-Za-z0-9_+=-]{32,}/;
+
+const SECRET_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z0-9 ]+-----/,
   /\b(?:sk|rk|ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|hf|npm|tskey|dop_v1|shpat)[-_][A-Za-z0-9_-]{16,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
@@ -18,26 +19,26 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)\s*[:=]\s*\S+/i,
   /\/\/[^\s/:@]+:[^\s/@]+@/,
   /\b\d{13,19}\b|\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}\b|\b\d{4}[ -]\d{6}[ -]\d{4,5}\b/,
-  // A slash and a dot are left out, so a URL or a path stays allowed. A token in a URL's query still matches.
-  /[A-Za-z0-9_+=-]{32,}/,
+  TOKEN_RUN_WITHOUT_SLASH_OR_DOT,
 ];
 
 export function looksLikeSecret(text: string): boolean {
-  return SECRET_PATTERNS.some((pattern) => pattern.test(text));
+  return SECRET_SHAPES.some((shape) => shape.test(text));
 }
 
-// A line break and a tab are ordinary text, and the prompt's JSON escapes them. Direction controls can make text read differently
-// from what it says, in the panel and on a question card.
-const BAD_CHARACTERS = /[^\P{Cc}\n\t]|[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069]/u;
+const REFUSED_CHARACTERS: readonly RegExp[] = [
+  /[^\P{Cc}\n\t]/u,
+  /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/,
+  /[\u2028\u2029]/,
+];
 
 type TextProblem = "tooLong" | "characters" | "secret";
 
-// The length comes first, so the patterns above only ever see short text.
 function textProblem(text: string, max: number): TextProblem | null {
   if (text.length > max) {
     return "tooLong";
   }
-  if (BAD_CHARACTERS.test(text)) {
+  if (REFUSED_CHARACTERS.some((characters) => characters.test(text))) {
     return "characters";
   }
   return looksLikeSecret(text) ? "secret" : null;
@@ -98,8 +99,6 @@ export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"me
 
 const TOOL_OF_CALL: Record<MemoryCall["kind"], string> = { memorySave: "memory_save", memoryForget: "memory_forget" };
 
-// Only runs.append calls this, and it has no endpoint. So the change and its tool result share one mutation behind the lease and the
-// sequence check, and a kill leaves both or neither. A refusal is a result for the model, so nothing the model sent can throw here.
 export async function applyMemoryCall(
   ctx: MutationCtx,
   run: Doc<"runs">,
@@ -124,7 +123,6 @@ export async function applyMemoryCall(
         text: parsed.text,
         source: { kind: "bot", runId: run._id },
       });
-      // A chat row cuts its summary short, and a save at the start of a run has no card, so the row's output holds the whole text.
       return result("ok", `Saved note ${noteId}. Its text is: ${parsed.text}`);
     }
     case "memoryForget": {
@@ -137,7 +135,6 @@ export async function applyMemoryCall(
         return result("error", `Note ${note._id} is your owner's, so you cannot forget it. Your owner can edit it in your info panel.`);
       }
       await ctx.db.delete(note._id);
-      // The text survives in the chat, because a forget is otherwise the end of it, and it may be the injected call.
       return result("ok", `Forgot note ${note._id}. Its text was: ${note.text}`);
     }
   }

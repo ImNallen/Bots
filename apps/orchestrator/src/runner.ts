@@ -223,7 +223,6 @@ async function runTool(args: {
         return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
     }
   }
-  // A memory call touches no screen, so it does not wait for a take-over. It goes out through append, in one mutation with its result.
   if (isMemoryInvocation(invocation)) {
     if (lease.cancel.aborted) {
       return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };

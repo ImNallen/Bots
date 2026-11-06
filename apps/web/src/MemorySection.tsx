@@ -12,7 +12,6 @@ export function noteAuthor(by: Note["by"], botName: string): string {
   return by === "owner" ? "You" : botName;
 }
 
-// A page can plant a note, so a note is only ever plain text here.
 export function NoteText({ note, botName, now, locale }: { note: Note; botName: string; now: number; locale: string }) {
   return (
     <>
@@ -37,6 +36,7 @@ function NoteForm(props: {
   const [text, setText] = useState(initial);
   const [save, setSave] = useState<{ kind: "idle" } | { kind: "pending" } | { kind: "failed"; message: string }>({ kind: "idle" });
   const trimmed = text.trim();
+  const unchanged = trimmed === initial;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,8 +71,7 @@ function NoteForm(props: {
         </p>
       )}
       <div className="confirm-actions">
-        {/* An edit that changes nothing would still make a bot's note the owner's, so it cannot be sent. */}
-        <button type="submit" className="btn btn-go" disabled={save.kind === "pending" || trimmed === "" || trimmed === initial}>
+        <button type="submit" className="btn btn-go" disabled={save.kind === "pending" || trimmed === "" || unchanged}>
           {save.kind === "pending" ? pendingLabel : submitLabel}
         </button>
         {onCancel !== undefined && (

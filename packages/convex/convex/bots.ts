@@ -241,8 +241,7 @@ export const approvalLevelFor = query({
 });
 
 // The bot goes at once, so nothing can start on it, and purge takes its history in batches. A bot in use refuses, because a
-// run or a take-over would lose its desktop midway. Its notes go here, because they fit one mutation and purge stops early for a
-// bot with no thread.
+// run or a take-over would lose its desktop midway.
 export const remove = mutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }): Promise<void> => {

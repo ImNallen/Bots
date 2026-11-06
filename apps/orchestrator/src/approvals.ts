@@ -9,8 +9,6 @@ const ASKS_AT_OUTSIDE: Record<ToolEffect, (touchedComputer: boolean) => boolean>
   reads: () => false,
   changesVm: () => false,
   changesOutside: () => true,
-  // A save with nothing read from outside yet is the owner's own conversation. After a tool has brought something back, a page could
-  // be behind the save, so the owner sees the exact text first.
   changesMemory: (touchedComputer) => touchedComputer,
 };
 
