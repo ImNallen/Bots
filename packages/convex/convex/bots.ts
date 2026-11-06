@@ -1,9 +1,10 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { decideActivity, lastMessageOf } from "./activity.js";
-import { requireIdentity, requireService } from "./identity.js";
+import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
+import { notesOf } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
 import { isActive } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
@@ -164,15 +165,6 @@ export const ownerForViewer = query({
   },
 });
 
-async function requireOwnedBot(ctx: MutationCtx, botId: Id<"bots">) {
-  const { user } = await requireIdentity(ctx);
-  const bot = await ctx.db.get(botId);
-  if (user === null || bot === null || bot.ownerId !== user._id) {
-    throw new ConvexError("Bot not found");
-  }
-  return bot;
-}
-
 // The web app calls this to start and then to renew, so a renewal is the same call.
 export const takeOver = mutation({
   args: { botId: v.id("bots") },
@@ -242,7 +234,8 @@ export const approvalLevelFor = query({
 });
 
 // The bot goes at once, so nothing can start on it, and purge takes its history in batches. A bot in use refuses, because a
-// run or a take-over would lose its desktop midway.
+// run or a take-over would lose its desktop midway. Its notes go here, because they fit one mutation and purge stops early for a
+// bot with no thread.
 export const remove = mutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }): Promise<void> => {
@@ -259,6 +252,9 @@ export const remove = mutation({
       if (latest !== null && isActive(latest.state)) {
         throw new ConvexError("This bot has an active run. Stop it before you delete it");
       }
+    }
+    for (const note of await notesOf(ctx, botId)) {
+      await ctx.db.delete(note._id);
     }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });

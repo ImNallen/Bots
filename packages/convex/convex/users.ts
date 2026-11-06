@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server.js";
 import { requireIdentity, requireService, upsertUser } from "./identity.js";
+import { parseAbout } from "./memories.js";
 
 export const ensureCurrent = mutation({
   args: {},
@@ -21,6 +22,17 @@ export const current = query({
   handler: async (ctx) => {
     const { user } = await requireIdentity(ctx);
     return user;
+  },
+});
+
+export const setAbout = mutation({
+  args: { about: v.string() },
+  handler: async (ctx, { about }) => {
+    const { user } = await requireIdentity(ctx);
+    if (user === null) {
+      throw new ConvexError("User not found");
+    }
+    await ctx.db.patch(user._id, { about: parseAbout(about) });
   },
 });
 

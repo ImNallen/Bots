@@ -51,6 +51,11 @@ export const runState = v.union(
 export type RunState = Infer<typeof runState>;
 export type RunEventBody = Infer<typeof runEventBody>;
 
+export const noteSource = v.union(
+  v.object({ kind: v.literal("owner") }),
+  v.object({ kind: v.literal("bot"), runId: v.id("runs") }),
+);
+
 export const desiredVm = v.object({
   slot: v.number(),
   cores: v.number(),
