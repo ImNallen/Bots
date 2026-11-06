@@ -41,7 +41,7 @@ setInterval(() => {
   });
 }, DESKTOP_SWEEP_INTERVAL_MS);
 
-const browser = createBrowser({ desktops });
+const browser = createBrowser({ desktops, takeoverSettled: logins.settled });
 const calls = createCalls({
   journal,
   // Every tool holds the bot's desktop, so a long shell tool cannot lose the page that the bot left open.

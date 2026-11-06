@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Cdp, CdpConnector } from "./browser.ts";
 import { desktopOf, SLOTS, type DesktopLease } from "./desktops.ts";
 import { log } from "./log.ts";
@@ -164,12 +165,23 @@ export type Logins = {
   opened: (botId: string, cdpPort: number) => Promise<void>;
   closed: (botId: string, cdpPort: number) => Promise<void>;
   recover: (acquire: (botId: string) => Promise<DesktopLease>) => Promise<void>;
+  // Waits until this bot has no input stream and its last take-over's cookies are read, or for a limit, or for the signal.
+  settled: (botId: string, signal: AbortSignal) => Promise<void>;
 };
 
 const BROWSER_DEADLINE_MS = 10_000;
+// Longer than the 5 seconds that the orchestrator can take to close the input stream of an expired take-over.
+const SETTLE_LIMIT_MS = 15_000;
+const SETTLE_POLL_MS = 50;
 
-export function createLogins(args: { dir: string; connector: CdpConnector; now?: () => number; browserDeadlineMs?: number }): Logins {
-  const { dir, connector, now = Date.now, browserDeadlineMs = BROWSER_DEADLINE_MS } = args;
+export function createLogins(args: {
+  dir: string;
+  connector: CdpConnector;
+  now?: () => number;
+  browserDeadlineMs?: number;
+  settleLimitMs?: number;
+}): Logins {
+  const { dir, connector, now = Date.now, browserDeadlineMs = BROWSER_DEADLINE_MS, settleLimitMs = SETTLE_LIMIT_MS } = args;
   const jarFile = join(dir, "logins.json");
   const takeovers = join(dir, "takeovers");
   const baselineFile = (botId: string) => join(takeovers, `${botId}.json`);
@@ -315,6 +327,18 @@ export function createLogins(args: { dir: string; connector: CdpConnector; now?:
           }
         }
       }),
+    // The runner resumes a bot as soon as a take-over ends, and the input stream closes after that. A cookie that the bot changes in
+    // between would move as if the owner had changed it, and could spread the bot's own account or logout to every other bot.
+    settled: async (botId, signal) => {
+      const limit = AbortSignal.any([signal, AbortSignal.timeout(settleLimitMs)]);
+      const stopped = () => delay(settleLimitMs, undefined, { signal: limit, ref: false }).catch(() => {});
+      while (openStreams.has(botId) && !limit.aborted) {
+        await delay(SETTLE_POLL_MS, undefined, { signal: limit }).catch(() => {});
+      }
+      if (!limit.aborted) {
+        await Promise.race([tail, stopped()]);
+      }
+    },
   };
 }
 

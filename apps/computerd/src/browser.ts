@@ -118,8 +118,12 @@ export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
 };
 
-export function createBrowser(args: { desktops: Pick<Desktops, "acquire">; connector?: CdpConnector }): Browser {
-  const { desktops, connector = webSocketConnector } = args;
+export function createBrowser(args: {
+  desktops: Pick<Desktops, "acquire">;
+  connector?: CdpConnector;
+  takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
+}): Browser {
+  const { desktops, connector = webSocketConnector, takeoverSettled } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
@@ -221,6 +225,8 @@ export function createBrowser(args: { desktops: Pick<Desktops, "acquire">; conne
 
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<string> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
+    signal.throwIfAborted();
+    await takeoverSettled?.(botId, signal);
     signal.throwIfAborted();
     const lease = await desktops.acquire(botId);
     try {

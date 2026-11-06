@@ -211,6 +211,7 @@ The cursor lives in the browser so that it dies with what it describes. A stop w
 |---|---|
 | A take-over opens | Catch up, write the baseline unless a newer tab is taking over from a stream that is still open, and count this stream. All of this comes before the input stream restarts, so the baseline comes before any key |
 | A give-back, an expiry, or a phone that drops | The relay closes. When no stream of that bot is left, catch up, diff, merge, push, and delete the baseline. It gets one attempt. A baseline kept past a failure would later move what the bot has browsed since, over the other bots' sessions, so missing a move is the safer mistake. The relay keeps its lease until then, so the desktop cannot stop during the read |
+| A bot's browser tool arrives | It waits until that bot has no input stream and its cookies are read, for up to 15 seconds. The runner resumes a bot as soon as a take-over ends, and the stream can close up to 5 seconds later, so without this a cookie that the bot changes would move as if the owner had changed it |
 | A newer tab | It counts before its restart ends the older tab, so the older close leaves the count at 1, and the first baseline stays |
 | `computerd` restarts | Only a kill leaves a baseline. `recover` runs first at startup and publishes it |
 | A stopped or new bot starts | It catches up inside `acquire`, after systemd starts its browser and before anything can use it. A failed catch-up logs and goes on, because a bot without a login is better than a bot without a browser |

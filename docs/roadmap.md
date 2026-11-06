@@ -185,7 +185,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A Chromium that cannot start, for example with a damaged profile, restarts every 2 seconds until the idle stop. Each `browser_*` call waits 45 seconds for it and then answers that there is no running browser.
 - A bot can take a slot's display number or port before a slot needs it. That display then fails to start, and its bots on that computer report no running browser.
 - A new desktop has a fixed list of fonts, so some scripts show as empty boxes. example.com's Arabic and Hebrew text did on a real VM.
-- A tool that is running when the owner takes over keeps running. The bot waits only before its next tool.
+- A tool that is running when the owner takes over keeps running. The bot waits only before its next tool. A cookie that it changes during the take-over moves as if the owner had changed it. So does one that a shell tool changes through CDP after the take-over ends, because only browser tools wait for the cookies to be read.
 - A closed tab or a sleeping phone leaves the bot waiting for up to 15 minutes, because only the renewal stopping can show that the owner left.
 - A screen on a phone is small, about 358 by 224 pixels at phone width. During a take-over, a pinch zooms the page on the desktop and not the owner's view of the desktop, so the panel and the window's bars stay small.
 - A phone has no Ctrl key. It reaches the address bar and the tabs by tapping them.

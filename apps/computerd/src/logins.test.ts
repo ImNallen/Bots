@@ -610,6 +610,76 @@ describe("createLogins", () => {
     expect(b.value("login")).toBe("new");
   });
 
+  describe("settled", () => {
+    const signal = () => new AbortController().signal;
+
+    it("returns at once for a bot with no take-over", async () => {
+      await computerd().settled("a", signal());
+    });
+
+    it("waits for the input stream to close and for the cookies to be read", async () => {
+      const [a, b] = [running(A), running(B)];
+      const logins = computerd();
+      await logins.opened("a", A);
+      a.site(login());
+      let done = false;
+      const settled = logins.settled("a", signal()).then(() => {
+        done = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(done).toBe(false);
+      void logins.closed("a", A);
+      await settled;
+      expect(b.value("login")).toBe("logged-in");
+      expect(await leftBaselines()).toEqual([]);
+    });
+
+    it("still waits while the read is slow, after the stream has closed", async () => {
+      const [a, b] = [running(A), running(B)];
+      const logins = computerd();
+      await logins.opened("a", A);
+      a.site(login());
+      let open = () => {};
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      hook = () => gate;
+      void logins.closed("a", A);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      let done = false;
+      const settled = logins.settled("a", signal()).then(() => {
+        done = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(done).toBe(false);
+      open();
+      await settled;
+      expect(b.value("login")).toBe("logged-in");
+    });
+
+    it("does not wait for another bot's take-over", async () => {
+      running(A);
+      const logins = computerd();
+      await logins.opened("a", A);
+      await logins.settled("b", signal());
+    });
+
+    it("goes on after its limit, so a stream that never closes cannot stop a bot for good", async () => {
+      running(A);
+      const logins = createLogins({ dir, connector, now: () => clock, settleLimitMs: 60 });
+      await logins.opened("a", A);
+      await logins.settled("a", signal());
+    });
+
+    it("stops waiting at a cancel", async () => {
+      running(A);
+      const logins = computerd();
+      await logins.opened("a", A);
+      const cancel = new AbortController();
+      const settled = logins.settled("a", cancel.signal);
+      cancel.abort();
+      await settled;
+    });
+  });
+
   it("starts from an empty jar when the file cannot be read, and logs none of it", async () => {
     await writeFile(join(dir, "logins.json"), '{"generation": 5, "cookies": [{"secretvalue');
     running(A);

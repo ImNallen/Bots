@@ -331,6 +331,32 @@ describe("browser", () => {
       expect(machine.openLeases()).toBe(0);
     });
 
+    it("sends nothing when the cancel arrives while a take-over's cookies are read", async () => {
+      const abort = new AbortController();
+      const browser = createBrowser({
+        connector: machine.connector,
+        desktops: machine.desktops,
+        takeoverSettled: async () => abort.abort(new Error("stopped")),
+      });
+      const result = await browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      expect(result.outcome).toBe("cancelled");
+      expect(machine.acquires()).toBe(0);
+    });
+
+    it("starts no browser step until a take-over's cookies are read", async () => {
+      let read = () => {};
+      const browser = createBrowser({
+        connector: machine.connector,
+        desktops: machine.desktops,
+        takeoverSettled: () => new Promise((resolve) => (read = resolve)),
+      });
+      const running = browser.execute({ botId: "a", tool: navigate, signal });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(machine.acquires()).toBe(0);
+      read();
+      expect((await running).outcome).toBe("ok");
+    });
+
     it("sends nothing when the cancel arrives while the call waits in the queue", async () => {
       const browser = browserOf();
       await look(browser, "a");
