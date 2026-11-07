@@ -12,6 +12,7 @@ function fakeChromium() {
   let nextTarget = 1;
   let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
   let sendHook: ((method: string) => void) | undefined;
+  let frozen = false;
 
   return {
     pages,
@@ -28,6 +29,13 @@ function fakeChromium() {
     setLocate: (value: { x: number; y: number } | null) => {
       locateResult = value;
     },
+    // A page's main thread that never yields answers nothing on its session. The browser process still answers.
+    freezePage: () => {
+      frozen = true;
+    },
+    thawPage: () => {
+      frozen = false;
+    },
     client: {
       identity: "browser",
       close: () => {},
@@ -37,6 +45,9 @@ function fakeChromium() {
       send: async (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
         sent.push({ method, params, sessionId });
         sendHook?.(method);
+        if (frozen && sessionId !== undefined) {
+          return await new Promise<Record<string, unknown>>(() => {});
+        }
         switch (method) {
           case "Target.getTargets":
             return {
@@ -390,6 +401,56 @@ describe("browser", () => {
       });
       expect(result.outcome).toBe("cancelled");
       expect(inputSent().some((entry) => entry.method === "Input.dispatchKeyEvent")).toBe(false);
+    });
+  });
+
+  describe("a page that does not answer", () => {
+    const QUICK_DEADLINE_MS = 600;
+    const quick = () => createBrowser({ desktops: machine.desktops, connector: machine.connector, toolDeadlineMs: QUICK_DEADLINE_MS });
+
+    it("ends the call at its deadline, closes the lease, and tells the model", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      const result = await look(browser, "a");
+      expect(result.outcome).toBe("timeout");
+      expect(result.output).toContain("did not finish in 0.6 seconds");
+      expect(machine.openLeases()).toBe(0);
+    });
+
+    it("ends the call at once when its signal aborts, and says cancelled", async () => {
+      const browser = browserOf();
+      await look(browser, "a");
+      chromium.freezePage();
+      const abort = new AbortController();
+      const running = browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      abort.abort(new Error("stopped"));
+      const result = await running;
+      expect(result.outcome).toBe("cancelled");
+      expect(machine.openLeases()).toBe(0);
+    });
+
+    it("lets the bot's next call run, and another bot never waits", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      const first = look(browser, "a");
+      const queued = look(browser, "a");
+      const other = await look(browser, "b");
+      expect(other.outcome).toBe("ok");
+      expect((await first).outcome).toBe("timeout");
+      expect((await queued).outcome).toBe("timeout");
+    });
+
+    it("sends nothing after the deadline", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      await browser.execute({ botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } }, signal });
+      chromium.thawPage();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(chromium.sent.some((entry) => entry.method === "Input.insertText")).toBe(false);
     });
   });
 

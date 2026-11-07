@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { capText, type BrowserInvocation, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
 import type { Desktops } from "./desktops.ts";
@@ -6,6 +7,12 @@ const CDP_CONNECT_TIMEOUT_MS = 5000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const SETTLE_MS = 400;
 const MAX_SETTLE_ROUNDS = 4;
+// The orchestrator's link gives a browser tool this long plus a 60 second margin. That margin holds a take-over's wait and a desktop's
+// start, so the tool answers for itself, and the link's 120 seconds never turn a slow page into an unknown outcome.
+const TOOL_DEADLINE_MS = 60_000;
+
+const DEADLINE_OUTPUT = (deadlineMs: number) =>
+  `The browser action did not finish in ${deadlineMs / 1000} seconds, so it stopped, and it may have partly happened. Take a new snapshot to see where the page got to.`;
 
 const KEY_CODES: Record<string, number> = {
   Enter: 13,
@@ -100,6 +107,34 @@ type Connection = {
 
 type TargetInfo = { targetId: string; type: string; openerId?: string };
 
+// Settles with the work, or rejects when `ends` aborts, whichever comes first. A page that never answers leaves its reply waiting
+// in the connection, which is a small cost for each frozen call.
+function untilEnd<T>(ends: AbortSignal, start: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (ends.aborted) {
+      reject(ends.reason as Error);
+      return;
+    }
+    const stop = () => reject(ends.reason as Error);
+    ends.addEventListener("abort", stop, { once: true });
+    start()
+      .then(resolve, reject)
+      .finally(() => ends.removeEventListener("abort", stop));
+  });
+}
+
+// One tool call's time on a page. Every CDP call through `client` ends when `ends` aborts, and none starts after it. So a tool needs
+// no abort checks of its own, and it cannot wait on a page that does not answer.
+type PageCall = { client: Cdp; ends: AbortSignal };
+
+function startPageCall(client: Cdp, signal: AbortSignal, deadlineMs: number): PageCall {
+  const ends = AbortSignal.any([signal, AbortSignal.timeout(deadlineMs)]);
+  return {
+    ends,
+    client: { ...client, send: (method, params, sessionId) => untilEnd(ends, () => client.send(method, params, sessionId)) },
+  };
+}
+
 // A closed page leaves the list, so the bot falls back to the page under it. A new page goes on the end, so a popup becomes the
 // current page. Pages seen for the first time together, as after a computerd restart, put the ones with an opener last, so a
 // popup that was open before the restart stays current.
@@ -122,8 +157,9 @@ export function createBrowser(args: {
   desktops: Pick<Desktops, "acquire">;
   connector?: CdpConnector;
   takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
+  toolDeadlineMs?: number;
 }): Browser {
-  const { desktops, connector = webSocketConnector, takeoverSettled } = args;
+  const { desktops, connector = webSocketConnector, takeoverSettled, toolDeadlineMs = TOOL_DEADLINE_MS } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
@@ -145,25 +181,24 @@ export function createBrowser(args: {
     return connection;
   }
 
-  async function sessionFor(connection: Connection, targetId: string): Promise<string> {
-    const { client, sessions } = connection;
+  async function sessionFor(connection: Connection, client: Cdp, targetId: string): Promise<string> {
+    const { sessions } = connection;
     const existing = sessions.get(targetId);
     if (existing !== undefined) {
       return existing;
     }
     const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
     const id = String(sessionId);
-    sessions.set(targetId, id);
     await client.send("Page.enable", {}, id);
     await client.send("Runtime.enable", {}, id);
     // A bot's input through CDP needs the page to believe it has focus, and only one window can have X focus.
     await client.send("Emulation.setFocusEmulationEnabled", { enabled: true }, id);
+    sessions.set(targetId, id);
     return id;
   }
 
   // Asking on every look means nothing has to watch for events, and nothing is lost across a restart.
-  async function currentPage(connection: Connection): Promise<{ client: Cdp; targetId: string; sessionId: string }> {
-    const { client } = connection;
+  async function currentPage(connection: Connection, client: Cdp): Promise<{ targetId: string; sessionId: string }> {
     const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
     connection.pages = nextPages(connection.pages, targetInfos);
     if (connection.pages.length === 0) {
@@ -171,7 +206,7 @@ export function createBrowser(args: {
       connection.pages.push(String(targetId));
     }
     const targetId = connection.pages.at(-1) as string;
-    return { client, targetId, sessionId: await sessionFor(connection, targetId) };
+    return { targetId, sessionId: await sessionFor(connection, client, targetId) };
   }
 
   async function evaluate(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
@@ -183,15 +218,14 @@ export function createBrowser(args: {
   }
 
   async function settle(client: Cdp, sessionId: string, signal: AbortSignal): Promise<void> {
-    await sleep(SETTLE_MS, signal);
+    await delay(SETTLE_MS, undefined, { signal });
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      signal.throwIfAborted();
       const state = await evaluate(client, sessionId, "document.readyState").catch(() => "loading");
       if (state === "complete") {
         return;
       }
-      await sleep(SETTLE_MS, signal);
+      await delay(SETTLE_MS, undefined, { signal });
     }
   }
 
@@ -223,7 +257,49 @@ export function createBrowser(args: {
     return point;
   }
 
-  async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<string> {
+  async function act(connection: Connection, call: PageCall, tool: BrowserInvocation): Promise<string> {
+    const { client, ends } = call;
+    const { sessionId } = await currentPage(connection, client);
+    switch (tool.name) {
+      case "browser_navigate": {
+        const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
+        if (typeof reply.errorText === "string") {
+          throw new Error(`the page did not load: ${reply.errorText}`);
+        }
+        break;
+      }
+      case "browser_snapshot":
+        break;
+      case "browser_click":
+        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
+        break;
+      case "browser_type":
+        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
+        await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
+        await client.send("Input.insertText", { text: tool.args.text }, sessionId);
+        if (tool.args.submit) {
+          await press(client, sessionId, "Enter");
+        }
+        break;
+      case "browser_press":
+        await press(client, sessionId, tool.args.key);
+        break;
+    }
+    // An action can open a popup at any time during the wait, and the next action goes to the newest page.
+    // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
+    let after = await currentPage(connection, client);
+    for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
+      await settle(client, after.sessionId, ends);
+      const latest = await currentPage(connection, client);
+      if (latest.targetId === after.targetId) {
+        break;
+      }
+      after = latest;
+    }
+    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT));
+  }
+
+  async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<ToolResult> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
     signal.throwIfAborted();
     await takeoverSettled?.(botId, signal);
@@ -233,52 +309,16 @@ export function createBrowser(args: {
       // A cancel during a slow start still sends nothing.
       signal.throwIfAborted();
       const connection = await connectionFor(botId, lease.cdpPort);
-      const { client, sessionId } = await currentPage(connection);
-      signal.throwIfAborted();
-      switch (tool.name) {
-        case "browser_navigate": {
-          const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
-          if (typeof reply.errorText === "string") {
-            throw new Error(`the page did not load: ${reply.errorText}`);
-          }
-          break;
+      const call = startPageCall(connection.client, signal, toolDeadlineMs);
+      try {
+        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, tool)}`);
+        return { outcome: "ok", output, truncated };
+      } catch (error) {
+        if (signal.aborted || !call.ends.aborted) {
+          throw error;
         }
-        case "browser_snapshot":
-          break;
-        case "browser_click": {
-          const point = await locate(client, sessionId, tool.args.ref);
-          signal.throwIfAborted();
-          await click(client, sessionId, point);
-          break;
-        }
-        case "browser_type": {
-          await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
-          await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
-          signal.throwIfAborted();
-          await client.send("Input.insertText", { text: tool.args.text }, sessionId);
-          if (tool.args.submit) {
-            signal.throwIfAborted();
-            await press(client, sessionId, "Enter");
-          }
-          break;
-        }
-        case "browser_press":
-          await press(client, sessionId, tool.args.key);
-          break;
+        return { outcome: "timeout", output: DEADLINE_OUTPUT(toolDeadlineMs), truncated: false };
       }
-      // An action can open a popup at any time during the wait, and the next action goes to the newest page.
-      // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
-      let after = await currentPage(connection);
-      for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
-        await settle(after.client, after.sessionId, signal);
-        const latest = await currentPage(connection);
-        if (latest.targetId === after.targetId) {
-          break;
-        }
-        after = latest;
-      }
-      const snapshot = String(await evaluate(after.client, after.sessionId, SNAPSHOT_SCRIPT));
-      return `Screen ${lease.slot}\n${snapshot}`;
     } finally {
       lease.release();
     }
@@ -295,8 +335,7 @@ export function createBrowser(args: {
     execute: ({ botId, tool, signal }) =>
       inOrder(botId, async (): Promise<ToolResult> => {
         try {
-          const { output, truncated } = capText(await run(botId, tool, signal));
-          return { outcome: "ok", output, truncated };
+          return await run(botId, tool, signal);
         } catch (error) {
           if (signal.aborted) {
             return { outcome: "cancelled", output: "The browser action was cancelled.", truncated: false };
@@ -312,24 +351,6 @@ class StaleRefError extends Error {
   constructor(ref: number) {
     super(`there is no element ${ref} on the page now, so take a new snapshot`);
   }
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason as Error);
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason as Error);
-      },
-      { once: true },
-    );
-  });
 }
 
 export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
