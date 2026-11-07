@@ -115,6 +115,10 @@ export function parseDescription(description: string): { kind: "ok"; text: strin
   return { kind: "ok", text: text === "" ? undefined : text };
 }
 
+function descriptionChangeRecord(previous: string | undefined, next: string | undefined): string {
+  return ["Updated your description.", "[Previous description]", previous ?? "", "[End of previous description]", "[New description]", next ?? "", "[End of new description]"].join("\n");
+}
+
 export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"memories">[]> {
   return await ctx.db
     .query("memories")
@@ -181,11 +185,7 @@ export async function applyMemoryCall(
       }
       const previous = (await ctx.db.get(run.botId))?.description;
       await ctx.db.patch(run.botId, { description: parsed.text });
-      // A description keeps no history, so this result is how an owner traces a change and undoes it.
-      return result(
-        "ok",
-        ["Updated your description.", "[Previous description]", previous ?? "", "[End of previous description]", "[New description]", parsed.text ?? "", "[End of new description]"].join("\n"),
-      );
+      return result("ok", descriptionChangeRecord(previous, parsed.text));
     }
   }
 }

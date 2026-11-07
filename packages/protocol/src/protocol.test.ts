@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, expectTypeOf } from "vitest";
 import {
   OUTPUT_CAP_BYTES,
   callIdToFileStem,
@@ -307,9 +307,8 @@ describe("memory tools", () => {
   });
 
   it("keeps a description call off the link, in the wire type and in the static type", () => {
-    // @ts-expect-error Link.call takes a ToolInvocation, so passing it this call must fail the typecheck.
-    const call: ToolInvocation = { name: "description_set", args: { text: "a" } };
-    expect(toolInvocation.safeParse(call).success).toBe(false);
+    expectTypeOf<Extract<ToolInvocation, { name: "description_set" }>>().toBeNever();
+    expect(toolInvocation.safeParse({ name: "description_set", args: { text: "a" } }).success).toBe(false);
     expect(isComputerTool("description_set")).toBe(false);
   });
 

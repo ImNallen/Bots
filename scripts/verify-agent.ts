@@ -1451,7 +1451,7 @@ try {
       });
     } finally {
       // Convex checks every stored row against the schema at a deploy, so a row left holding a description would stop another
-      // worktree on the shared backend from deploying a schema without it. Clearing comes first, because a delete can refuse.
+      // worktree on the shared backend from deploying a schema without it.
       for (const made of chats) {
         const bot = await made.client.query(api.bots.get, { botId: made.botId }).catch(() => null);
         if (bot !== null) {
