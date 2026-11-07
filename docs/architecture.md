@@ -367,7 +367,7 @@ Each writer has one path, and nobody else has a path:
 - `bots.setProfile` is the owner's. It goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user.
 - `description_set` is the bot's. It replaces the whole text, and an empty text clears it. `runs.append` applies the call in its one fenced mutation, as [One mutation writes a note and its result](#one-mutation-writes-a-note-and-its-result) explains, so a kill leaves the change and its result together or neither. `toolInvocation` leaves the call out, so passing it to `Link.call` fails the typecheck, and it works with the computer off.
 
-Both paths use `parseDescription`, which allows up to 8,000 characters and uses the same `textProblem` as a note. It refuses control and text-direction characters and anything that `looksLikeSecret` refuses. A call that breaks a rule stores the outcome `error` and writes nothing.
+Both paths use `parseDescription`, which allows up to 8,000 characters and uses the same `textProblem` as a note. It refuses invisible and control characters and anything that `looksLikeSecret` refuses. A call that breaks a rule stores the outcome `error` and writes nothing.
 
 A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. These things limit that:
 
@@ -409,7 +409,7 @@ Notes live in Convex and not on the VM. A bot has root on its VM, so anything th
 | The owner stops the run just before the call | A result with outcome `cancelled`, because the mutation reads the owner's request itself | No change to any note, even though the runner hears of the stop only at its next heartbeat |
 | `claim` gives up after 5 attempts | `closeUnansweredCalls` recorded `unavailable` | No note, and the next run's prompt holds the true list |
 
-A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no control or text-direction characters, and nothing that `looksLikeSecret` refuses.
+A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no invisible or control characters, and nothing that `looksLikeSecret` refuses.
 
 ### What limits an injected save
 
@@ -430,7 +430,18 @@ The card covers one run. The thread replays on every model call, so an injection
 
 At the Shell and Nothing levels, no save shows a card. The owner chose those levels, and the chat row and the panel are the only signs.
 
-`looksLikeSecret` catches careless saves and nothing more. It refuses PEM headers, known key prefixes, JWTs, `password=` pairs, card numbers, and any unbroken run of 32 or more token characters. "My password is hunter2" passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
+`looksLikeSecret` catches careless saves and nothing more. `SECRET_SHAPES` in `memories.ts` has one named row for each shape it refuses:
+
+- PEM headers, known key prefixes, and JWTs.
+- A secret's name, such as `password` or `api key`, with `=` and a value. With `:`, it counts only when one token follows and then the line ends, so "Rotate the API key: ask the owner first." passes.
+- A URL with a password, and Slack and Discord webhook URLs.
+- A URL query parameter with a secret's name and a value of 16 or more characters.
+- A number in a card's layout that passes the Luhn check. A date range also holds 13 to 19 digits, so other layouts do not count.
+- A run of 32 or more letters and digits that holds uppercase, lowercase, and digits, which is the shape of a Mistral key. The check skips each URL's scheme, host, and path, because document ids look the same, and it still reads the URL's query.
+
+A run of only lowercase letters and digits passes, including a hex API token, because it looks the same as a git hash. Only a named query parameter, a pair, or a known prefix catches such a value. "My password is hunter2" also passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
+
+`textProblem` also refuses invisible characters, because every later model call reads text that a person cannot check by eye. It refuses Unicode's `Default_Ignorable_Code_Point` property and the braille blank, along with control characters and the line and paragraph separators. Three uses stay allowed, because real text needs them. A zero-width joiner can sit between two emoji, as in a family emoji. U+FE0F can follow an emoji or sit inside a keycap. U+200C and U+200D can sit beside a letter or after a mark, as Persian and Hindi use them. The check runs only at a write, so a stored row keeps what it holds.
 
 ## How a read-only run works
 
