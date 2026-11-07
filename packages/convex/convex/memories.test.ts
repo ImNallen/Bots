@@ -108,6 +108,49 @@ describe("textProblem's characters", () => {
     expect(textProblem(text, 100)).toBeNull();
   });
 
+  it.each([
+    ["an Arabic number sign", "1\u0600 2"],
+    ["an Arabic end of ayah", "\u06DD1"],
+    ["a Syriac abbreviation mark", "\u0710\u070F\u0712"],
+    ["an Arabic pound mark above", "\u0890\u0661"],
+    ["an Arabic piastre mark above", "\u0891\u0661"],
+    ["an Arabic disputed end of ayah", "\u08E2"],
+    ["a Kaithi number sign", "\u{110BD}1"],
+    ["a Kaithi number sign above", "\u{110CD}1"],
+    ["an Egyptian hieroglyph format control", "\u{13430}"],
+    ["the last Egyptian hieroglyph format control", "\u{1343F}"],
+    ["an interlinear annotation", "a\uFFF9b"],
+    ["a musical null notehead, which a font draws as nothing", "a\u{1D159}b"],
+    ["a Tifinagh consonant joiner, which a font draws as nothing", "a\u2D7Fb"],
+    ["a private use character", "a\uE000b"],
+    ["a supplementary private use character", "a\u{F0000}b"],
+    ["an unassigned code point", "a\u0378b"],
+    ["a noncharacter", "a\uFFFEb"],
+    ["a joiner after a Latin letter and an Arabic mark", "a\u064E\u200Cb"],
+    ["a joiner after a Cyrillic letter and a combining mark", "\u0430\u0301\u200D\u0431"],
+    ["three joiners after an Arabic letter", "\u0643\u200C\u200C\u200C"],
+    ["a joiner beside an Arabic number sign, with no letter of the script", "a\u200C\u0600\u200Db"],
+  ])("refuses %s", (_label, text) => {
+    expect(textProblem(text, 100)).toBe("characters");
+  });
+
+  it.each([
+    ["an Arabic fatha and a non-joiner before a space", "\u0643\u064E\u200C \u0628"],
+    ["an Arabic shadda and a non-joiner at the end", "\u0643\u0651\u200C"],
+    ["a Persian ezafe and a non-joiner before a space", "\u06A9\u062A\u0627\u0628\u0650\u200C \u0645\u0646"],
+    ["an Arabic tanwin and a non-joiner before a Latin letter", "\u0642\u0637\u0639\u064B\u200Ca"],
+    ["two Arabic marks and a non-joiner", "\u0643\u0651\u064E\u200C \u0628"],
+    ["a Hindi udatta and a joiner before a space", "\u0915\u0951\u200D \u0916"],
+    ["a Hindi anudatta and a non-joiner at the end", "\u0915\u0952\u200C"],
+    ["a Vedic tone and a joiner before a space", "\u0915\u1CD0\u200D \u0916"],
+    ["plain Arabic", "\u0627\u0644\u0639\u0631\u0628\u064A\u0629"],
+    ["plain Syriac", "\u0710\u0712\u0713\u0715"],
+    ["Syriac with a joiner", "\u0710\u200D\u0712"],
+    ["an emoji newer than these Unicode tables", "\u{1FAE9}\u{1FADC}\u{1FAC8}"],
+  ])("allows %s", (_label, text) => {
+    expect(textProblem(text, 100)).toBeNull();
+  });
+
   it("a note trims a leading BOM, so the stored text holds none", () => {
     expect(note("\uFEFFab")).toEqual({ kind: "ok", text: "ab" });
     expect(note("\uFEFF")).toEqual({ kind: "refused", problem: "empty" });

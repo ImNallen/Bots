@@ -140,11 +140,14 @@ const EMOJI_STYLE = /(?<=\p{Extended_Pictographic})\uFE0F/u;
 const KEYCAP_STYLE = /(?<=[0-9#*])\uFE0F(?=\u20E3)/u;
 const SCRIPTS_THAT_USE_JOINERS = ["Arabic", "Syriac", "Mongolian", "Nko", "Mandaic", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala", "Khmer", "Myanmar"];
 const CHARACTER_OF_A_JOINING_SCRIPT = `[${SCRIPTS_THAT_USE_JOINERS.map((script) => String.raw`\p{Script=${script}}`).join("")}]`;
-const LETTER_JOINER = new RegExp(String.raw`(?<=${CHARACTER_OF_A_JOINING_SCRIPT})[\u200C\u200D]|[\u200C\u200D](?=${CHARACTER_OF_A_JOINING_SCRIPT})`, "u");
+// The joiners are themselves in the Inherited script, so they must not count as the mark that links a joiner to its letter.
+const COMBINING_MARK = String.raw`(?:(?![\u200C\u200D])\p{Script=Inherited})`;
+const LETTER_JOINER = new RegExp(String.raw`[\u200C\u200D](?:(?<=${CHARACTER_OF_A_JOINING_SCRIPT}${COMBINING_MARK}*[\u200C\u200D])|(?=${CHARACTER_OF_A_JOINING_SCRIPT}))`, "u");
 
 const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER].map((pattern) => pattern.source).join("|"), "gu");
 
-const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800]/u];
+// An emoji newer than this runtime's Unicode tables is unassigned here, and its block is Extended_Pictographic already.
+const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Cf}\p{Co}\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800\u2D7F\u{1D159}]/u, /(?!\p{Extended_Pictographic})\p{Cn}/u];
 
 export type TextProblem = "tooLong" | "characters" | "secret";
 
