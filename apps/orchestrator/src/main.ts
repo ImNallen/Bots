@@ -17,6 +17,8 @@ import { hashComputerToken } from "./secrets.ts";
 import { createService } from "./service.ts";
 import { loadStaticFiles, resolveStaticFile } from "./static.ts";
 import { createTokenIssuer } from "./tokens.ts";
+import { attachmentRoutes } from "./attachments.ts";
+import { voiceRoutes } from "./voice.ts";
 
 // tailscale serve is the only thing able to reach this socket, which is what makes its identity header unforgeable.
 const HOST = "127.0.0.1";
@@ -104,6 +106,8 @@ app.route(
   }),
 );
 
+app.route("/api/attachments", attachmentRoutes({ authMode: config.authMode, service }));
+app.route("/api/voice", voiceRoutes({ authMode: config.authMode, service, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, model: config.transcriptionModel }));
 app.all("/api/*", (c) => c.json({ error: "not-found" }, 404));
 
 app.get("*", (c) => {

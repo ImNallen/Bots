@@ -4,7 +4,7 @@ import { internalMutation, mutation, query } from "./_generated/server.js";
 import { TEXT_READ_BYTES, decideActivity, lastMessageOf, newestEventsUpToText } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
-import { parseBotName, parseBotProfile } from "./profile.js";
+import { parseBotIdentity, parseBotName, parseBotProfile } from "./profile.js";
 import { promptRoutines, routinesOfBot } from "./schedules.js";
 import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape } from "./validators.js";
@@ -78,6 +78,7 @@ export const overview = query({
         row: {
           _id: bot._id,
           name: bot.name,
+          title: bot.title,
           shape: bot.shape,
           color: bot.color,
           // The end time and not a comparison, because Convex does not rerun a query as time passes. The page decides when it ends.
@@ -103,6 +104,24 @@ export const create = mutation({
       throw new ConvexError("Call users.ensureCurrent before creating a bot");
     }
     return await ctx.db.insert("bots", { ownerId: user._id, name: parseBotName(name), shape, color });
+  },
+});
+
+export const setHighlight = mutation({
+  args: { botId: v.id("bots"), position: v.union(v.number(), v.null()) },
+  handler: async (ctx, { botId, position }) => {
+    const bot = await requireOwnedBot(ctx, botId);
+    const user = await ctx.db.get(bot.ownerId);
+    if (user === null) throw new ConvexError("User not found");
+    const ids = (user.highlightedBotIds ?? []).filter((id) => id !== botId);
+    if (position !== null) {
+      if (!Number.isInteger(position) || position < 0 || position > 3) {
+        throw new ConvexError("Choose a highlight position from 0 to 3");
+      }
+      if (ids.length >= 4) throw new ConvexError("Highlight up to four bots. Drag one back to the list first.");
+      ids.splice(position, 0, botId);
+    }
+    await ctx.db.patch(user._id, { highlightedBotIds: ids });
   },
 });
 
@@ -178,6 +197,14 @@ export const setProfile = mutation({
   },
 });
 
+export const setIdentity = mutation({
+  args: { botId: v.id("bots"), name: v.string(), title: v.string() },
+  handler: async (ctx, { botId, ...fields }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, parseBotIdentity(fields));
+  },
+});
+
 export const promptFor = query({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {
@@ -222,8 +249,13 @@ export const remove = mutation({
     for (const routine of await routinesOfBot(ctx, botId)) {
       await ctx.db.delete(routine._id);
     }
+    const user = await ctx.db.get(bot.ownerId);
+    if (user?.highlightedBotIds?.includes(botId)) {
+      await ctx.db.patch(user._id, { highlightedBotIds: user.highlightedBotIds.filter((id) => id !== botId) });
+    }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });
+    await ctx.scheduler.runAfter(0, internal.attachments.purgeBot, { botId });
     // With no VM, nothing would ever read this row.
     const computer = await ctx.db
       .query("computers")

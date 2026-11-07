@@ -3,6 +3,8 @@ import type { Id } from "@bots/convex/dataModel";
 import RFB from "@novnc/novnc";
 import { useConvex, useMutation } from "convex/react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type Dispatch, type RefObject } from "react";
+import { BotFace } from "./BotFace.tsx";
+import type { Character } from "./character.ts";
 import { Icon } from "./Icon.tsx";
 import { KEY_KEYSYMS, isNamedKey, planTyping, type NamedKey } from "./keysyms.ts";
 import {
@@ -18,7 +20,7 @@ import {
 import { useHasCoarsePointer, useIsPhone } from "./useIsPhone.ts";
 
 const RENEW_MS = 60_000;
-// Matches .screen in styles.css, so a stream's letterbox does not show.
+// Matches .scr-mid in styles.css, so a stream's letterbox does not show.
 const VIEW_BACKGROUND = "#141414";
 const KEY_BAR = [
   ["Tab", "Tab"],
@@ -262,7 +264,7 @@ function ControlPill({ state, dispatch }: { state: ScreenState; dispatch: Dispat
             Watching
           </span>
           <button type="button" disabled={state.kind === "requesting"} onClick={() => dispatch({ type: "takeControl" })}>
-            Take control
+            {state.kind === "requesting" ? "Taking control…" : "Take control"}
           </button>
         </div>
       );
@@ -270,7 +272,7 @@ function ControlPill({ state, dispatch }: { state: ScreenState; dispatch: Dispat
     case "controlling":
       return (
         <div className="seg-big">
-          <span>You have control</span>
+          <span><Icon name="pointer" />You have control</span>
           <button type="button" onClick={() => dispatch({ type: "giveBack" })}>
             Give back
           </button>
@@ -292,7 +294,7 @@ function topLine(state: ScreenState): string | null {
   switch (state.kind) {
     case "joining":
     case "controlling":
-      return "The bot waits before its next tool";
+      return "The bot waits before its next action.";
     case "connecting":
     case "watching":
       return state.notice === null ? null : NOTICES[state.notice];
@@ -329,7 +331,7 @@ function Message({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<S
   }
 }
 
-export function ScreenPanel({ botId, botName, onClose }: { botId: Id<"bots">; botName: string; onClose: () => void }) {
+export function ScreenPanel({ botId, botName, character, onClose }: { botId: Id<"bots">; botName: string; character: Character; onClose: () => void }) {
   const [state, dispatch] = useReducer(screenReducer, INITIAL_SCREEN_STATE);
   useTakeover(botId, state, dispatch);
   const isPhone = useIsPhone();
@@ -369,12 +371,13 @@ export function ScreenPanel({ botId, botName, onClose }: { botId: Id<"bots">; bo
     <section ref={view} className="screen" role="dialog" aria-modal="true" aria-label={`${botName}'s screen`} tabIndex={-1} data-compact={compact}>
       <div className="scr-top">
         <button type="button" className="scr-x" aria-label="Close the screen" onClick={onClose}>
-          <Icon name={compact ? "back" : "shrink"} />
+          <Icon name="back" />
         </button>
-        <span className="scr-state" role="status">
-          {topLine(state)}
-        </span>
+        <BotFace character={character} size={compact ? 30 : 36} state={holding ? "held" : "idle"} />
+        <div className="scr-identity"><h2>{botName}’s computer</h2><small>Live screen</small></div>
+        <span className="scr-connection">{state.kind === "ended" ? "Disconnected" : state.kind === "watching" || state.kind === "controlling" || state.kind === "requesting" ? <><Icon name="check" /> Connected</> : "Connecting…"}</span>
       </div>
+      <p className="scr-state" role="status">{topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
       <div className="scr-mid">
         {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} dispatch={dispatch} />}
         <Message state={state} dispatch={dispatch} />
@@ -382,6 +385,7 @@ export function ScreenPanel({ botId, botName, onClose }: { botId: Id<"bots">; bo
       <div className="scr-low">
         {state.kind === "controlling" && hasTouchKeyboard && <TouchControls stream={state.stream} />}
         <ControlPill state={state} dispatch={dispatch} />
+        <p className="scr-hint">{holding ? compact ? "Leaving this view gives control back." : "Use your mouse and keyboard. Give back when you’re ready." : compact ? "Pinch to zoom. Rotate for a larger view." : "Take control to click, type, or sign in."}</p>
       </div>
     </section>
   );

@@ -8,6 +8,7 @@ import { allArgumentsRead, hasReadToEnd, linesBelow, linesBelowNote } from "./hi
 import { Icon } from "./Icon.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { errorMessage } from "./session.tsx";
+import { MessageAttachments } from "./Attachments.tsx";
 
 type Decision = "approved" | "denied";
 
@@ -183,17 +184,18 @@ function StatusLine({ item, character }: { item: Extract<DisplayItem, { kind: "s
   );
 }
 
-export function ChatItem({ item, character }: { item: DisplayItem; character: Character }) {
+export function ChatItem({ item, character, botName = "Bot" }: { item: DisplayItem; character: Character; botName?: string }) {
   switch (item.kind) {
     case "time":
       return <div className="when">{item.label}</div>;
     case "user":
-      return <div className="bub mine">{item.text}</div>;
+      return <div className="bub mine">{item.attachments?.length ? <MessageAttachments items={item.attachments} /> : null}{item.text}</div>;
     case "assistant":
       return (
-        <div className="bub" aria-live={item.streaming ? "polite" : undefined}>
-          <Markdown text={item.text} />
-        </div>
+        <article className="assistant-message">
+          <div className="assistant-author"><BotFace character={character} size={24} /><span>{botName}</span></div>
+          <div className="bub" aria-live={item.streaming ? "polite" : undefined}><Markdown text={item.text} /></div>
+        </article>
       );
     case "report":
       return (

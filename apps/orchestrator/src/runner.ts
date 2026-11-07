@@ -15,7 +15,7 @@ import {
   waitForApproval,
 } from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
-import { completeWithRetry, type CompletionResult } from "./mistral.ts";
+import { completeWithRetry, type CompletionResult, type MistralUserChunk } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   browsingForCall,
@@ -31,6 +31,7 @@ import {
 import { decryptApiKey } from "./secrets.ts";
 import type { Service } from "./service.ts";
 import { createStreamWriter } from "./stream-writer.ts";
+import { loadAttachmentInputs } from "./attachment-inputs.ts";
 
 const MAX_CONCURRENT_RUNS = 8;
 const LEASE_MS = 15_000;
@@ -153,6 +154,18 @@ async function callModel(args: {
     return { kind: "failed", reason: UNREADABLE_KEY_REASON };
   }
   const profile = await deps.service.query(api.bots.promptFor, { botId: claim.botId });
+  let attachments: Map<string, MistralUserChunk[]>;
+  try {
+    attachments = await loadAttachmentInputs({
+      service: deps.service, botId: claim.botId, ownerId: claim.ownerId,
+      files: events.flatMap((event) => event.body.kind === "userMessage" ? event.body.attachments ?? [] : []),
+      currentIds: events.flatMap((event) => event.runId === runId && event.body.kind === "userMessage" ? event.body.attachments?.map((file) => file.id) ?? [] : []),
+      signal: AbortSignal.any([lease.lost, lease.cancel]),
+    });
+  } catch (error) {
+    if (lease.lost.aborted || lease.cancel.aborted) throw error;
+    return { kind: "failed", reason: "The attached files could not be read. Attach them again and retry." };
+  }
   const writer = createStreamWriter({
     // The stream is a preview. Fencing rejects a stale write, and the turn itself goes through append.
     write: async (snapshot) => {
@@ -184,6 +197,7 @@ async function callModel(args: {
         routines: profile.routines,
       },
       events: events.map((event) => event.body),
+      attachments,
     }),
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),

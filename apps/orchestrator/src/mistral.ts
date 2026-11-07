@@ -6,9 +6,11 @@ export type MistralContentChunk =
   | { type: "thinking"; thinking: { type: "text"; text: string }[] };
 
 type MistralToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+export type MistralUserChunk = { type: "text"; text: string } | { type: "image_url"; image_url: string } | { type: "document_url"; document_url: string };
 
 export type MistralMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | MistralUserChunk[] }
   | { role: "assistant"; content: string | MistralContentChunk[]; tool_calls?: MistralToolCall[] }
   | { role: "tool"; tool_call_id: string; name: string; content: string };
 

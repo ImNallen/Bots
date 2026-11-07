@@ -6,11 +6,16 @@ export const toolCall = v.object({
   arguments: v.string(),
 });
 
+export const attachmentContentType = v.union(v.literal("image/png"), v.literal("image/jpeg"), v.literal("image/webp"), v.literal("application/pdf"), v.literal("text/plain"));
+export const messageAttachment = v.object({
+  id: v.id("attachments"), name: v.string(), contentType: attachmentContentType, size: v.number(),
+});
+
 export const runTrigger = v.union(v.literal("user"), v.literal("schedule"));
 export const runCapability = v.union(v.literal("full"), v.literal("readOnly"));
 
 export const runEventBody = v.union(
-  v.object({ kind: v.literal("userMessage"), text: v.string() }),
+  v.object({ kind: v.literal("userMessage"), text: v.string(), attachments: v.optional(v.array(messageAttachment)) }),
   v.object({ kind: v.literal("scheduleFired"), scheduleId: v.id("schedules"), text: v.string() }),
   v.object({ kind: v.literal("routineReport"), scheduleId: v.id("schedules"), runId: v.id("runs"), text: v.string() }),
   v.object({

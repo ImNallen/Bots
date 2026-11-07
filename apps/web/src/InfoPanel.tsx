@@ -7,11 +7,8 @@ import { BotFace, type FaceState } from "./BotFace.tsx";
 import { characterOf, type Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Icon } from "./Icon.tsx";
-import { MemorySection } from "./MemorySection.tsx";
-import { RoutinesSection } from "./RoutinesSection.tsx";
 import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
-import { useIsPhone } from "./useIsPhone.ts";
 
 const APPROVAL_LEVELS = [
   ["outside", "Shell commands and page changes"],
@@ -22,7 +19,7 @@ const APPROVAL_LEVELS = [
 
 function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChange: Dispatch<SetStateAction<ProfileEdits>> }) {
   const { bot, edits, onEditsChange } = props;
-  const setProfile = useMutation(api.bots.setProfile);
+  const setProfile = useMutation(api.bots.setIdentity);
   const [save, setSave] = useState<
     { kind: "idle" } | { kind: "pending" } | { kind: "saved" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
@@ -43,7 +40,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
     }
     setSave({ kind: "pending" });
     try {
-      await setProfile({ botId: bot._id, ...shown });
+      await setProfile({ botId: bot._id, name: shown.name, title: shown.title });
       onEditsChange({});
       setSave({ kind: "saved" });
     } catch (error) {
@@ -54,6 +51,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
   return (
     <>
       <form className="card profile" onSubmit={(event) => void handleSubmit(event)}>
+        <h3>Profile</h3>
         <label className="profile-field">
           <span>Name</span>
           <input className="field" autoComplete="off" readOnly={saving} value={shown.name} onChange={(event) => edit("name", event.target.value)} />
@@ -69,18 +67,8 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
             onChange={(event) => edit("title", event.target.value)}
           />
         </label>
-        <label className="profile-field">
-          <span>Description</span>
-          <textarea
-            className="field profile-textarea"
-            rows={6}
-            placeholder="Who this bot is and what it does, in a few sentences"
-            readOnly={saving}
-            value={shown.description}
-            onChange={(event) => edit("description", event.target.value)}
-          />
-        </label>
-        <div className="confirm-actions">
+        <div className="confirm-actions profile-save">
+          <small role="status">{save.kind === "saved" ? "Saved." : "Shown in your bot list."}</small>
           <button type="submit" className="btn btn-go" disabled={!changed || saving}>
             {saving ? "Saving" : "Save"}
           </button>
@@ -90,11 +78,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
         <p className="error panel-note" role="alert">
           {save.message}
         </p>
-      ) : (
-        <p className="panel-note" role="status">
-          {save.kind === "saved" ? "Saved. " : ""}Only you can change the name and title. You and the bot can change the description. A change reaches the bot at its next step.
-        </p>
-      )}
+      ) : null}
     </>
   );
 }
@@ -104,28 +88,28 @@ function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof A
   const [problem, setProblem] = useState<string | null>(null);
   return (
     <>
-      <div className="card">
-        <label className="card-row">
-          <span>Ask before</span>
-          <span className="select">
-            <select
-              value={level}
-              onChange={(event) => {
-                const next = event.target.value as typeof level;
-                setProblem(null);
-                setLevel({ botId, level: next }).catch((error: unknown) => setProblem(errorMessage(error)));
-              }}
-            >
-              {APPROVAL_LEVELS.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <Icon name="chevron" />
-          </span>
-        </label>
-      </div>
+      <label className="approval-setting">
+        <span className="visually-hidden">Ask before</span>
+        <span className="select">
+          <select
+            aria-label="Ask before"
+            value={level}
+            onChange={(event) => {
+              const next = APPROVAL_LEVELS.find(([value]) => value === event.target.value)?.[0];
+              if (next === undefined) return;
+              setProblem(null);
+              setLevel({ botId, level: next }).catch((error: unknown) => setProblem(errorMessage(error)));
+            }}
+          >
+            {APPROVAL_LEVELS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <Icon name="chevron" />
+        </span>
+      </label>
       {problem !== null && (
         <p className="error panel-note" role="alert">
           {problem}
@@ -184,8 +168,9 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
 
   if (step.kind === "idle") {
     return (
-      <div className="card">
-        <button type="button" className="card-row danger-link" onClick={() => setStep({ kind: "confirming" })}>
+      <div className="delete-bot-footer">
+        <div><h3>Delete {name}</h3><p>Remove this bot and its work.</p></div>
+        <button type="button" className="btn" onClick={() => setStep({ kind: "confirming" })}>
           Delete bot
         </button>
       </div>
@@ -214,46 +199,46 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
 export function InfoPanel(props: {
   bot: Doc<"bots">;
   faceState: FaceState;
-  revealRoutines: boolean;
+  showRoutines: boolean;
   profileEdits: ProfileEdits;
   onProfileEditsChange: Dispatch<SetStateAction<ProfileEdits>>;
   onClose: () => void;
   onOpenScreen: () => void;
+  onShowChat: () => void;
+  onShowRoutines: () => void;
 }) {
-  const { bot, faceState, revealRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen } = props;
-  const isPhone = useIsPhone();
+  const { bot, faceState, showRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen, onShowChat, onShowRoutines } = props;
   const character = characterOf(bot);
   return (
     <aside className="info" aria-label={`About ${bot.name}`}>
-      <button type="button" className="round info-close" aria-label={isPhone ? "Back" : "Close"} onClick={onClose}>
-        <Icon name={isPhone ? "back" : "close"} />
-      </button>
-      <div className="info-who">
-        <BotFace character={character} size={isPhone ? 84 : 60} state={faceState} />
-        <div>
-          <h2>{bot.name}</h2>
-          {bot.title !== undefined && <p className="info-title">{bot.title}</p>}
-        </div>
-      </div>
-      <h3 className="label">Computer</h3>
-      <div className="card">
-        <button type="button" className="card-row" onClick={onOpenScreen}>
-          <span>
-            {bot.name}'s screen
-            <small>Watch it work, or take over</small>
-          </span>
-          <span className="thumb" />
+      <div className="info-head">
+        <span>Bot details</span>
+        <button type="button" className="round" aria-label="Close bot details" onClick={onClose}>
+          <Icon name="close" />
         </button>
       </div>
-      <h3 className="label">Profile</h3>
+      <div className="info-who">
+        <BotFace character={character} size={64} state={faceState} />
+        <div>
+          <h2>{bot.name}</h2>
+          {bot.title && <p className="info-title">{bot.title}</p>}
+        </div>
+      </div>
+      <nav className="bot-destinations" aria-label="Bot views">
+        <button type="button" aria-current={!showRoutines ? "page" : undefined} onClick={onShowChat}>Chat</button>
+        <button type="button" aria-current={showRoutines ? "page" : undefined} onClick={onShowRoutines}>Routines</button>
+        <button type="button" onClick={onOpenScreen}>Computer</button>
+      </nav>
       <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
-      <MemorySection botId={bot._id} botName={bot.name} />
-      <RoutinesSection botId={bot._id} botName={bot.name} reveal={revealRoutines} />
-      <h3 className="label">Approvals</h3>
-      <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
-      <h3 className="label">Character</h3>
-      <CharacterCard botId={bot._id} character={character} />
-      <div className="info-gap" />
+      <section className="info-card">
+        <h3>Appearance</h3>
+        <CharacterCard botId={bot._id} character={character} />
+      </section>
+      <section className="info-card">
+        <h3>Approvals</h3>
+        <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
+        <p className="panel-note">Choose when your bot asks before acting.</p>
+      </section>
       <DeleteBot botId={bot._id} name={bot.name} />
     </aside>
   );

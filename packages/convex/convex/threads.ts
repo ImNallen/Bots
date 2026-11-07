@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 import type { RunState } from "./validators.js";
+import { MAX_ATTACHMENTS } from "./attachmentFiles.js";
 
 const MAX_MESSAGE_LENGTH = 64 * 1024;
 const TIMELINE_USER_RUNS = 30;
@@ -108,8 +109,8 @@ export const ensureForBot = mutation({
 });
 
 export const send = mutation({
-  args: { threadId: v.id("threads"), text: v.string() },
-  handler: async (ctx, { threadId, text }) => {
+  args: { threadId: v.id("threads"), text: v.string(), attachmentIds: v.optional(v.array(v.id("attachments"))) },
+  handler: async (ctx, { threadId, text, attachmentIds = [] }) => {
     const thread = await requireOwnedThread(ctx, threadId);
     // A deleted bot's thread lasts until its purge ends, and a run started there would bring back the bot's files.
     if ((await ctx.db.get(thread.botId)) === null) {
@@ -119,7 +120,7 @@ export const send = mutation({
       throw new ConvexError("A routine's thread takes no messages");
     }
     const trimmed = text.trim();
-    if (trimmed === "") {
+    if (trimmed === "" && attachmentIds.length === 0) {
       throw new ConvexError("Message cannot be empty");
     }
     if (trimmed.length > MAX_MESSAGE_LENGTH) {
@@ -127,6 +128,13 @@ export const send = mutation({
     }
     if ((await activeRunOfBot(ctx, thread.botId)) !== null) {
       throw new ConvexError("This bot already has an active run");
+    }
+    if (attachmentIds.length > MAX_ATTACHMENTS || new Set(attachmentIds).size !== attachmentIds.length) throw new ConvexError("Attach up to four different files.");
+    const attachments = [];
+    for (const id of attachmentIds) {
+      const file = await ctx.db.get(id);
+      if (file === null || file.ownerId !== thread.ownerId || file.botId !== thread.botId || file.state.kind !== "ready") throw new ConvexError("An attachment is unavailable. Remove it and upload it again.");
+      attachments.push(file);
     }
     const runId = await ctx.db.insert("runs", {
       threadId,
@@ -142,8 +150,11 @@ export const send = mutation({
       runId,
       threadId,
       seq: 0,
-      body: { kind: "userMessage", text: trimmed },
+      body: { kind: "userMessage", text: trimmed, ...(attachments.length === 0 ? {} : { attachments: attachments.map((file) => ({ id: file._id, name: file.name, contentType: file.contentType, size: file.size })) }) },
     });
+    for (const file of attachments) {
+      if (file.state.kind === "ready") await ctx.db.patch(file._id, { state: { kind: "sent", storageId: file.state.storageId, runId } });
+    }
     return runId;
   },
 });

@@ -29,7 +29,7 @@ export function TimeZoneSection() {
     <>
       <div className="card">
         <label className="card-row">
-          <span>Your time zone</span>
+          <span>Time zone<small>Routines follow the time here.</small></span>
           <span className="select">
             <select value={current} disabled={save.kind === "pending"} onChange={(event) => void choose(event.target.value)}>
               {zones.map((zone) => (
@@ -46,11 +46,11 @@ export function TimeZoneSection() {
         <p className="error panel-note" role="alert">
           {save.message}
         </p>
-      ) : (
+      ) : save.kind === "saved" ? (
         <p className="panel-note" role="status">
-          {save.kind === "saved" ? "Saved. " : ""}A weekly routine runs at its hour in this zone.
+          Saved.
         </p>
-      )}
+      ) : null}
     </>
   );
 }

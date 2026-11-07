@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 // styles.css switches its layout at the same width.
-const phone = window.matchMedia("(max-width: 759.98px)");
+const phone = window.matchMedia("(max-width: 1023.98px)");
 const coarsePointer = window.matchMedia("(pointer: coarse)");
 
 function useMatches(query: MediaQueryList): boolean {

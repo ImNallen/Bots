@@ -23,6 +23,13 @@ function parseOptionalText(args: { label: string; text: string; max: number }): 
   return trimmed === "" ? undefined : trimmed;
 }
 
+export function parseBotIdentity(args: { name: string; title: string }): { name: string; title: string | undefined } {
+  return {
+    name: parseBotName(args.name),
+    title: parseOptionalText({ label: "Title", text: args.title, max: MAX_TITLE_LENGTH }),
+  };
+}
+
 export function parseBotProfile(args: { name: string; title: string; description: string }): {
   name: string;
   title: string | undefined;
@@ -33,8 +40,7 @@ export function parseBotProfile(args: { name: string; title: string; description
     throw new ConvexError(DESCRIPTION_PROBLEMS[description.problem].owner);
   }
   return {
-    name: parseBotName(args.name),
-    title: parseOptionalText({ label: "Title", text: args.title, max: MAX_TITLE_LENGTH }),
+    ...parseBotIdentity(args),
     description: description.text,
   };
 }

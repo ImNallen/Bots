@@ -1,15 +1,28 @@
 import { api } from "@bots/convex";
-import { Link, Outlet, useMatchRoute, useParams } from "@tanstack/react-router";
+import { Outlet, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { createContext, useContext, useState } from "react";
-import { FACE_STATES, subLineOf, useShownActivity, type BotRow } from "./activity.ts";
-import { BotFace, QueuedDots } from "./BotFace.tsx";
-import { characterOf } from "./character.ts";
+import { createContext, useContext, useRef, useState } from "react";
+import { BotNavigation } from "./BotNavigation.tsx";
 import { Icon } from "./Icon.tsx";
 import { NewBotDialog } from "./NewBotDialog.tsx";
 import { SignedIn } from "./session.tsx";
 import { SettingsDialog } from "./SettingsDialog.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
+
+const SIDEBAR_WIDTH_KEY = "bots.sidebarWidth";
+const MIN_SIDEBAR_WIDTH = 88;
+const MAX_SIDEBAR_WIDTH = 400;
+const DEFAULT_SIDEBAR_WIDTH = 264;
+
+function readSidebarWidth() {
+  try {
+    const value = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(value) && value >= MIN_SIDEBAR_WIDTH && value <= MAX_SIDEBAR_WIDTH) return value;
+  } catch {
+    // The sidebar still resizes when storage is unavailable.
+  }
+  return DEFAULT_SIDEBAR_WIDTH;
+}
 
 const OpenNewBot = createContext<() => void>(() => {});
 
@@ -17,69 +30,86 @@ export function useOpenNewBot(): () => void {
   return useContext(OpenNewBot);
 }
 
-function BotRowLink({ row }: { row: BotRow }) {
-  const isPhone = useIsPhone();
-  const activity = useShownActivity(row);
-  const { text, tone } = subLineOf({ activity, lastMessage: row.lastMessage });
-  const queued = activity.kind === "queued";
-  return (
-    <Link className="row" to="/bots/$botId" params={{ botId: row._id }} search={true}>
-      <BotFace character={characterOf(row)} size={isPhone ? 44 : 32} state={FACE_STATES[activity.kind]} />
-      <span className="row-text">
-        <span className="row-name">{row.name}</span>
-        {(text !== null || queued) && (
-          <span className="row-sub" data-tone={tone}>
-            {queued && <QueuedDots />}
-            {queued && <span className="visually-hidden">Waiting to start. </span>}
-            <span className="row-sub-text">{text}</span>
-          </span>
-        )}
-      </span>
-    </Link>
-  );
-}
-
 function Sidebar(props: { email: string; onNewBot: () => void; onSettings: () => void }) {
   const { email, onNewBot, onSettings } = props;
   const rows = useQuery(api.bots.overview);
+  const user = useQuery(api.users.current);
+  const name = user?.displayName ?? email;
+  const phone = useIsPhone();
+  const [width, setWidth] = useState(readSidebarWidth);
+  const [resizing, setResizing] = useState(false);
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const compact = !phone && width < 148;
+
+  function resize(value: number) {
+    const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, Math.round(value)));
+    setWidth(next);
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+    } catch {
+      // The current choice still applies for this session.
+    }
+  }
+
   return (
-    <aside className="side">
+    <aside className="side" data-compact={compact} data-resizing={resizing} style={phone ? undefined : { width }}>
       <div className="side-top">
-        <h1 className="side-title">Bots</h1>
         <button type="button" className="round" aria-label="New bot" onClick={onNewBot}>
-          <Icon name="plus" />
+          <Icon name="addBot" />
         </button>
       </div>
-      <Link className="row side-activity" to="/activity">
-        <span className="side-activity-icon">
-          <Icon name="pulse" />
-        </span>
-        <span className="row-name">Activity</span>
-      </Link>
-      <nav className="rows" aria-label="Your bots">
-        {rows === undefined && (
-          <p className="rows-note" role="status">
-            Loading bots.
-          </p>
-        )}
-        {rows?.length === 0 && <p className="rows-note">No bots yet.</p>}
-        {rows?.map((row) => <BotRowLink key={row._id} row={row} />)}
-      </nav>
-      <button type="button" className="me" aria-label={`Settings for ${email}`} onClick={onSettings}>
-        <span className="me-dot">{email.charAt(0).toUpperCase()}</span>
-        <span className="me-name">{email}</span>
+      <BotNavigation rows={user === undefined ? undefined : rows} highlightedIds={user?.highlightedBotIds ?? []} compact={compact} />
+      <button type="button" className="me" aria-label={`Settings for ${email}`} title={compact ? `Settings for ${name}` : undefined} onClick={onSettings}>
+        <span className="me-dot">{name.split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join("").toUpperCase()}</span>
+        <span className="me-name">{name}</span>
         <span className="me-gear">
-          <Icon name="gear" />
+          <Icon name="accountDots" />
         </span>
       </button>
+      {!phone && <div
+        className="sidebar-resize"
+        role="separator" aria-orientation="vertical" aria-label="Resize bot sidebar"
+        aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={width}
+        tabIndex={0}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !event.isPrimary) return;
+          event.preventDefault();
+          drag.current = { startX: event.clientX, startWidth: width };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setResizing(true);
+        }}
+        onPointerMove={(event) => {
+          if (drag.current !== null) resize(drag.current.startWidth + event.clientX - drag.current.startX);
+        }}
+        onPointerUp={(event) => {
+          drag.current = null;
+          setResizing(false);
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          if (drag.current !== null) resize(drag.current.startWidth);
+          drag.current = null;
+          setResizing(false);
+        }}
+        onLostPointerCapture={() => { drag.current = null; setResizing(false); }}
+        onDoubleClick={() => resize(DEFAULT_SIDEBAR_WIDTH)}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? 32 : 8;
+          if (event.key === "ArrowLeft") resize(width - step);
+          else if (event.key === "ArrowRight") resize(width + step);
+          else if (event.key === "Home") resize(MIN_SIDEBAR_WIDTH);
+          else if (event.key === "End") resize(MAX_SIDEBAR_WIDTH);
+          else return;
+          event.preventDefault();
+        }}
+      />}
     </aside>
   );
 }
 
 function Shell({ email }: { email: string }) {
   const { botId } = useParams({ strict: false });
-  const matchRoute = useMatchRoute();
-  const showsContent = botId !== undefined || matchRoute({ to: "/activity" }) !== false;
+  const showsContent = botId !== undefined;
   const [dialog, setDialog] = useState<"newBot" | "settings" | null>(null);
   const openNewBot = () => setDialog("newBot");
   const closeDialog = () => setDialog(null);

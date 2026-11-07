@@ -61,18 +61,18 @@ export const SHAPES: Record<BotShape, { d: string; eyes: readonly [x: number, y:
   },
 };
 
-export const COLORS: Record<BotColor, { fill: string; bubble: string }> = {
-  black: { fill: "#000000", bubble: "#222222" },
-  brown: { fill: "#a06c3a", bubble: "#8a5b2e" },
-  red: { fill: "#fb2c3e", bubble: "#d82433" },
-  orange: { fill: "#fd6910", bubble: "#c55415" },
-  amber: { fill: "#f69313", bubble: "#ac6609" },
-  green: { fill: "#18c170", bubble: "#0d884e" },
-  teal: { fill: "#1ab7a2", bubble: "#118575" },
-  blue: { fill: "#2186fc", bubble: "#1b6fd6" },
-  purple: { fill: "#8f59f9", bubble: "#7a47e6" },
-  pink: { fill: "#fa3598", bubble: "#da2a83" },
-  grey: { fill: "#959595", bubble: "#767676" },
+export const COLORS: Record<BotColor, { fill: string; darkFill: string; eyes: string; bubble: string }> = {
+  black: { fill: "#b8b8b8", darkFill: "#a8a8a8", eyes: "#303030", bubble: "#222222" },
+  brown: { fill: "#cbb9a5", darkFill: "#b7a38c", eyes: "#514233", bubble: "#8a5b2e" },
+  red: { fill: "#dbb1af", darkFill: "#c99e9b", eyes: "#653e3b", bubble: "#d82433" },
+  orange: { fill: "#dfb79c", darkFill: "#d0a589", eyes: "#5e3f30", bubble: "#c55415" },
+  amber: { fill: "#d9ca9c", darkFill: "#c5b688", eyes: "#5a4c2b", bubble: "#ac6609" },
+  green: { fill: "#b9c7a5", darkFill: "#a8ba93", eyes: "#344331", bubble: "#0d884e" },
+  teal: { fill: "#a8c6bf", darkFill: "#94b4ad", eyes: "#304d46", bubble: "#118575" },
+  blue: { fill: "#acbdd8", darkFill: "#9cafd0", eyes: "#2d3d56", bubble: "#1b6fd6" },
+  purple: { fill: "#c3b4d4", darkFill: "#b2a1c6", eyes: "#493957", bubble: "#7a47e6" },
+  pink: { fill: "#d8b5c8", darkFill: "#c6a2b6", eyes: "#5e3c4d", bubble: "#da2a83" },
+  grey: { fill: "#c5c5c5", darkFill: "#afafaf", eyes: "#424242", bubble: "#767676" },
 };
 
 export const SHAPE_NAMES = Object.keys(SHAPES) as BotShape[];
@@ -99,6 +99,6 @@ export function characterOf(bot: { _id: string; shape?: BotShape; color?: BotCol
 
 // The stylesheet turns these into --bot and the colours that go with it, so dark mode can replace black.
 export function tintOf(color: BotColor): { "data-color": BotColor; style: CSSProperties } {
-  const { fill, bubble } = COLORS[color];
-  return { "data-color": color, style: { "--bot-fill": fill, "--bot-bubble": bubble } as CSSProperties };
+  const { fill, darkFill, eyes, bubble } = COLORS[color];
+  return { "data-color": color, style: { "--bot-fill": fill, "--bot-dark-fill": darkFill, "--bot-eye": eyes, "--bot-bubble": bubble } as CSSProperties };
 }

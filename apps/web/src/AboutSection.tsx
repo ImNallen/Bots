@@ -33,7 +33,7 @@ export function AboutSection() {
     <>
       <form className="card profile" onSubmit={(event) => void handleSubmit(event)}>
         <label className="profile-field">
-          <span>What your bots should know about you</span>
+          <span>What your bots should know</span>
           <textarea
             className="field profile-textarea"
             rows={4}
@@ -47,7 +47,8 @@ export function AboutSection() {
             }}
           />
         </label>
-        <div className="confirm-actions">
+        <div className="confirm-actions profile-save">
+          <small role="status">{save.kind === "saved" ? "Saved." : "Only you can edit this. Shared with all your bots."}</small>
           <button type="submit" className="btn btn-go" disabled={saving || shown === saved}>
             {saving ? "Saving" : "Save"}
           </button>
@@ -57,11 +58,7 @@ export function AboutSection() {
         <p className="error panel-note" role="alert">
           {save.message}
         </p>
-      ) : (
-        <p className="panel-note" role="status">
-          {save.kind === "saved" ? "Saved. " : ""}All of your bots read this, and no bot can change it.
-        </p>
-      )}
+      ) : null}
     </>
   );
 }

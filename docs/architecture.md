@@ -720,6 +720,26 @@ A query may read 16 MiB, and an event can be 1 MiB. So text reads share a budget
 
 Text from a bot renders as plain text, because a page can write it. `publicState` removes a running run's lease before any of this leaves the query.
 
+## How chat attachments reach the model
+
+The app sends file bytes to `POST /api/attachments/:botId` on the existing orchestrator listener. The route resolves the same Tailscale or local development identity as the rest of the app. The binary request type and custom file headers require a browser preflight across origins, which this listener does not grant. File names, sizes, binary signatures, and UTF-8 content are checked before upload.
+
+Only the service can begin and complete a storage upload. The `attachments` table records the owner, bot, name, content type, size, and an uploading, ready, or sent state. A ready state holds the storage ID. A sent state also holds the run ID. The browser receives the attachment row ID and metadata, without the underlying storage ID or URL. `threads.send` accepts up to four distinct ready attachments belonging to that thread's owner and bot. It writes their metadata into the user-message event and marks them sent in the same transaction.
+
+Previews and downloads use `GET /api/attachments/:id`. Each request checks the current owner and bot before the orchestrator streams the stored bytes. Responses use `private, no-store` and `nosniff`. Only supported images can be shown inline. PDFs and text/code files download as attachments. The draft lookup and discard mutation also check the caller's ownership.
+
+Before a model call, the runner resolves only sent attachments belonging to the run's bot and owner. Text becomes a labelled text chunk. Images and PDFs become base64 data chunks in Mistral's [image](https://docs.mistral.ai/inference/conversations/vision) and [document](https://docs.mistral.ai/studio/document-processing/document_qna) formats. A request includes at most the eight newest files within 32 MiB. It labels older attachments as omitted, and labels unavailable older files rather than failing every later message. If a current attachment cannot be read, the run fails with a request to attach the files again. These files are chat context, not files in the bot's workspace.
+
+Unsent uploads expire after 24 hours. Deleting a bot schedules storage and row removal in batches of eight. Repeating a completed upload returns the same metadata. A failed completion deletes the new stored file and returns a failure result, so the mutation commits the deletion. Throwing after that deletion would roll the cleanup back. The internal `attachmentChecks.storageForCheck` query lets the verification script inspect storage through the same admin-only pattern as `scheduleChecks`.
+
+## How voice input becomes a draft
+
+The composer records only after the user taps the microphone and grants browser permission. `MediaRecorder` prefers WebM or Ogg. If the browser only records MP4, `OfflineAudioContext.decodeAudioData` resamples it to 16 kHz, and the app encodes a mono PCM WAV. Recording has a two-minute browser limit and an 8 MiB size limit. The recording is not saved in Convex or the bot's workspace.
+
+`POST /api/voice/:botId` uses the existing listener's Tailscale or local development identity checks. Audio request types require a cross-origin browser preflight, which the listener does not grant. The route checks ownership through `bots.ownerForViewer`, retrieves that owner's encrypted credential through the service, and decrypts it on the server. It validates the audio container and forwards the recording as multipart form data to [Mistral's transcription API](https://docs.mistral.ai/studio/audio/speech-to-text/transcribe-files). The default model is pinned to `voxtral-mini-transcribe-3-0`. `MISTRAL_TRANSCRIPTION_MODEL` overrides it. Upstream requests time out after a minute. Error replies contain app messages rather than provider response bodies, and transcript replies are not cached.
+
+The transcript appends to the current draft with a functional state update, so edits made while the request is pending remain. Transcription never calls `threads.send`. The user can edit the draft and choose when to send it. A transient failure keeps the recording in browser memory for retry. Cancellation discards it and aborts an in-flight request. Session identity checks reject late permission results and transcripts, while stream tracks are stopped on completion, cancellation, and unmount. Route changes that hide the composer stop capture, as do page hiding and focus moving into Settings. A transcription already underway may finish while the tab is hidden, since its microphone is already off.
+
 ## Where secrets live
 
 The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.
