@@ -1,20 +1,28 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, makeCallId, parseToolCall, toolDefinitions } from "@bots/protocol";
+import { isMemoryInvocation, makeCallId, parseToolCall } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
-import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
+import {
+  DENIED_OUTPUT,
+  EXPIRED_OUTPUT,
+  FINAL_CALL_OUTPUT,
+  NOT_SENT_CANCELLED_OUTPUT,
+  READ_ONLY_OUTPUT,
+  decideTool,
+  waitForApproval,
+} from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
+  modelRequest,
   nextAction,
-  systemPrompt,
-  toMistralMessages,
   touchedComputer,
   withUniqueToolCallIds,
+  type PromptRun,
   type ToolCall,
 } from "./run-logic.ts";
 import { decryptApiKey } from "./secrets.ts";
@@ -104,14 +112,16 @@ function holdLease(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Claim }):
   return { lost: lost.signal, cancel: cancel.signal, stop: () => clearInterval(interval) };
 }
 
-async function loadThreadEvents(service: Service, threadId: Id<"threads">): Promise<RunEvent[]> {
+async function loadEvents(args: { service: Service; runId: Id<"runs">; claim: Claim }): Promise<RunEvent[]> {
+  const { service, runId, claim } = args;
   const events: RunEvent[] = [];
   let cursor: string | null = null;
   for (;;) {
-    const page: FunctionReturnType<typeof api.threads.eventsPage> = await service.query(api.threads.eventsPage, {
-      threadId,
-      paginationOpts: { numItems: EVENTS_PAGE_ITEMS, cursor, maximumBytesRead: EVENTS_PAGE_BYTES },
-    });
+    const paginationOpts = { numItems: EVENTS_PAGE_ITEMS, cursor, maximumBytesRead: EVENTS_PAGE_BYTES };
+    const page: FunctionReturnType<typeof api.threads.eventsPage> =
+      claim.capability === "full"
+        ? await service.query(api.threads.eventsPage, { threadId: claim.threadId, paginationOpts })
+        : await service.query(api.runs.eventsPage, { runId, paginationOpts });
     events.push(...page.page);
     if (page.isDone) {
       return events;
@@ -126,8 +136,9 @@ async function callModel(args: {
   claim: Claim;
   lease: Lease;
   events: readonly RunEvent[];
+  run: PromptRun;
 }): Promise<CompletionResult> {
-  const { deps, runId, claim, lease, events } = args;
+  const { deps, runId, claim, lease, events, run } = args;
   const credential = await deps.service.query(api.credentials.ciphertextFor, { ownerId: claim.ownerId });
   if (credential === null) {
     return { kind: "failed", reason: NO_KEY_REASON };
@@ -157,18 +168,18 @@ async function callModel(args: {
   const result = await completeWithRetry({
     ...deps.mistral,
     apiKey,
-    messages: toMistralMessages({
-      system: systemPrompt({
+    ...modelRequest({
+      prompt: {
+        run,
         botName: profile.name,
         botId: claim.botId,
         title: profile.title,
         assignment: profile.assignment,
         about: profile.about,
         notes: profile.notes,
-      }),
+      },
       events: events.map((event) => event.body),
     }),
-    tools: toolDefinitions,
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),
     onProgress: (snapshot) => writer.update(snapshot),
@@ -196,8 +207,13 @@ async function runTool(args: {
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   const { invocation } = parsed;
-  if (needsApproval({ level, toolName: invocation.name, touchedComputer: touched })) {
-    const decision = await waitForApproval({
+  const decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, touchedComputer: touched });
+  if (decision === "reject") {
+    deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
+    return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
+  }
+  if (decision === "ask") {
+    const answer = await waitForApproval({
       request: () =>
         deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name }),
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
@@ -210,9 +226,9 @@ async function runTool(args: {
       },
     }).finally(() => slot.reclaim());
     lease.lost.throwIfAborted();
-    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision });
+    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision: answer });
     // This call was never sent, so these results can say so with certainty.
-    switch (decision) {
+    switch (answer) {
       case "approved":
         break;
       case "aborted":
@@ -257,7 +273,8 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   const { deps, runId, claim, lease } = args;
   const { service, log } = deps;
   const { leaseToken } = claim;
-  const events = await loadThreadEvents(service, claim.threadId);
+  const events = await loadEvents({ service, runId, claim });
+  const reports = claim.capability === "full" ? [] : await service.query(api.runs.earlierReports, { runId });
   let nextSeq = claim.nextSeq;
 
   async function append(body: AppendBody): Promise<void> {
@@ -274,8 +291,8 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   for (;;) {
     lease.lost.throwIfAborted();
     const runEvents = events.filter((event) => event.runId === runId).map((event) => event.body);
-    const action = nextAction(runEvents);
-    if (lease.cancel.aborted && action.kind !== "runTool") {
+    const action = nextAction(runEvents, claim.capability);
+    if (lease.cancel.aborted && action.kind !== "runTool" && action.kind !== "rejectCall") {
       await finish({ kind: "cancelled" });
       return;
     }
@@ -289,10 +306,22 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
       case "runTool":
         await append(await runTool({ deps, runId, claim, lease, call: action.call, touched: touchedComputer(runEvents) }));
         break;
+      case "rejectCall":
+        log({ level: "info", event: "tool-rejected", runId, toolCallId: action.call.id });
+        await append({
+          kind: "toolResult",
+          toolCallId: action.call.id,
+          name: action.call.name,
+          outcome: "rejected",
+          output: FINAL_CALL_OUTPUT,
+          truncated: false,
+        });
+        break;
       case "callModel": {
         let result: CompletionResult;
         try {
-          result = await callModel({ deps, runId, claim, lease, events });
+          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: action.final, reports };
+          result = await callModel({ deps, runId, claim, lease, events, run });
         } catch (error) {
           if (lease.lost.aborted || !lease.cancel.aborted) {
             throw error;

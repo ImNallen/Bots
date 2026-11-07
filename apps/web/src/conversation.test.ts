@@ -71,6 +71,30 @@ describe("conversationItems", () => {
     expect(only(items, "reasoning").text).toBe("I should list files.");
   });
 
+  describe("a routine's report", () => {
+    const report: Body = { kind: "routineReport", scheduleId: "s" as Id<"schedules">, runId: id<"runs">("raw"), text: "Version **2** shipped." };
+
+    it("is its own item, keeping its markdown", () => {
+      const items = itemsOf([run({ bodies: [report] })]);
+      expect(kinds(items)).toEqual(["time", "report"]);
+      expect(only(items, "report").text).toBe("Version **2** shipped.");
+    });
+
+    it("sits between the owner's messages in order, with no status line", () => {
+      const items = itemsOf([
+        run({ _id: id<"runs">("a"), bodies: [{ kind: "userMessage", text: "before" }, turn("reply")] }),
+        run({ _id: id<"runs">("b"), bodies: [report] }),
+        run({ _id: id<"runs">("c"), bodies: [{ kind: "userMessage", text: "after" }, turn("reply")] }),
+      ]);
+      expect(kinds(items)).toEqual(["time", "user", "assistant", "report", "user", "assistant"]);
+    });
+
+    it("gives a routine's instruction no item, because the chat shows only its report", () => {
+      const fired: Body = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+      expect(kinds(itemsOf([run({ bodies: [fired] })]))).toEqual(["time"]);
+    });
+  });
+
   it("leaves out a turn with no words", () => {
     const items = itemsOf([run({ bodies: [turn("  \n", [shell("ls")]), result("c1", "ok")] })]);
     expect(kinds(items)).toEqual(["time", "tool"]);
@@ -123,6 +147,11 @@ describe("conversationItems", () => {
     it("carries the output, exit code, and truncation", () => {
       const body: Body = { kind: "toolResult", toolCallId: "c1", name: "shell", outcome: "ok", output: "hi", exitCode: 0, truncated: true };
       expect(row("shell", {}, body).output).toEqual({ text: "hi", exitCode: 0, truncated: true });
+    });
+
+    it("says a rejected call was blocked because the run is read-only", () => {
+      const rejected = row("shell", { command: "rm -rf /" }, result("c1", "rejected", "This run is read-only."));
+      expect(rejected).toMatchObject({ status: "failed", note: "blocked, read-only run", summary: "rm -rf /", output: { text: "This run is read-only." } });
     });
 
     it.each(["error", "timeout", "interrupted", "unavailable", "invalid"] as const)("marks outcome %s as failed", (outcome) => {

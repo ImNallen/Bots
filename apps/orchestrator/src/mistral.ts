@@ -327,9 +327,7 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
       body: JSON.stringify({
         model: completion.model,
         messages: completion.messages,
-        tools: completion.tools,
-        tool_choice: "auto",
-        parallel_tool_calls: false,
+        ...(completion.tools.length === 0 ? {} : { tools: completion.tools, tool_choice: "auto", parallel_tool_calls: false }),
         stream: true,
       }),
       signal,

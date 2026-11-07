@@ -21,6 +21,7 @@ export type DisplayItem = { key: string } & (
   | { kind: "time"; label: string }
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; streaming: boolean }
+  | { kind: "report"; text: string }
   | { kind: "reasoning"; text: string }
   | {
       kind: "tool";
@@ -64,6 +65,7 @@ const OUTCOMES: Record<Exclude<ToolResult["outcome"], "denied">, { status: ToolS
   interrupted: { status: "failed", note: "interrupted" },
   unavailable: { status: "failed", note: "no computer answered" },
   invalid: { status: "failed", note: "invalid call" },
+  rejected: { status: "failed", note: "blocked, read-only run" },
 };
 
 export function isActive(run: Pick<TimelineRun, "state">): boolean {
@@ -215,26 +217,37 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
   const items: DisplayItem[] = [];
   let waitingForAnswer = false;
   for (const { _id, body } of run.events) {
-    if (body.kind === "userMessage") {
-      items.push({ key: _id, kind: "user", text: body.text });
-    } else if (body.kind === "assistantTurn") {
-      if (body.reasoning !== undefined) {
-        items.push({ key: `${_id}:reasoning`, kind: "reasoning", text: body.reasoning });
-      }
-      if (body.text.trim() !== "") {
-        items.push({ key: `${_id}:text`, kind: "assistant", text: body.text, streaming: false });
-      }
-      for (const call of body.toolCalls) {
-        const item = callItem({
-          key: `${run._id}:${call.id}`,
-          call,
-          result: results.get(call.id),
-          active,
-          approvalId: approvals.get(`${run._id}:${call.id}`),
-        });
-        waitingForAnswer ||= item.kind === "approval";
-        items.push(item);
-      }
+    switch (body.kind) {
+      case "userMessage":
+        items.push({ key: _id, kind: "user", text: body.text });
+        break;
+      case "routineReport":
+        items.push({ key: _id, kind: "report", text: body.text });
+        break;
+      case "assistantTurn":
+        if (body.reasoning !== undefined) {
+          items.push({ key: `${_id}:reasoning`, kind: "reasoning", text: body.reasoning });
+        }
+        if (body.text.trim() !== "") {
+          items.push({ key: `${_id}:text`, kind: "assistant", text: body.text, streaming: false });
+        }
+        for (const call of body.toolCalls) {
+          const item = callItem({
+            key: `${run._id}:${call.id}`,
+            call,
+            result: results.get(call.id),
+            active,
+            approvalId: approvals.get(`${run._id}:${call.id}`),
+          });
+          waitingForAnswer ||= item.kind === "approval";
+          items.push(item);
+        }
+        break;
+      case "toolResult":
+      case "scheduleFired":
+        break;
+      default:
+        body satisfies never;
     }
   }
   if (run.stream !== null) {

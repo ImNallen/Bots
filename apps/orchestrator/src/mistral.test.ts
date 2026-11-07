@@ -174,6 +174,49 @@ describe("completeWithRetry", () => {
   });
 });
 
+describe("what a call offers the model", () => {
+  async function bodyFor(tools: readonly unknown[]): Promise<Record<string, unknown>> {
+    let received = "";
+    const server = createServer((request, response) => {
+      request.on("data", (part: Buffer) => {
+        received += part.toString("utf8");
+      });
+      request.on("end", () => {
+        response.writeHead(400);
+        response.end("{}");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      await completeWithRetry({
+        baseUrl: `http://127.0.0.1:${port}`,
+        model: "m",
+        apiKey: "key",
+        messages: [],
+        tools,
+        signal: new AbortController().signal,
+        onAttempt: () => {},
+        onProgress: () => {},
+        log: () => {},
+      });
+      return JSON.parse(received) as Record<string, unknown>;
+    } finally {
+      server.close();
+    }
+  }
+
+  it("sends the tools, one call at a time", async () => {
+    expect(await bodyFor([{ type: "function" }])).toMatchObject({ tools: [{ type: "function" }], tool_choice: "auto", parallel_tool_calls: false });
+  });
+
+  it("sends no tool field at all on a call with no tools", async () => {
+    const body = await bodyFor([]);
+    expect(Object.keys(body).toSorted()).toEqual(["messages", "model", "stream"]);
+  });
+});
+
 describe("parseRetryAfterMs", () => {
   it("reads seconds and HTTP dates", () => {
     expect(parseRetryAfterMs({ value: "2", now: 0 })).toBe(2000);

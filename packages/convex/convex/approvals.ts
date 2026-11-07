@@ -11,16 +11,19 @@ export const request = mutation({
   args: { runId: v.id("runs"), toolCallId: v.string(), toolName: v.string() },
   handler: async (ctx, { runId, toolCallId, toolName }) => {
     await requireService(ctx);
+    const run = await ctx.db.get(runId);
+    if (run === null) {
+      throw new ConvexError("No such run");
+    }
+    if (run.capability !== "full") {
+      throw new ConvexError("A read-only run cannot ask for approval");
+    }
     const existing = await ctx.db
       .query("approvals")
       .withIndex("by_run_call", (q) => q.eq("runId", runId).eq("toolCallId", toolCallId))
       .unique();
     if (existing !== null) {
       return { approvalId: existing._id, state: existing.state, expiresAt: existing.requestedAt + APPROVAL_TTL_MS };
-    }
-    const run = await ctx.db.get(runId);
-    if (run === null) {
-      throw new ConvexError("No such run");
     }
     const requestedAt = Date.now();
     const approvalId = await ctx.db.insert("approvals", {

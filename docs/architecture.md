@@ -234,8 +234,8 @@ The bot page deletes a bot, and it refuses during a run or a take-over, because 
 
 | Where | What goes | When |
 |---|---|---|
-| Convex | The bot's row and its notes | At once, in the mutation, so nothing new can start on it. Notes go here because at most 40 fit one mutation, and `purge` stops early for a bot with no thread |
-| Convex | Its thread, runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. The thread goes last |
+| Convex | The bot's row, its notes, and its schedules | At once, in the mutation, so nothing new can start on it. Notes and schedules go here because few enough fit one mutation, and `purge` stops early for a bot with no thread |
+| Convex | Every thread of the bot, with its runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. Each thread goes last |
 | The VM | Its desktop, profile, workspace, and any take-over baseline | Within about 15 seconds, by the reconcile loop |
 | The VM | Its tool results in the `computerd` journal | At the journal's own limit of 7 days |
 
@@ -396,7 +396,7 @@ A note that breaks a rule is a tool result with outcome `error`, not a failed mu
 
 A page that a bot reads can tell it to save a note, and every later model call reads that note. The harm outlasts the run, so these limits sit in code:
 
-- At the default level, a memory tool asks once a computer tool has a result in this run. The card shows the exact text. `touchedComputer` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied` or `invalid` does not count, because it brought nothing back.
+- At the default level, a memory tool asks once a computer tool has a result in this run. The card shows the exact text. `touchedComputer` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied`, `invalid`, or `rejected` does not count, because it brought nothing back.
 - A note reaches only the bot that saved it, so one page cannot reach the owner's other bots.
 - A bot cannot change or forget a note whose source is the owner, and it cannot write the assignment or `users.about`.
 - Size and count are capped, so notes' text adds at most 20,000 characters to a model call.
@@ -412,6 +412,83 @@ The card covers one run. The thread replays on every model call, so an injection
 At the Shell and Nothing levels, no save shows a card. The owner chose those levels, and the chat row and the panel are the only signs.
 
 `looksLikeSecret` catches careless saves and nothing more. It refuses PEM headers, known key prefixes, JWTs, `password=` pairs, card numbers, and any unbroken run of 32 or more token characters. "My password is hunter2" passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
+
+## How a read-only run works
+
+A routine runs with nobody watching, so nobody can answer a question card. A read-only run therefore has no approvals to rely on. It reads, and everything else is refused.
+
+Nothing starts a read-only run yet. Only `schedules:fireForCheck` makes one, which is an internal function that needs the admin key, and `scripts/verify-agent.ts` is its one caller. A later `fireDue` calls the same `startReadOnlyRun`. Neither a user's token nor the service token can reach it, and no mutation changes a run's capability.
+
+### What decides a call
+
+`decideTool` in `apps/orchestrator/src/approvals.ts` answers `run`, `ask`, or `reject`. It reads only the run's capability, the bot's level, the tool, and `touchedComputer`, so a resumed run decides the same way. A read-only run runs a tool whose effect is `reads` and rejects every other tool, at every level. It never asks.
+
+| Runs | Rejected |
+|---|---|
+| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget` |
+
+A rejected call stores the outcome `rejected`. `denied` tells the model that a person refused, and no person was asked.
+
+The rule holds in three places, so a bug in one does not open it:
+
+- `runTool` decides before approvals, the take-over wait, and the link. A rejected call never reaches `computerd`, so its journal has no entry for it.
+- `applyMemoryCall` stores `rejected` unless the run is `full`, in the same mutation that would write the note.
+- `approvals.request` throws for a read-only run, so no card can exist.
+
+`computerd` is not one of these places, because a bot has root on its VM. Offering the model only the tools that read saves wasted turns, and it is not a boundary either. A model can still ask for a tool it was not offered.
+
+### What a model reads
+
+`modelRequest` in `apps/orchestrator/src/run-logic.ts` builds each model call from stored facts.
+
+| | Chat run | Read-only run |
+|---|---|---|
+| Events | Its chat thread, loaded by thread | Its own events, loaded by run |
+| The owner's chat | Yes | No |
+| Reports | The thread's newest 3, each an assistant message with a label | The newest 3 of its own routine, as one JSON array in the prompt |
+| A routine's raw pages | Never | Only its own run's |
+| Tools | All of them | Those that read, and none on the final call |
+| Prompt | The full rules | No rules for writing notes. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
+
+The assignment, `about`, and the notes reach both. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
+
+### Where a routine's pages and reports go
+
+A routine has its own thread, with `threads.kind` set to `routine`. An absent `kind` means the bot's chat, and `chatThreadOf` is the one lookup of it. A routine's thread takes no message.
+
+Raw pages stay in that thread, so they cannot push the owner's messages off the page or load on each chat run. When a read-only run finishes `done`, `runs.finish` inserts a run and one `routineReport` event in the chat thread, in the same mutation that ends the run. So a report and its run's end commit together, and a resend of `finish` fails the lease check and posts nothing. The text is the run's last turn, cut at 8,000 characters. A run that ends with no text fails with a reason, because a success with nothing to show would hide that the owner got nothing. A failed or stopped run posts nothing.
+
+A report's row has trigger `schedule` and no `scheduleId`, so `runs.by_schedule` holds only a routine's own runs. `threads.timeline` counts only trigger `user` toward its 30 runs and reads at most 200 runs. So a chat with 40 reports keeps the owner's messages on the page, and only about 200 reports in a row push them off. The page then says that older messages are not shown.
+
+A bot has one browser, so it has one active run across all of its threads. `activeRunOfBot` is the one check, and `threads.send`, `startReadOnlyRun`, and `bots.remove` use it. `bots.overview` shows a routine's run as what the bot is doing, and its last message stays the chat's.
+
+### How a run ends
+
+Every limit reads stored events or a stored time, so a restart cannot reset one.
+
+| Limit | Value | What happens |
+|---|---|---|
+| Turns | 12 | The 12th turn is the final call |
+| The newest prompt | 150,000 tokens | The next call is the final call |
+| Rejected calls | 3 | The next call is the final call |
+| Deadline | 30 minutes after the fire | The run fails with the reason "The routine ran past its 30 minute limit" |
+
+The token limit reads the newest prompt and not a sum, because each prompt repeats the one before it, and a sum counts the same page again on every turn.
+
+A limit always gives the run a chance to report. The final call offers no tools, and its prompt says to write the report now. If that call still asks for a tool, the call is recorded as rejected, nothing runs, and the run finishes with the turn's text. No flag marks a final call. A turn is final if a limit already held before it, so a resumed run reaches the same answer from the same events.
+
+`heartbeat` answers `cancelRequested: true` past the deadline and does not store that, so `run.cancelRequested` still means that the owner pressed Stop. The runner then stops as it does for a Stop. `runs.finish` turns its `cancelled` into `failed` when the deadline has passed and the owner did not stop it, and `claim` fails a run that is already late. An owner's Stop stays `cancelled`. `endRun` is the one writer of a terminal state and of `endedAt`.
+
+### What read-only does not mean
+
+Read-only stops the bot's own tools from changing anything. It is not a sandbox, and these still happen:
+
+- A run can read any file that the `agent` user can read on its VM, including another bot's workspace. Those bots have one owner.
+- Opening a page sends a GET and runs the page's scripts. A careless site can change something on a GET.
+- A URL can carry out what the run holds, which is its assignment, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
+- Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `touchedComputer` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
+- A process that an earlier chat run left in the background keeps running during a routine.
+- Until step 5's logged-out browsing, a read-only run would use the bot's logged-in browser, and a download would land on its computer. Nothing starts a read-only run before then.
 
 ## Where secrets live
 

@@ -46,8 +46,8 @@ export function decideActivity(args: {
 }
 
 // Convex refuses a string with half of a surrogate pair, so a cut must not split an emoji.
-function capMessage(text: string): string {
-  const cut = text.slice(0, MAX_LAST_MESSAGE_LENGTH);
+export function capText(text: string, max: number): string {
+  const cut = text.slice(0, max);
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
@@ -56,7 +56,7 @@ export function lastMessageOf(newestEvents: readonly RunEventBody[]): string | n
     if (event.kind !== "toolResult") {
       const text = event.text.replace(/\s+/g, " ").trim();
       if (text !== "") {
-        return capMessage(text);
+        return capText(text, MAX_LAST_MESSAGE_LENGTH);
       }
     }
   }

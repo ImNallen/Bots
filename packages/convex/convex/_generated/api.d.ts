@@ -17,6 +17,7 @@ import type * as identity from "../identity.js";
 import type * as memories from "../memories.js";
 import type * as profile from "../profile.js";
 import type * as runs from "../runs.js";
+import type * as schedules from "../schedules.js";
 import type * as threads from "../threads.js";
 import type * as users from "../users.js";
 import type * as validators from "../validators.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   memories: typeof memories;
   profile: typeof profile;
   runs: typeof runs;
+  schedules: typeof schedules;
   threads: typeof threads;
   users: typeof users;
   validators: typeof validators;

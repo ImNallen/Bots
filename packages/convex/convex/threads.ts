@@ -1,12 +1,13 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 import type { RunState } from "./validators.js";
 
 const MAX_MESSAGE_LENGTH = 64 * 1024;
-const TIMELINE_RUNS = 30;
+const TIMELINE_USER_RUNS = 30;
+const TIMELINE_MAX_RUNS = 200;
 // A query may read 16 MiB. One event is at most 1 MiB, so stopping here cannot overshoot the limit.
 const TIMELINE_BYTES = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -24,6 +25,30 @@ export function isActive(state: RunState): boolean {
   return state.kind === "queued" || state.kind === "running";
 }
 
+export async function chatThreadOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"threads"> | null> {
+  return await ctx.db
+    .query("threads")
+    .withIndex("by_bot", (q) => q.eq("botId", botId).eq("kind", undefined))
+    .first();
+}
+
+export async function ensureChatThread(ctx: MutationCtx, bot: { botId: Id<"bots">; ownerId: Id<"users"> }): Promise<Id<"threads">> {
+  return (await chatThreadOf(ctx, bot.botId))?._id ?? (await ctx.db.insert("threads", { botId: bot.botId, ownerId: bot.ownerId }));
+}
+
+export async function activeRunOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"runs"> | null> {
+  for (const kind of ["running", "queued"] as const) {
+    const run = await ctx.db
+      .query("runs")
+      .withIndex("by_bot_state", (q) => q.eq("botId", botId).eq("state.kind", kind))
+      .first();
+    if (run !== null) {
+      return run;
+    }
+  }
+  return null;
+}
+
 export const ensureForBot = mutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {
@@ -32,11 +57,7 @@ export const ensureForBot = mutation({
     if (user === null || bot === null || bot.ownerId !== user._id) {
       throw new ConvexError("Bot not found");
     }
-    const existing = await ctx.db
-      .query("threads")
-      .withIndex("by_bot", (q) => q.eq("botId", botId))
-      .first();
-    return existing?._id ?? (await ctx.db.insert("threads", { botId, ownerId: user._id }));
+    return await ensureChatThread(ctx, { botId, ownerId: user._id });
   },
 });
 
@@ -48,6 +69,9 @@ export const send = mutation({
     if ((await ctx.db.get(thread.botId)) === null) {
       throw new ConvexError("Bot not found");
     }
+    if (thread.kind === "routine") {
+      throw new ConvexError("A routine's thread takes no messages");
+    }
     const trimmed = text.trim();
     if (trimmed === "") {
       throw new ConvexError("Message cannot be empty");
@@ -55,13 +79,8 @@ export const send = mutation({
     if (trimmed.length > MAX_MESSAGE_LENGTH) {
       throw new ConvexError(`Message cannot be longer than ${MAX_MESSAGE_LENGTH} characters`);
     }
-    const latest = await ctx.db
-      .query("runs")
-      .withIndex("by_thread", (q) => q.eq("threadId", threadId))
-      .order("desc")
-      .first();
-    if (latest !== null && isActive(latest.state)) {
-      throw new ConvexError("This thread already has an active run");
+    if ((await activeRunOfBot(ctx, thread.botId)) !== null) {
+      throw new ConvexError("This bot already has an active run");
     }
     const runId = await ctx.db.insert("runs", {
       threadId,
@@ -83,6 +102,21 @@ export const send = mutation({
   },
 });
 
+export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newestFirst: readonly T[]): T[] {
+  const shown: T[] = [];
+  let userRuns = 0;
+  for (const run of newestFirst.slice(0, TIMELINE_MAX_RUNS)) {
+    if (run.trigger === "user") {
+      if (userRuns === TIMELINE_USER_RUNS) {
+        break;
+      }
+      userRuns += 1;
+    }
+    shown.push(run);
+  }
+  return shown;
+}
+
 function publicState(state: RunState) {
   switch (state.kind) {
     case "running":
@@ -103,11 +137,12 @@ export const timeline = query({
       .query("runs")
       .withIndex("by_thread", (q) => q.eq("threadId", threadId))
       .order("desc")
-      .take(TIMELINE_RUNS + 1);
+      .take(TIMELINE_MAX_RUNS + 1);
+    const shownRuns = runsToShow(recentRuns);
     const runs = [];
     let bytes = 0;
-    let omittedOlder = recentRuns.length > TIMELINE_RUNS;
-    for (const run of recentRuns.slice(0, TIMELINE_RUNS)) {
+    let omittedOlder = recentRuns.length > shownRuns.length;
+    for (const run of shownRuns) {
       const events = [];
       for await (const event of ctx.db
         .query("runEvents")

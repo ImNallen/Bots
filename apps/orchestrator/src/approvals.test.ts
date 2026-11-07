@@ -1,7 +1,7 @@
 import type { Id } from "@bots/convex/dataModel";
 import type { ToolName } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
-import { needsApproval, waitForApproval, type ApprovalLevel } from "./approvals.ts";
+import { decideTool, waitForApproval, type ApprovalLevel } from "./approvals.ts";
 
 const ID = "approval" as Id<"approvals">;
 const LEVELS: ApprovalLevel[] = ["everything", "outside", "shell", "nothing"];
@@ -20,7 +20,28 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
 const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget"];
 
-describe("needsApproval", () => {
+const READS: ToolName[] = ["read_file", "browser_navigate", "browser_snapshot"];
+
+describe("decideTool for a read-only run", () => {
+  it.each(LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((touchedComputer) => ({ level, toolName, touchedComputer })))))(
+    "at $level, $toolName with touchedComputer $touchedComputer never asks, and runs only what reads",
+    (args) => {
+      expect(decideTool({ capability: "readOnly", ...args })).toBe(READS.includes(args.toolName) ? "run" : "reject");
+    },
+  );
+
+  it("forbids exactly the 7 tools that change something", () => {
+    const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, touchedComputer: false }) === "reject");
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget"]);
+  });
+});
+
+describe("decideTool for a full run", () => {
+  const needsApproval = (args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }) => {
+    const decision = decideTool({ capability: "full", ...args });
+    expect(decision).not.toBe("reject");
+    return decision === "ask";
+  };
   const asked = (level: ApprovalLevel, touchedComputer = false) =>
     TOOLS.filter((toolName) => needsApproval({ level, toolName, touchedComputer }));
 
