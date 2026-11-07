@@ -45,11 +45,11 @@ const browser = createBrowser({ desktops, takeoverSettled: logins.settled, perso
 const calls = createCalls({
   journal,
   // Every tool holds the bot's desktop, so a long shell tool cannot lose the page that the bot left open.
-  execute: async ({ botId, tool, signal }) => {
+  execute: async ({ botId, tool, browsing, signal }) => {
     const release = desktops.hold(botId);
     try {
       return await (isBrowserInvocation(tool)
-        ? browser.execute({ botId, tool, signal })
+        ? browser.execute({ botId, tool, browsing, signal })
         : executeSystemTool({ botId, tool, signal }));
     } finally {
       release();
@@ -60,6 +60,7 @@ connectLink({
   url: config.linkUrl,
   token: config.token,
   calls,
+  endBrowsing: browser.endBrowsing,
   openScreen: (streamId, botId, mode) => {
     relayScreen({
       linkUrl: config.linkUrl,

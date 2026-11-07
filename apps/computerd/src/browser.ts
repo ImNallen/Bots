@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { capText, type BrowserInvocation, type ToolResult } from "@bots/protocol";
+import { capText, type BrowserInvocation, type Browsing, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
 import type { Desktops } from "./desktops.ts";
 import { log } from "./log.ts";
@@ -15,6 +15,7 @@ const TOOL_DEADLINE_MS = 60_000;
 // seconds that the link waits after a cancel.
 const FROZEN_PROBE_MS = 5000;
 const CLOSE_PAGE_MS = 3000;
+const LOGGED_OUT_IDLE_MS = 10 * 60 * 1000;
 
 type PageFate = "answers" | "closed" | "keptForOwner" | "stuck";
 
@@ -50,9 +51,10 @@ export type Cdp = {
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
 // This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
-const SNAPSHOT_SCRIPT = `(() => {
+const SNAPSHOT_SCRIPT = (showLinkAddresses: boolean) => `(() => {
   const MAX_TEXT = 120;
   const MAX_URL = 300;
+  const MAX_LINK = 200;
   const INTERACTIVE = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=menuitem],[role=tab],[contenteditable=true],[onclick]';
   const visible = (e) => {
     const r = e.getBoundingClientRect();
@@ -61,6 +63,12 @@ const SNAPSHOT_SCRIPT = `(() => {
     return s.visibility !== 'hidden' && s.display !== 'none';
   };
   const clean = (t) => (t ?? '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT);
+  const address = (e) => {
+    if (!${showLinkAddresses} || !e.matches('a[href]')) return '';
+    const href = String(e.href);
+    if (!/^https?:/i.test(href)) return '';
+    return ' to: ' + (href.length > MAX_LINK ? href.slice(0, MAX_LINK) + '...' : href);
+  };
   const label = (e) => clean(e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt') || e.innerText || e.getAttribute('name') || '');
   document.querySelectorAll('[data-bots-ref]').forEach((e) => e.removeAttribute('data-bots-ref'));
   let next = 1;
@@ -83,7 +91,7 @@ const SNAPSHOT_SCRIPT = `(() => {
       else if (e.tagName === 'TEXTAREA' || (e.tagName === 'INPUT' && !['password', 'checkbox', 'radio', 'submit', 'button', 'file'].includes((e.getAttribute('type') || 'text').toLowerCase()))) value = e.value ? ' value: ' + clean(e.value) : '';
       else if (e.tagName === 'INPUT' && (e.getAttribute('type') || '').toLowerCase() === 'password' && e.value) value = ' value: hidden';
       else if (e.checked !== undefined && ['checkbox', 'radio'].includes((e.getAttribute('type') || '').toLowerCase())) value = e.checked ? ' checked' : ' not checked';
-      lines.push('[' + ref + '] ' + kind + ' "' + label(e) + '"' + value);
+      lines.push('[' + ref + '] ' + kind + ' "' + label(e) + '"' + value + address(e));
       if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName)) return;
       if (e.matches('a[href]')) return;
     }
@@ -110,21 +118,30 @@ const CLEAR_SCRIPT = (ref: number) => `(() => {
   else document.execCommand('selectAll');
 })()`;
 
+type ContextPages = {
+  contextId: string;
+  // Oldest first. The last one is the page that the bot acts on.
+  pages: string[];
+  newPage: { url: "about:blank"; browserContextId?: string };
+};
+
+type LoggedOutContext = ContextPages & { key: string; idleEnd: NodeJS.Timeout | undefined };
+
 // Every page target on this browser belongs to this bot.
 type Connection = {
   cdpPort: number;
   client: Cdp;
-  // Oldest first. The last one is the page that the bot acts on.
-  pages: string[];
+  own: ContextPages;
+  loggedOut: LoggedOutContext | null;
   sessions: Map<string, string>;
   heldDialogs: PageDialog[];
 };
 
 type PageDialog = { sessionId: string; accept: boolean };
 
-type TargetInfo = { targetId: string; type: string; openerId?: string };
+type TargetInfo = { targetId: string; type: string; openerId?: string; browserContextId?: string };
 
-function sendQuietly(client: Cdp, method: string, params: Record<string, unknown>, sessionId: string): void {
+function sendQuietly(client: Cdp, method: string, params: Record<string, unknown>, sessionId?: string): void {
   client.send(method, params, sessionId).catch(() => {});
 }
 
@@ -172,7 +189,8 @@ export function nextPages(known: readonly string[], targets: readonly TargetInfo
 }
 
 export type Browser = {
-  execute: (args: { botId: string; tool: BrowserInvocation; signal: AbortSignal }) => Promise<ToolResult>;
+  execute: (args: { botId: string; tool: BrowserInvocation; browsing: Browsing | undefined; signal: AbortSignal }) => Promise<ToolResult>;
+  endBrowsing: (botId: string, key: string) => Promise<void>;
 };
 
 export function createBrowser(args: {
@@ -182,8 +200,9 @@ export function createBrowser(args: {
   personHasScreen?: (botId: string) => boolean;
   toolDeadlineMs?: number;
   frozenProbeMs?: number;
+  loggedOutIdleMs?: number;
 }): Browser {
-  const { desktops, connector = webSocketConnector, takeoverSettled, personHasScreen, toolDeadlineMs = TOOL_DEADLINE_MS, frozenProbeMs = FROZEN_PROBE_MS } = args;
+  const { desktops, connector = webSocketConnector, takeoverSettled, personHasScreen, toolDeadlineMs = TOOL_DEADLINE_MS, frozenProbeMs = FROZEN_PROBE_MS, loggedOutIdleMs = LOGGED_OUT_IDLE_MS } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
@@ -195,24 +214,36 @@ export function createBrowser(args: {
       return known;
     }
     const client = await connector(cdpPort);
-    const connection: Connection = { cdpPort, client, pages: [], sessions: new Map(), heldDialogs: [] };
-    client.onEvent((event) => onBrowserEvent(botId, connection, event));
-    client.onClose(() => {
-      if (connections.get(botId) === connection) {
-        connections.delete(botId);
-      }
-    });
-    // Each new page, popups too, waits for this socket before its first script, so no dialog can open before Page.enable. A dialog
-    // that opened with no socket here sends no event, even after Page.enable.
     const limit = AbortSignal.any([signal, AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS)]);
     try {
+      const { defaultBrowserContextId } = await untilEnd(limit, () => client.send("Target.getBrowserContexts"));
+      if (typeof defaultBrowserContextId !== "string") {
+        throw new Error("this browser does not name its default context");
+      }
+      const connection: Connection = {
+        cdpPort,
+        client,
+        own: { contextId: defaultBrowserContextId, pages: [], newPage: { url: "about:blank" } },
+        loggedOut: null,
+        sessions: new Map(),
+        heldDialogs: [],
+      };
+      client.onEvent((event) => onBrowserEvent(botId, connection, event));
+      client.onClose(() => {
+        clearTimeout(connection.loggedOut?.idleEnd);
+        if (connections.get(botId) === connection) {
+          connections.delete(botId);
+        }
+      });
+      // Each new page, popups too, waits for this socket before its first script, so no dialog can open before Page.enable. A dialog
+      // that opened with no socket here sends no event, even after Page.enable.
       await untilEnd(limit, () => client.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] }));
+      connections.set(botId, connection);
+      return connection;
     } catch (error) {
       client.close();
       throw error;
     }
-    connections.set(botId, connection);
-    return connection;
   }
 
   function adoptSession(connection: Connection, targetId: string, sessionId: string): void {
@@ -254,15 +285,82 @@ export function createBrowser(args: {
     return connection.sessions.get(targetId) as string;
   }
 
-  async function currentPage(connection: Connection, client: Cdp): Promise<{ targetId: string; sessionId: string }> {
+  async function refreshPages(client: Cdp, context: ContextPages): Promise<void> {
     const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
-    connection.pages = nextPages(connection.pages, targetInfos);
-    if (connection.pages.length === 0) {
-      const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-      connection.pages.push(String(targetId));
+    context.pages = nextPages(context.pages, targetInfos.filter((target) => target.browserContextId === context.contextId));
+    if (context.pages.length === 0) {
+      const { targetId } = await client.send("Target.createTarget", context.newPage);
+      context.pages.push(String(targetId));
     }
-    const targetId = connection.pages.at(-1) as string;
+  }
+
+  async function currentPage(connection: Connection, client: Cdp, context: ContextPages): Promise<{ targetId: string; sessionId: string }> {
+    await refreshPages(client, context);
+    const targetId = context.pages.at(-1) as string;
     return { targetId, sessionId: await sessionFor(connection, client, targetId) };
+  }
+
+  async function startLoggedOut(connection: Connection, client: Cdp, key: string): Promise<LoggedOutContext> {
+    // Chromium exits when its last page closes, in any context. So the bot's own page exists before this context can hold the last one.
+    await refreshPages(client, connection.own);
+    const { browserContextId } = (await client.send("Target.createBrowserContext", { disposeOnDetach: true })) as { browserContextId: string };
+    try {
+      await client.send("Browser.setDownloadBehavior", { behavior: "deny", browserContextId });
+    } catch (error) {
+      sendQuietly(connection.client, "Target.disposeBrowserContext", { browserContextId });
+      throw error;
+    }
+    return { key, contextId: browserContextId, pages: [], newPage: { url: "about:blank", browserContextId }, idleEnd: undefined };
+  }
+
+  async function endLoggedOut(botId: string, connection: Connection): Promise<"closed" | "stuck"> {
+    const { loggedOut } = connection;
+    if (loggedOut === null) {
+      return "closed";
+    }
+    clearTimeout(loggedOut.idleEnd);
+    connection.loggedOut = null;
+    const { client } = startPageCall(connection.client, new AbortController().signal, CLOSE_PAGE_MS);
+    try {
+      await refreshPages(client, connection.own);
+      await client.send("Target.disposeBrowserContext", { browserContextId: loggedOut.contextId });
+      return "closed";
+    } catch (error) {
+      log({ level: "warn", event: "logged-out-end-failed", botId, message: error instanceof Error ? error.message : "unknown error" });
+      connections.delete(botId);
+      connection.client.close();
+      return "stuck";
+    }
+  }
+
+  async function endWindowOfAnotherRun(botId: string, connection: Connection, browsing: Browsing | undefined): Promise<void> {
+    if (connection.loggedOut !== null && connection.loggedOut.key !== browsing?.key) {
+      await endLoggedOut(botId, connection);
+    }
+  }
+
+  async function contextFor(connection: Connection, client: Cdp, browsing: Browsing | undefined): Promise<ContextPages> {
+    if (browsing === undefined) {
+      return connection.own;
+    }
+    connection.loggedOut ??= await startLoggedOut(connection, client, browsing.key);
+    return connection.loggedOut;
+  }
+
+  function endBrowsing(botId: string, key: string): Promise<void> {
+    return inOrder(botId, async () => {
+      const connection = connections.get(botId);
+      if (connection?.loggedOut?.key === key) {
+        await endLoggedOut(botId, connection);
+      }
+    });
+  }
+
+  function armIdleEnd(botId: string, { loggedOut }: Connection): void {
+    if (loggedOut !== null) {
+      loggedOut.idleEnd = setTimeout(() => void endBrowsing(botId, loggedOut.key), loggedOutIdleMs);
+      loggedOut.idleEnd.unref();
+    }
   }
 
   async function evaluate(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
@@ -313,9 +411,9 @@ export function createBrowser(args: {
     return point;
   }
 
-  async function act(connection: Connection, call: PageCall, tool: BrowserInvocation): Promise<string> {
+  async function act(connection: Connection, call: PageCall, context: ContextPages, tool: BrowserInvocation): Promise<string> {
     const { client, ends } = call;
-    const { sessionId } = await currentPage(connection, client);
+    const { sessionId } = await currentPage(connection, client, context);
     switch (tool.name) {
       case "browser_navigate": {
         const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
@@ -343,23 +441,23 @@ export function createBrowser(args: {
     }
     // An action can open a popup at any time during the wait, and the next action goes to the newest page.
     // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
-    let after = await currentPage(connection, client);
+    let after = await currentPage(connection, client, context);
     for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
       await settle(client, after.sessionId, ends);
-      const latest = await currentPage(connection, client);
+      const latest = await currentPage(connection, client, context);
       if (latest.targetId === after.targetId) {
         break;
       }
       after = latest;
     }
-    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT));
+    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT(context === connection.loggedOut)));
   }
 
-  async function closeIfFrozen(botId: string, connection: Connection): Promise<PageFate> {
+  async function closeIfFrozen(botId: string, connection: Connection, context: ContextPages | null): Promise<PageFate> {
     const { client } = connection;
-    const targetId = connection.pages.at(-1);
+    const targetId = context?.pages.at(-1);
     const sessionId = targetId === undefined ? undefined : connection.sessions.get(targetId);
-    if (targetId === undefined || sessionId === undefined) {
+    if (context === null || targetId === undefined || sessionId === undefined) {
       return "answers";
     }
     // Chromium holds a session's page calls during a navigation, so a server that never answers would look like a frozen page.
@@ -375,9 +473,12 @@ export function createBrowser(args: {
     if (personHasScreen?.(botId) === true) {
       return "keptForOwner";
     }
+    if (context === connection.loggedOut) {
+      return await endLoggedOut(botId, connection);
+    }
     // The new page comes first, because Chromium exits when its last page closes.
     const limit = AbortSignal.timeout(CLOSE_PAGE_MS);
-    const replaced = await untilEnd(limit, () => client.send("Target.createTarget", { url: "about:blank" })).then(
+    const replaced = await untilEnd(limit, () => client.send("Target.createTarget", context.newPage)).then(
       () => true,
       () => false,
     );
@@ -388,7 +489,7 @@ export function createBrowser(args: {
     return limit.aborted ? "stuck" : "closed";
   }
 
-  async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<ToolResult> {
+  async function run(botId: string, tool: BrowserInvocation, browsing: Browsing | undefined, signal: AbortSignal): Promise<ToolResult> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
     signal.throwIfAborted();
     await takeoverSettled?.(botId, signal);
@@ -401,20 +502,25 @@ export function createBrowser(args: {
       if (personHasScreen?.(botId) !== true) {
         connection.heldDialogs.splice(0).forEach((dialog) => answerDialog(connection.client, dialog));
       }
+      clearTimeout(connection.loggedOut?.idleEnd);
       const call = startPageCall(connection.client, signal, toolDeadlineMs);
       try {
-        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, tool)}`);
+        await endWindowOfAnotherRun(botId, connection, browsing);
+        const context = await contextFor(connection, call.client, browsing);
+        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, context, tool)}`);
         return { outcome: "ok", output, truncated };
       } catch (error) {
         if (!call.ends.aborted) {
           throw error;
         }
-        const fate = await closeIfFrozen(botId, connection);
+        const fate = await closeIfFrozen(botId, connection, browsing === undefined ? connection.own : connection.loggedOut);
         log({ level: "info", event: "browser-call-ended-early", botId, tool: tool.name, cancelled: signal.aborted, fate });
         const page = PAGE_FATE_OUTPUT[fate];
         return signal.aborted
           ? { outcome: "cancelled", output: `The browser action was cancelled. ${page}`, truncated: false }
           : { outcome: "timeout", output: `The browser action did not finish in ${toolDeadlineMs / 1000} seconds, so it stopped, and it may have partly happened. ${page}`, truncated: false };
+      } finally {
+        armIdleEnd(botId, connection);
       }
     } finally {
       lease.release();
@@ -429,10 +535,11 @@ export function createBrowser(args: {
   }
 
   return {
-    execute: ({ botId, tool, signal }) =>
+    endBrowsing,
+    execute: ({ botId, tool, browsing, signal }) =>
       inOrder(botId, async (): Promise<ToolResult> => {
         try {
-          return await run(botId, tool, signal);
+          return await run(botId, tool, browsing, signal);
         } catch (error) {
           if (signal.aborted) {
             return { outcome: "cancelled", output: "The browser action was cancelled.", truncated: false };

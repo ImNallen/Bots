@@ -1,13 +1,14 @@
-import type { ToolInvocation, ToolResult } from "@bots/protocol";
+import type { Browsing, ToolInvocation, ToolResult } from "@bots/protocol";
 import type { Journal } from "./journal.ts";
 
 export type ExecuteTool = (args: {
   botId: string;
   tool: ToolInvocation;
+  browsing: Browsing | undefined;
   signal: AbortSignal;
 }) => Promise<ToolResult>;
 
-export type CallRequest = { callId: string; botId: string; tool: ToolInvocation };
+export type CallRequest = { callId: string; botId: string; tool: ToolInvocation; browsing?: Browsing | undefined };
 
 type InFlight = { abort: AbortController; result: Promise<ToolResult> };
 
@@ -32,7 +33,7 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
   }
 
   async function resolve(request: CallRequest, signal: AbortSignal): Promise<ToolResult> {
-    const { callId, botId, tool } = request;
+    const { callId, botId, tool, browsing } = request;
     const entry = await journal.read(callId);
     switch (entry.kind) {
       case "finished":
@@ -41,7 +42,7 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
         return await settle(callId, { outcome: "interrupted", output: INTERRUPTED_OUTPUT, truncated: false });
       case "absent":
         await journal.markStarted({ callId, botId, toolName: tool.name });
-        return await settle(callId, await execute({ botId, tool, signal }));
+        return await settle(callId, await execute({ botId, tool, browsing, signal }));
     }
   }
 

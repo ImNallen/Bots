@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import type { Id } from "@bots/convex/dataModel";
-import { LINK_CLOSE, type OrchestratorMessage, type ToolInvocation } from "@bots/protocol";
+import { LINK_CLOSE, type Browsing, type OrchestratorMessage, type ToolInvocation } from "@bots/protocol";
 import { beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { startLink, type Link } from "./link.ts";
@@ -59,6 +59,7 @@ function callArgs(callId: string, signals?: { cancel?: AbortSignal; lost?: Abort
     callId,
     botId: "bot",
     tool,
+    browsing: undefined,
     lost: signals?.lost ?? new AbortController().signal,
     cancel: signals?.cancel ?? new AbortController().signal,
   };
@@ -133,6 +134,90 @@ describe("link", () => {
     expect((await pending).output).toBe("real");
     newer.socket.close();
     await newer.closed;
+  });
+
+  describe("a logged-out call", () => {
+    const browsing: Browsing = { kind: "loggedOut", key: "run-1" };
+    const snapshot: ToolInvocation = { name: "browser_snapshot", args: {} };
+
+    it.each([
+      ["a chat call", undefined, ""],
+      ["a read-only run's browser call", browsing, ',"browsing":{"kind":"loggedOut","key":"run-1"}'],
+    ] as const)("sends the exact bytes for %s, because a computerd from before this field closes its link on a field it does not know", async (_name, field, bytes) => {
+      const computer = await connectComputer();
+      await until(() => computer.received.some((message) => message.kind === "welcome"));
+      const raw = new Promise<string>((resolve) => computer.socket.once("message", (data: Buffer) => resolve(data.toString())));
+      const call = link.call({ ...callArgs("run:bytes"), tool: snapshot, browsing: field });
+      expect(await raw).toBe(`{"kind":"toolCall","callId":"run:bytes","botId":"bot","tool":{"name":"browser_snapshot","args":{}}${bytes}}`);
+      answer(computer, "run:bytes", "done");
+      await call;
+      computer.socket.close();
+      await computer.closed;
+    });
+
+    it("ends as unavailable, with one send, when a computerd refuses the field and closes its link", async () => {
+      const computer = await connectComputer();
+      const call = link.call({ ...callArgs("run:older"), tool: snapshot, browsing });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      computer.socket.close(LINK_CLOSE.invalidMessage);
+      await computer.closed;
+      const reconnected = await connectComputer();
+      expect(await call).toMatchObject({ outcome: "unavailable" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reconnected.received.some((message) => message.kind === "toolCall")).toBe(false);
+      reconnected.socket.close();
+      await reconnected.closed;
+    });
+
+    it("says cancelled, not unavailable, for a run that was stopped as the computerd refused the field", async () => {
+      const computer = await connectComputer();
+      const abort = new AbortController();
+      const call = link.call({ ...callArgs("run:older-cancel", { cancel: abort.signal }), tool: snapshot, browsing });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      abort.abort();
+      computer.socket.close(LINK_CLOSE.invalidMessage);
+      await computer.closed;
+      expect(await call).toMatchObject({ outcome: "cancelled" });
+    });
+
+    it("retries after a link that dropped for another reason, so a restart of computerd keeps its journal's answer", async () => {
+      const first = await connectComputer();
+      const call = link.call({ ...callArgs("run:restart"), tool: snapshot, browsing });
+      await until(() => first.received.some((message) => message.kind === "toolCall"));
+      first.socket.close();
+      await first.closed;
+      const second = await connectComputer();
+      await until(() => second.received.some((message) => message.kind === "toolCall"));
+      expect(second.received.find((message) => message.kind === "toolCall")).toMatchObject({ callId: "run:restart", browsing });
+      answer(second, "run:restart", "replayed");
+      expect((await call).output).toBe("replayed");
+      second.socket.close();
+      await second.closed;
+    });
+
+    it("retries a chat call after the same close, so a computerd that refuses another bot's field does not fail a chat", async () => {
+      const first = await connectComputer();
+      const call = link.call(callArgs("run:neighbour"));
+      await until(() => first.received.some((message) => message.kind === "toolCall"));
+      first.socket.close(LINK_CLOSE.invalidMessage);
+      await first.closed;
+      const second = await connectComputer();
+      await until(() => second.received.some((message) => message.kind === "toolCall"));
+      answer(second, "run:neighbour", "still here");
+      expect((await call).output).toBe("still here");
+      second.socket.close();
+      await second.closed;
+    });
+
+    it("sends browsingEnd on the open link, and nothing when no computer is there", async () => {
+      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
+      const computer = await connectComputer();
+      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
+      await until(() => computer.received.some((message) => message.kind === "browsingEnd"));
+      expect(computer.received.filter((message) => message.kind === "browsingEnd")).toEqual([{ kind: "browsingEnd", botId: "bot", key: "run-1" }]);
+      computer.socket.close();
+      await computer.closed;
+    });
   });
 
   it("sends cancelTool for a running call and returns what the computer answers", async () => {

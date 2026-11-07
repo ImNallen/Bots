@@ -22,6 +22,35 @@ function bytes(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
+describe("how a call browses", () => {
+  const parse = (message: object) => parseJsonMessage({ raw: JSON.stringify(message), schema: orchestratorMessage });
+  const call = { kind: "toolCall", callId: "run:call", botId: "bot", tool: { name: "browser_snapshot", args: {} } };
+
+  it("accepts a toolCall with no browsing, which is every chat run's call", () => {
+    expect(parse(call)).toEqual(call);
+  });
+
+  it("accepts a logged-out call and browsingEnd", () => {
+    const browsing = { kind: "loggedOut", key: "run" };
+    expect(parse({ ...call, browsing })).toEqual({ ...call, browsing });
+    expect(parse({ kind: "browsingEnd", botId: "bot", key: "run" })).toEqual({ kind: "browsingEnd", botId: "bot", key: "run" });
+  });
+
+  it.each([
+    ["an unknown kind", { kind: "loggedIn", key: "run" }],
+    ["an extra field", { kind: "loggedOut", key: "run", context: "x" }],
+    ["no key", { kind: "loggedOut" }],
+    ["a key that is not a safe id", { kind: "loggedOut", key: "../run" }],
+  ])("refuses %s, so a call cannot browse some other way than the two it names", (_name, browsing) => {
+    expect(parse({ ...call, browsing })).toBeNull();
+  });
+
+  it("refuses a browsingEnd with an unsafe bot or key", () => {
+    expect(parse({ kind: "browsingEnd", botId: "../bot", key: "run" })).toBeNull();
+    expect(parse({ kind: "browsingEnd", botId: "bot", key: "" })).toBeNull();
+  });
+});
+
 describe("screenOpen", () => {
   const parse = (fields: object) =>
     parseJsonMessage({ raw: JSON.stringify({ kind: "screenOpen", streamId: "s", botId: "b", ...fields }), schema: orchestratorMessage });

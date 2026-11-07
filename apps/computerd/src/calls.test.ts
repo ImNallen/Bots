@@ -30,6 +30,19 @@ function counting(result: () => Promise<ToolResult> = async () => ok) {
 }
 
 describe("calls", () => {
+  it("hands the tool how the call browses, so a logged-out call stays logged out", async () => {
+    const seen: unknown[] = [];
+    const execute: ExecuteTool = async ({ browsing }) => {
+      seen.push(browsing);
+      return ok;
+    };
+    const calls = createCalls({ journal: await openJournal({ dir }), execute });
+    const browsing = { kind: "loggedOut", key: "run" } as const;
+    await calls.call({ ...request, callId: "run:browsing", browsing });
+    await calls.call({ ...request, callId: "run:chat" });
+    expect(seen).toEqual([browsing, undefined]);
+  });
+
   it("runs a new call once and replays its stored result", async () => {
     const { counter, execute } = counting();
     const calls = createCalls({ journal: await openJournal({ dir }), execute });

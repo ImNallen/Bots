@@ -28,8 +28,9 @@ export function connectLink(args: {
   token: string;
   calls: Calls;
   openScreen: (streamId: string, botId: string, mode: StreamMode) => void;
+  endBrowsing: (botId: string, key: string) => void;
 }): void {
-  const { url, token, calls, openScreen } = args;
+  const { url, token, calls, openScreen, endBrowsing } = args;
   let retryMs = FIRST_RETRY_MS;
 
   function connect(): void {
@@ -76,12 +77,16 @@ export function connectLink(args: {
           log({ level: "info", event: "link-ready" });
           return;
         case "toolCall":
-          log({ level: "info", event: "tool-call", callId: message.callId, tool: message.tool.name });
+          log({ level: "info", event: "tool-call", callId: message.callId, tool: message.tool.name, browsing: message.browsing?.key });
           answer(message.callId, calls.call(message));
           return;
         case "screenOpen":
           log({ level: "info", event: "screen-open", botId: message.botId, mode: message.mode ?? "watch" });
           openScreen(message.streamId, message.botId, message.mode ?? "watch");
+          return;
+        case "browsingEnd":
+          log({ level: "info", event: "browsing-end", botId: message.botId, browsing: message.key });
+          endBrowsing(message.botId, message.key);
           return;
         case "cancelTool":
           log({ level: "info", event: "tool-cancel", callId: message.callId });
