@@ -39,12 +39,13 @@ const URL_PATH_CHARACTERS = String.raw`A-Za-z0-9._~/-`;
 const OPENING_MARK = String.raw`\\?["'\x60(<[{]?`;
 
 const LONGEST_URL_SCHEME = SHORTEST_LONG_TOKEN - 1;
-// A URL with a user name, or with a long run where its host belongs, is read as text, because that is where a key sits in `https://<key>@github.com`.
-const URL_WITHOUT_ITS_QUERY = new RegExp(
-  String.raw`(?<![A-Za-z0-9_+/.~-])[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/(?![A-Za-z0-9._~-]*@)(?![A-Za-z0-9_~-]{${SHORTEST_LONG_TOKEN}})[A-Za-z0-9._~-]*(?::\d{1,5}(?![A-Za-z0-9_+=.~-]))?(?:\/[${URL_PATH_CHARACTERS}]*)?`,
+const NO_USER_BEFORE_THE_HOST = String.raw`(?![A-Za-z0-9._~-]*@)`;
+const NO_LONG_RUN_FOR_A_HOST = String.raw`(?![A-Za-z0-9_~-]{${SHORTEST_LONG_TOKEN}})`;
+const URL_SCHEME_HOST_PORT_AND_PATH = new RegExp(
+  String.raw`(?<![A-Za-z0-9_+/.~-])[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/${NO_USER_BEFORE_THE_HOST}${NO_LONG_RUN_FOR_A_HOST}[A-Za-z0-9._~-]*(?::\d{1,5}(?![A-Za-z0-9_+=.~-]))?(?:\/[${URL_PATH_CHARACTERS}]*)?`,
   "gi",
 );
-const outsideUrls = (holds: (text: string) => boolean) => (text: string) => holds(text.replace(URL_WITHOUT_ITS_QUERY, "url"));
+const outsideUrls = (holds: (text: string) => boolean) => (text: string) => holds(text.replace(URL_SCHEME_HOST_PORT_AND_PATH, "url"));
 
 const isDigits = found(/^\d+$/);
 const isUuid = found(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);

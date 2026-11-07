@@ -146,6 +146,7 @@ describe("textProblem's characters", () => {
     ["plain Arabic", "\u0627\u0644\u0639\u0631\u0628\u064A\u0629"],
     ["plain Syriac", "\u0710\u0712\u0713\u0715"],
     ["Syriac with a joiner", "\u0710\u200D\u0712"],
+    ["a code point that Unicode reserves for emoji and has not assigned", "\u{1F02C}"],
     ["an emoji newer than these Unicode tables", "\u{1FAE9}\u{1FADC}\u{1FAC8}"],
   ])("allows %s", (_label, text) => {
     expect(textProblem(text, 100)).toBeNull();

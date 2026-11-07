@@ -1878,6 +1878,7 @@ try {
         ["mathematical letters", "\u{1D400}\u{1D401}\u{1D7D8}"],
         ["a flag", "\u{1F1F8}\u{1F1EA}"],
         ["the replacement character and a box", "\uFFFD\u25A1"],
+        ["a code point that Unicode reserves for emoji and has not assigned", "\u{1F02C}"],
         ["a skin tone and an emoji newer than most tables", "\u{1F44D}\u{1F3FD} \u{1FAE9} \u{1FAC8}"],
       ];
       await check("the real backend stores real text in each script, with its joiners and marks, and leaves it unchanged", async () => {
