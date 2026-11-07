@@ -503,6 +503,18 @@ else
 fi
 same "base: moving logins leaves the base profile alone" "$(base_hash)" "$base_before"
 
+holder "$OTHER" verifyloggedout "$OTHER_CDP" "$OTHER_VNC"
+systemctl start --quiet computerd-desktop@$OTHER.target
+wait_for 30 cdp_up "$OTHER_CDP"
+if (cd /opt/bots-computerd/current && "$NODE" scripts/verify-logged-out.ts "$OTHER_CDP"); then
+  result true "a read-only run's browser stays logged out, through computerd's own code"
+else
+  result false "a read-only run's browser stays logged out, through computerd's own code"
+fi
+systemctl stop --quiet computerd-xvfb@$OTHER.service
+rm -rf /home/browser/profiles/verifyloggedout
+same "base: logged-out browsing leaves the base profile alone" "$(base_hash)" "$base_before"
+
 holder "$OTHER" "$FORGOTTEN_BOT" "$OTHER_CDP" "$OTHER_VNC"
 systemctl start --quiet computerd-desktop@$OTHER.target
 wait_for 30 cdp_up "$OTHER_CDP"

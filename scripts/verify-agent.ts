@@ -1803,6 +1803,41 @@ try {
           assert.ok(inJournal(readRun, callIdOf(readDone, name)));
         }
       });
+      type ComputerdLine = { event?: string; callId?: string; tool?: string; browsing?: string };
+      const computerdLines = () =>
+        docker(["logs", mainContainer.id])
+          .split("\n")
+          .filter((line) => line.startsWith('{"'))
+          .map((line) => JSON.parse(line) as ComputerdLine);
+      const toolCallLine = (run: Id<"runs">, toolCallId: string | undefined) =>
+        computerdLines().find((line) => line.event === "tool-call" && line.callId === `${run}:${toolCallId}`);
+      const endsOf = (run: Id<"runs">) => computerdLines().filter((line) => line.event === "browsing-end" && line.browsing === run);
+      await check("computerd received both of the run's browser calls logged out, keyed by the run, and the read with no browsing", () => {
+        for (const name of ["browser_navigate", "browser_snapshot"]) {
+          assert.equal(toolCallLine(readRun, callIdOf(readDone, name))?.browsing, readRun, name);
+        }
+        const read = toolCallLine(readRun, callIdOf(readDone, "read_file"));
+        assert.equal(read?.tool, "read_file");
+        assert.equal(read.browsing, undefined);
+      });
+      await check("the run's end sent browsingEnd once, and computerd kept its link", () => {
+        assert.equal(endsOf(readRun).length, 1);
+        assert.ok(!docker(["logs", mainContainer.id]).includes('"event":"invalid-message"'));
+      });
+      await check("a run that never reached the browser sends no browsingEnd", () => {
+        assert.deepEqual(endsOf(rejectRun), []);
+      });
+      const chatBrowsing = `readonly chat browsing ${nonce}`;
+      fake.script(chatBrowsing, ({ toolResults }) => (toolResults.length === 0 ? tools(call("browser_snapshot", {})) : { kind: "text", text: "looked" }));
+      const browsingChat = await chatFor(first, "readonly-chat-browsing");
+      const browsingChatRun = await browsingChat.send(chatBrowsing);
+      const browsingChatDone = await browsingChat.settled(browsingChatRun, 60_000);
+      await check("a chat run's browser call carries no browsing, and its end sends no browsingEnd", () => {
+        const line = toolCallLine(browsingChatRun, callIdOf(browsingChatDone, "browser_snapshot"));
+        assert.equal(line?.tool, "browser_snapshot");
+        assert.equal(line.browsing, undefined);
+        assert.deepEqual(endsOf(browsingChatRun), []);
+      });
 
       for (const level of ["everything", "outside", "shell", "nothing"] as const) {
         const leveled = await chatFor(first, `readonly-level-${level}`, level);
@@ -2389,6 +2424,32 @@ try {
         assert.equal(cancelledFirst.outcome, "cancelled");
         assert.equal(lateCall.outcome, "cancelled");
         assert.deepEqual(linesOf({ container, path: `/workspace/${botId}/never.txt` }), []);
+      });
+      const browsingKey = `direct${nonce}`;
+      const closesBefore = direct.connection.closes.length;
+      const loggedOutCall = await direct.ask({
+        kind: "toolCall",
+        callId: `direct${nonce}:browsing1`,
+        botId,
+        tool: { name: "browser_snapshot", args: {} },
+        browsing: { kind: "loggedOut", key: browsingKey },
+      });
+      await direct.sendRaw(JSON.stringify({ kind: "browsingEnd", botId, key: browsingKey } satisfies OrchestratorMessage));
+      const answerAfterEnd = await direct.ask({ kind: "toolCall", callId: `direct${nonce}:browsing2`, botId, tool: { name: "read_file", args: { path: "f.txt" } } });
+      await check("this computerd takes a logged-out call and browsingEnd and keeps its link, and with no desktop the call fails closed", () => {
+        assert.equal(loggedOutCall.outcome, "error");
+        assert.match(loggedOutCall.output, /no running browser/);
+        assert.equal(answerAfterEnd.outcome, "ok");
+        assert.equal(direct.connection.closes.length, closesBefore);
+      });
+      await direct.sendRaw(JSON.stringify({ kind: "toolCall", callId: `direct${nonce}:browsing3`, botId, tool: { name: "browser_snapshot", args: {} }, browsing: { kind: "loggedIn", key: browsingKey } }));
+      await waitFor({
+        description: "computerd to close on a way of browsing that it does not know",
+        probe: () => (direct.connection.closes.length > closesBefore ? true : null),
+      });
+      await check("computerd closes the link on a way of browsing that it does not know, and journals nothing", () => {
+        assert.equal(direct.connection.closes.at(-1), 1008);
+        assert.ok(!shellIn(container, `ls ${JOURNAL_DIR}`).includes(callIdToFileStem(`direct${nonce}:browsing3`)));
       });
       await check("the journal directory is owned by computerd with mode 0700", () => {
         assert.equal(shellIn(container, "stat -c '%U %a' /var/lib/computerd").trim(), "computerd 700");
