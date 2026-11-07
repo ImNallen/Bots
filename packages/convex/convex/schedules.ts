@@ -227,7 +227,7 @@ export const purgeThread = internalMutation({
 export const INSTRUCTION_PROBLEMS: Record<TextProblem | "empty", string> = {
   empty: "A routine needs an instruction, so nothing was created.",
   tooLong: `A routine's instruction cannot be longer than ${MAX_INSTRUCTION_LENGTH.toLocaleString("en-US")} characters, so nothing was created. Write a shorter one.`,
-  characters: "A routine's instruction cannot hold control characters or characters that change the text's direction, so nothing was created. Write it without them.",
+  characters: "A routine's instruction cannot hold invisible or control characters, so nothing was created. Write it without them.",
   secret: "This looks like a password, key, token, or card number, so nothing was created. Do not try again. A routine browses logged out, so it needs no login.",
 };
 

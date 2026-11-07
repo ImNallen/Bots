@@ -50,8 +50,9 @@ describe("parseBotProfile", () => {
 
   it.each([
     ["a secret", "password=hunter2", /looks like a password/],
-    ["a control character", "a\u0007b", /^Description cannot hold control characters/],
-    ["a character that changes the text's direction", "a\u202Eb", /^Description cannot hold control characters/],
+    ["a control character", "a\u0007b", /^Description cannot hold invisible or control characters/],
+    ["a character that changes the text's direction", "a\u202Eb", /^Description cannot hold invisible or control characters/],
+    ["a zero-width space", "a\u200Bb", /^Description cannot hold invisible or control characters/],
   ])("refuses %s from the owner, and the error says why", (_label, description, message) => {
     expect(() => profile({ description })).toThrow(message);
   });
