@@ -31,6 +31,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   browser_press: "Pressing a key",
   memory_save: "Saving a note",
   memory_forget: "Forgetting a note",
+  description_set: "Updating its description",
   schedule_propose: "Proposing a routine",
 };
 

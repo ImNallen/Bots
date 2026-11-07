@@ -55,6 +55,7 @@ const TOOL_WORDS = {
   browser_press: { done: "Pressed a key", ask: "Press this key?", icon: "key" },
   memory_save: { done: "Saved a note", ask: "Save this note?", icon: "text" },
   memory_forget: { done: "Forgot a note", ask: "Forget this note?", icon: "close" },
+  description_set: { done: "Updated its description", ask: "Update this description?", icon: "text" },
   schedule_propose: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
 } as const satisfies Record<ToolName, { done: string; ask: string; icon: IconName }>;
 

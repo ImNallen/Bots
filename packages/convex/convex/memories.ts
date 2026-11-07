@@ -122,27 +122,32 @@ export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"me
     .collect();
 }
 
-const TOOL_OF_CALL: Record<MemoryCall["kind"], string> = { memorySave: "memory_save", memoryForget: "memory_forget" };
+const WHAT_A_CALL_CHANGES: Record<MemoryCall["kind"], { tool: string; subject: string }> = {
+  memorySave: { tool: "memory_save", subject: "your notes" },
+  memoryForget: { tool: "memory_forget", subject: "your notes" },
+  descriptionSet: { tool: "description_set", subject: "your description" },
+};
 
 export async function applyMemoryCall(
   ctx: MutationCtx,
   run: Doc<"runs">,
   call: MemoryCall,
 ): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
+  const { tool, subject } = WHAT_A_CALL_CHANGES[call.kind];
   const result = (outcome: "ok" | "error" | "cancelled" | "rejected", output: string) => ({
     kind: "toolResult" as const,
     toolCallId: call.toolCallId,
-    name: TOOL_OF_CALL[call.kind],
+    name: tool,
     outcome,
     output,
     truncated: false,
   });
   if (run.capability !== "full") {
-    return result("rejected", "This run is read-only, so it cannot change your notes, and this call did not run.");
+    return result("rejected", `This run is read-only, so it cannot change ${subject}, and this call did not run.`);
   }
   // The runner hears of a stop only at its next heartbeat, so only this transaction can honor one made just now.
   if (run.cancelRequested) {
-    return result("cancelled", "The run was cancelled before this call changed your notes, so it did not run.");
+    return result("cancelled", `The run was cancelled before this call changed ${subject}, so it did not run.`);
   }
   switch (call.kind) {
     case "memorySave": {
@@ -168,6 +173,19 @@ export async function applyMemoryCall(
       }
       await ctx.db.delete(note._id);
       return result("ok", `Forgot note ${note._id}. Its text was: ${note.text}`);
+    }
+    case "descriptionSet": {
+      const parsed = parseDescription(call.text);
+      if (parsed.kind === "refused") {
+        return result("error", DESCRIPTION_PROBLEMS[parsed.problem].bot);
+      }
+      const previous = (await ctx.db.get(run.botId))?.description;
+      await ctx.db.patch(run.botId, { description: parsed.text });
+      // A description keeps no history, so this result is how an owner traces a change and undoes it.
+      return result(
+        "ok",
+        ["Updated your description.", "[Previous description]", previous ?? "", "[End of previous description]", "[New description]", parsed.text ?? "", "[End of new description]"].join("\n"),
+      );
     }
   }
 }

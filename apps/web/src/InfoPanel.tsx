@@ -92,7 +92,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
         </p>
       ) : (
         <p className="panel-note" role="status">
-          {save.kind === "saved" ? "Saved. " : ""}Only you can change this. A change reaches the bot at its next step.
+          {save.kind === "saved" ? "Saved. " : ""}Only you can change the name and title. You and the bot can change the description. A change reaches the bot at its next step.
         </p>
       )}
     </>
