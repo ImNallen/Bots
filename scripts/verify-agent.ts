@@ -1030,7 +1030,7 @@ try {
       });
       await check("those attempts changed nothing", async () => {
         const stored = await service.query(api.bots.promptFor, { botId });
-        assert.deepEqual(stored, { name, title: before.title, assignment: before.assignment, notes: [] });
+        assert.deepEqual(stored, { name, title: before.title, assignment: before.assignment, notes: [], routines: [] });
       });
 
       const after = { botId, name: `renamed-${nonce}`, title: `Lead ${nonce}`, assignment: `Summarize the ${nonce} changelog.` };
@@ -1069,7 +1069,7 @@ try {
 
     await first.mutation(api.bots.remove, { botId });
     await check("a bot that is gone reads as a bot named Bot", async () => {
-      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", notes: [] });
+      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", notes: [], routines: [] });
     });
   });
 
@@ -1976,7 +1976,7 @@ try {
 
       const lateRun = fire(manualRoutine, Date.now() - 1);
       await check("claim fails a run past its deadline with the same reason", async () => {
-        assert.deepEqual(await service.mutation(api.runs.claim, { runId: lateRun }), { kind: "unavailable" });
+        assert.equal((await service.mutation(api.runs.claim, { runId: lateRun })).kind, "ended");
         assert.deepEqual((await ended(manual, manualRoutine, lateRun)).state, { kind: "failed", reason: DEADLINE_REASON });
         assert.equal(typeof runRow(lateRun).endedAt, "number");
       });
@@ -4565,7 +4565,7 @@ try {
       for (;;) {
         await sleep(LEASE_MS + 1000);
         const next = await service.mutation(api.runs.claim, { runId: pendingRunId });
-        if (next.kind === "unavailable") {
+        if (next.kind === "ended") {
           return;
         }
       }
@@ -4644,7 +4644,7 @@ try {
     });
     await check("a cancel holds through the failed attempts, and the limit ends that run as cancelled", async () => {
       assert.deepEqual(cancelled.flags, [false, true, true, true, true]);
-      assert.deepEqual(cancelled.last, { kind: "unavailable" });
+      assert.equal(cancelled.last.kind, "ended");
       assert.equal((await stuckThenCancelled.run(cancelledRunId))?.state.kind, "cancelled");
     });
 
