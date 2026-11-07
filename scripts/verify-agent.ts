@@ -3167,10 +3167,16 @@ try {
     const reportsIn = async (client: ConvexHttpClient, threadId: Id<"threads">) =>
       (await client.query(api.threads.timeline, { threadId })).runs.flatMap(bodiesOf).filter((body) => body.kind === "routineReport");
     const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
+    const leases = new Map<Id<"runs">, string>();
     const claimed = async (runId: Id<"runs">) => {
       const claim = await service.mutation(api.runs.claim, { runId });
       assert.ok(claim.kind === "claimed", "the claim was refused");
+      leases.set(runId, claim.leaseToken);
       return claim;
+    };
+    const finished = async (runId: Id<"runs">, leaseToken: string, kind: "done" | "cancelled" = "done") => {
+      await service.mutation(api.runs.finish, { runId, leaseToken, state: { kind } });
+      leases.delete(runId);
     };
     // The self-hosted backend allows 4 MiB of writes per second.
     const paced = async <T>(write: () => Promise<T>): Promise<T> => {
@@ -3189,7 +3195,7 @@ try {
       const runId = await paced(() => chat.send(text));
       const { leaseToken, nextSeq } = await paced(() => claimed(runId));
       await paced(() => service.mutation(api.runs.append, { runId, leaseToken, expectedSeq: nextSeq, body }));
-      await paced(() => service.mutation(api.runs.finish, { runId, leaseToken, state: { kind: "done" } }));
+      await paced(() => finished(runId, leaseToken));
       return runId;
     };
 
@@ -3385,7 +3391,7 @@ try {
         const page = JSON.stringify(await pageOf(wideOwner));
         assert.ok(page.includes(runId));
         assert.ok(!page.includes(leaseToken));
-        await service.mutation(api.runs.finish, { runId, leaseToken, state: { kind: "done" } });
+        await finished(runId, leaseToken);
       });
 
       const namedOwner = await newOwner("named");
@@ -3399,6 +3405,9 @@ try {
         assert.ok(page.runs.every((row) => row.blocked));
       });
     } finally {
+      for (const [runId, leaseToken] of leases) {
+        await paced(() => finished(runId, leaseToken, "cancelled")).catch(() => {});
+      }
       for (const client of owners) {
         const bots = await client.query(api.bots.list, {}).catch(() => []);
         for (const bot of bots) {
@@ -3430,6 +3439,9 @@ try {
           const user = await client.query(api.users.current, {});
           const left = user === null ? [] : adminRun<unknown[]>("scheduleChecks:routinesOfOwnerForCheck", { ownerId: user._id });
           assert.deepEqual(left, []);
+        }
+        for (const chat of chats) {
+          assert.equal(await chat.client.query(api.bots.get, { botId: chat.botId }), null);
         }
       });
     }
