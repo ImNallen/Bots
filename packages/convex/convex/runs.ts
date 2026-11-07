@@ -12,10 +12,14 @@ import { memoryCall, runEventBody, terminalRunState, type TerminalRunState } fro
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
 const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
-const NO_PROGRESS_REASON = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress. Send another message to try again.`;
+const NO_PROGRESS = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress.`;
 const NO_REPORT_REASON = "The routine ended without a report";
 const MAX_REPORT_LENGTH = 8000;
 const EARLIER_REPORTS = 3;
+
+export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
+  return `${NO_PROGRESS} ${run.scheduleId === undefined ? "Send another message to try again." : "The routine tries again at its next time."}`;
+}
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
 
@@ -69,6 +73,10 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
   await endRun(ctx, reportRunId, { kind: "done" });
 }
 
+function endedByThisClaim(run: Doc<"runs">) {
+  return { kind: "ended" as const, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
+}
+
 export const listQueued = query({
   args: { ownerId: v.optional(v.id("users")) },
   handler: async (ctx, { ownerId }) => {
@@ -113,7 +121,7 @@ export const claim = mutation({
     }
     if (pastDeadline(run, now)) {
       await endPastDeadline(ctx, run);
-      return { kind: "unavailable" as const };
+      return endedByThisClaim(run);
     }
     // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
     const computer = await ctx.db
@@ -127,8 +135,8 @@ export const claim = mutation({
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
       await closeUnansweredCalls(ctx, run);
-      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON });
-      return { kind: "unavailable" as const };
+      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: noProgressReason(run) });
+      return endedByThisClaim(run);
     }
     const leaseToken = crypto.randomUUID();
     await ctx.db.patch(runId, {

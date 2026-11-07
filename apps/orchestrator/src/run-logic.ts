@@ -78,7 +78,7 @@ export function touchedComputer(events: readonly RunEventBody[]): boolean {
   );
 }
 
-function browsingOf(capability: RunCapability, runId: string): Browsing | undefined {
+export function browsingOf(capability: RunCapability, runId: string): Browsing | undefined {
   switch (capability) {
     case "full":
       return undefined;

@@ -19,6 +19,7 @@ import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   browsingForCall,
+  browsingOf,
   browsingToEnd,
   modelRequest,
   nextAction,
@@ -374,6 +375,13 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
     refused.add(runId);
     const claim = await service.mutation(api.runs.claim, { runId });
     if (claim.kind === "unavailable") {
+      return;
+    }
+    if (claim.kind === "ended") {
+      const browsing = browsingOf(claim.capability, runId);
+      if (browsing !== undefined) {
+        args.link.sendBrowsingEnd({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+      }
       return;
     }
     refused.delete(runId);
