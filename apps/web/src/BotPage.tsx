@@ -11,6 +11,7 @@ import { conversationItems, isActive, type Timeline } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
+import { browserTimeZone } from "./routines.ts";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
@@ -166,6 +167,7 @@ function Conversation(props: { threadId: Id<"threads">; botName: string; charact
   const { threadId, botName, character } = props;
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
+  const user = useQuery(api.users.current);
   const { scroller, onScroll } = useStickToBottom(timeline !== undefined);
   if (timeline === undefined) {
     return (
@@ -174,7 +176,13 @@ function Conversation(props: { threadId: Id<"threads">; botName: string; charact
       </p>
     );
   }
-  const items = conversationItems({ timeline, pending: pending ?? [], now: Date.now(), locale: navigator.language });
+  const items = conversationItems({
+    timeline,
+    pending: pending ?? [],
+    now: Date.now(),
+    locale: navigator.language,
+    timeZone: user?.timeZone ?? browserTimeZone(),
+  });
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>

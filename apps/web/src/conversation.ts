@@ -1,5 +1,6 @@
 import type { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
+import { describeCadence, parseCadence } from "@bots/convex/scheduleTime";
 import type { ToolName } from "@bots/protocol";
 import type { FunctionReturnType } from "convex/server";
 import { friendlyStep, isToolName, TOOL_STEPS } from "./activity.ts";
@@ -113,6 +114,14 @@ function callArguments(raw: string): CallArgument[] {
   }));
 }
 
+function routineCard(raw: string, timeZone: string): { title: string; arguments: CallArgument[] } | null {
+  const parsed = parseObject(raw) as { instruction?: unknown; cadence?: unknown } | null;
+  const cadence = parseCadence(parsed?.cadence);
+  return cadence === null || typeof parsed?.instruction !== "string"
+    ? null
+    : { title: `${TOOL_WORDS.schedule_propose.ask} ${describeCadence(cadence, timeZone)}.`, arguments: [{ label: null, value: parsed.instruction }] };
+}
+
 function startOfDay(at: number): number {
   const date = new Date(at);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
@@ -146,20 +155,22 @@ function callItem(args: {
   result: ToolResult | undefined;
   active: boolean;
   approvalId: Id<"approvals"> | undefined;
+  timeZone: string;
 }): DisplayItem {
-  const { key, call, result, active, approvalId } = args;
+  const { key, call, result, active, approvalId, timeZone } = args;
   const known = isToolName(call.name) ? call.name : null;
   const icon: IconName = known === null ? "gear" : TOOL_WORDS[known].icon;
   const row = { key, kind: "tool" as const, icon, summary: callSummary(call.arguments) };
   const doneName = known === null ? call.name : TOOL_WORDS[known].done;
   if (result === undefined) {
     if (approvalId !== undefined) {
+      const routine = known === "schedule_propose" ? routineCard(call.arguments, timeZone) : null;
       return {
         key,
         kind: "approval",
         approvalId,
-        title: known === null ? `Run ${call.name}?` : TOOL_WORDS[known].ask,
-        arguments: callArguments(call.arguments),
+        title: routine?.title ?? (known === null ? `Run ${call.name}?` : TOOL_WORDS[known].ask),
+        arguments: routine?.arguments ?? callArguments(call.arguments),
       };
     }
     // A row that is still running must not claim the past tense.
@@ -206,8 +217,8 @@ function statusItem(args: { run: TimelineRun; waitingForAnswer: boolean }): Disp
   return { key, kind: "status", mode: tool === null ? "thinking" : "tool", text: friendlyStep(tool) };
 }
 
-function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"approvals">> }): DisplayItem[] {
-  const { run, approvals } = args;
+function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"approvals">>; timeZone: string }): DisplayItem[] {
+  const { run, approvals, timeZone } = args;
   const active = isActive(run);
   const results = new Map(
     run.events
@@ -239,6 +250,7 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
             result: results.get(call.id),
             active,
             approvalId: approvals.get(`${run._id}:${call.id}`),
+            timeZone,
           });
           waitingForAnswer ||= item.kind === "approval";
           items.push(item);
@@ -276,8 +288,9 @@ export function conversationItems(args: {
   pending: readonly PendingApproval[];
   now: number;
   locale: string;
+  timeZone: string;
 }): DisplayItem[] {
-  const { timeline, pending, now, locale } = args;
+  const { timeline, pending, now, locale, timeZone } = args;
   const approvals = new Map(pending.map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
   return timeline.runs.flatMap((run, index) => {
     const previous = timeline.runs[index - 1];
@@ -285,6 +298,6 @@ export function conversationItems(args: {
     const time: DisplayItem[] = showTime
       ? [{ key: `${run._id}:time`, kind: "time", label: timeLabel({ at: run.createdAt, now, locale }) }]
       : [];
-    return [...time, ...runItems({ run, approvals })];
+    return [...time, ...runItems({ run, approvals, timeZone })];
   });
 }
