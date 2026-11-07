@@ -2954,7 +2954,7 @@ try {
       const keeps = await newOwner("keep-done");
       const keepDone = await tracked(keeps, "keep-done");
       const keepDoneRoutine = newRoutine(keepDone.botId, `schedule keep done ${nonce}`);
-      const keepOld = Date.now() - 10 * MINUTE;
+      const keepOld = Date.now() - 2 * 24 * 60 * MINUTE;
       await seedRuns(keepDoneRoutine.scheduleId, 3, { kind: "done" }, { endedAt: keepOld });
       await seedRuns(keepDoneRoutine.scheduleId, 22, { kind: "cancelled" }, { endedAt: keepOld });
       move(keepDoneRoutine.scheduleId, justPast());
