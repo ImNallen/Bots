@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "./_generated/dataModel.js";
-import { capText, decideActivity, lastMessageOf } from "./activity.js";
+import { capText, decideActivity, lastMessageOf, listingOf, runRow, upcomingRows } from "./activity.js";
 import type { RunEventBody, RunState } from "./validators.js";
 
 const NOW = 1_000_000;
@@ -101,5 +101,124 @@ describe("capText", () => {
 
   it("does not split an emoji at the cut", () => {
     expect(capText(`${"a".repeat(7999)}😀`, 8000)).toBe("a".repeat(7999));
+  });
+});
+
+describe("the Activity page's rows", () => {
+  const bot = { _id: "bot" as Id<"bots">, name: "Scout", shape: "ball" as const, color: "teal" as const };
+  const botOf = (botId: Id<"bots">) => (botId === bot._id ? bot : undefined);
+  const scheduleId = "routine" as Id<"schedules">;
+  const run = {
+    _id: "run" as Id<"runs">,
+    _creationTime: NOW,
+    botId: bot._id,
+    trigger: "user" as const,
+    scheduleId: undefined,
+    state: { kind: "done" } as RunState,
+    endedAt: NOW + 5,
+  };
+  const rawRun = { ...run, _id: "raw" as Id<"runs">, trigger: "schedule" as const, scheduleId };
+  const reportRow = { ...run, _id: "report" as Id<"runs">, trigger: "schedule" as const };
+  const row = (overrides: Partial<Parameters<typeof runRow>[0]>) =>
+    runRow({ run, bot, instructionOf: () => "Check the news", newestEvents: [], blocked: false, ...overrides });
+
+  describe("listingOf", () => {
+    const listed = (runs: readonly (typeof run | typeof rawRun | typeof reportRow)[]) => runs.flatMap((candidate) => listingOf(candidate, botOf)?.run._id ?? []);
+
+    it("shows a fire once, as the routine's own run, and not its report row", () => {
+      expect(listed([reportRow, rawRun])).toEqual(["raw"]);
+    });
+
+    it("lists no report whose raw run has been purged", () => {
+      expect(listed([reportRow])).toEqual([]);
+    });
+
+    it("lists a chat run and a routine's run with no report, such as a failed one", () => {
+      expect(listed([run, { ...rawRun, state: { kind: "failed", reason: "It broke." } }])).toEqual(["run", "raw"]);
+    });
+
+    it("lists no run of a bot that is gone", () => {
+      expect(listed([{ ...run, botId: "gone" as Id<"bots"> }, { ...rawRun, botId: "gone" as Id<"bots"> }])).toEqual([]);
+    });
+
+    it("hands back the bot with the run", () => {
+      expect(listingOf(run, botOf)?.bot).toBe(bot);
+    });
+  });
+
+  describe("runRow", () => {
+    it("names a routine's run by its instruction, on one line", () => {
+      expect(row({ run: rawRun, instructionOf: () => "Check\n\n  the news" }).instruction).toBe("Check the news");
+    });
+
+    it("names a chat run by nothing", () => {
+      expect(row({}).instruction).toBeNull();
+    });
+
+    it("has no name for a routine that was deleted, and the row still builds", () => {
+      const shown = row({ run: rawRun, instructionOf: () => undefined });
+      expect(shown.trigger).toBe("schedule");
+      expect(shown.instruction).toBeNull();
+    });
+
+    it("has no text for a run with none, and for a routine's run that only holds its instruction", () => {
+      expect(row({ newestEvents: [] }).lastText).toBeNull();
+      expect(row({ newestEvents: [result("shell"), turn("", "shell")] }).lastText).toBeNull();
+      const fired: RunEventBody = { kind: "scheduleFired", scheduleId, text: "Check the news" };
+      expect(row({ run: rawRun, newestEvents: [fired] }).lastText).toBeNull();
+      expect(row({ run: rawRun, newestEvents: [result("read_file"), turn("", "read_file"), fired] }).lastText).toBeNull();
+    });
+
+    it("takes the newest text, on one line, cut before it can split an emoji", () => {
+      expect(row({ newestEvents: [turn("  Done.\n\nAll of it."), user("go")] }).lastText).toBe("Done. All of it.");
+      expect(row({ newestEvents: [turn(`${"a".repeat(279)}😀`)] }).lastText).toBe("a".repeat(279));
+    });
+
+    it("hides a running run's lease, and keeps a failure's reason", () => {
+      const running = row({ run: { ...run, state: { kind: "running", leaseToken: "secret-lease", leaseUntil: NOW } } });
+      expect(running.state).toEqual({ kind: "running" });
+      expect(JSON.stringify(running)).not.toContain("secret-lease");
+      expect(row({ run: { ...run, state: { kind: "failed", reason: "It broke." } } }).state).toEqual({ kind: "failed", reason: "It broke." });
+    });
+
+    it("carries the bot's look, the times, and blocked, and nothing else of the bot", () => {
+      const shown = row({ bot: { ...bot, assignment: "private" } as typeof bot, blocked: true });
+      expect(shown).toMatchObject({ bot, createdAt: NOW, endedAt: NOW + 5, blocked: true });
+      expect(JSON.stringify(shown)).not.toContain("private");
+    });
+  });
+
+  describe("upcomingRows", () => {
+    const routine = {
+      _id: scheduleId,
+      botId: bot._id,
+      instruction: "Check the news",
+      cadence: { kind: "everyHours" as const, hours: 6 },
+      nextFireAt: NOW,
+      pausedBecause: undefined,
+      lastMissed: undefined,
+    };
+    const named = (instruction: string, nextFireAt: number | undefined) => ({ ...routine, instruction, nextFireAt });
+    const upcoming = (routines: Parameters<typeof upcomingRows>[0]["routines"]) => upcomingRows({ routines, botOf, timeZone: "UTC" });
+
+    it("puts the soonest first and paused routines last, in the order they came", () => {
+      const routines = [named("paused one", undefined), named("later", NOW + 2), named("paused two", undefined), named("soon", NOW + 1)];
+      expect(upcoming(routines).map((row) => row.instruction)).toEqual(["soon", "later", "paused one", "paused two"]);
+    });
+
+    it("has words for when, and an absent next time for a paused routine", () => {
+      expect(upcoming([named("paused", undefined)])[0]).toMatchObject({ when: "Every 6 hours", bot });
+      expect(upcoming([named("paused", undefined)])[0]?.nextFireAt).toBeUndefined();
+    });
+
+    it("keeps a routine's last miss and why it paused itself", () => {
+      const lastMissed = { at: NOW, reason: "The bot was busy" };
+      const [paused] = upcoming([{ ...routine, nextFireAt: undefined, pausedBecause: "It paused itself", lastMissed }]);
+      expect(paused).toMatchObject({ pausedBecause: "It paused itself", lastMissed });
+    });
+
+    it("lists no routine of a bot that is gone", () => {
+      expect(upcoming([{ ...routine, botId: "gone" as Id<"bots"> }])).toEqual([]);
+    });
   });
 });

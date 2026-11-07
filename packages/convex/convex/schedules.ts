@@ -6,7 +6,7 @@ import { capText } from "./activity.js";
 import { requireIdentity } from "./identity.js";
 import { textProblem, type TextProblem } from "./memories.js";
 import { endRunsPastDeadline } from "./runEnd.js";
-import { describeCadence, nextFireAfter, parseCadence } from "./scheduleTime.js";
+import { FALLBACK_ZONE, describeCadence, nextFireAfter, parseCadence } from "./scheduleTime.js";
 import { activeRunOfBot, publicState, purgeRunBatch, purgeThreadBatch } from "./threads.js";
 import type { RunEventBody, RunState, ScheduleCreate } from "./validators.js";
 
@@ -24,7 +24,6 @@ const MAX_PAUSE_REASON_LENGTH = 500;
 const RECENT_RUNS_SHOWN = 5;
 const KEEP_RUNS = 20;
 export const EARLIER_REPORTS = 3;
-const FALLBACK_ZONE = "UTC";
 
 const LIMIT_REASON = `You reached the limit of ${MAX_SCHEDULED_RUNS_A_DAY} routine runs in 24 hours`;
 const BUSY_REASON = "The bot was busy for more than 15 minutes after this time";

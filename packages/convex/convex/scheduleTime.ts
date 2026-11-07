@@ -2,6 +2,7 @@ import type { Cadence } from "./validators.js";
 
 export const MIN_EVERY_HOURS = 1;
 export const MAX_EVERY_HOURS = 24;
+export const FALLBACK_ZONE = "UTC";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
