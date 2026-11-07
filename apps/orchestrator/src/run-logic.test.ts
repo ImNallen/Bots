@@ -585,6 +585,26 @@ describe("modelRequest", () => {
     expect(offered({ capability: "readOnly", final: true, reports: [] })).toEqual([]);
   });
 
+  it("tells a read-only run about no tool it lacks, and no login it does not have", () => {
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, events: [user] });
+    const text = tools.map((tool) => tool.function.description).join(" ");
+    expect(text).not.toMatch(/browser_click|browser_type|browser_press|take over|take it over|shares? logins/i);
+    expect(text).toMatch(/none of your owner's logins/);
+    expect(text).toMatch(/to:/);
+  });
+
+  it("sends a full run the shared definitions untouched", () => {
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, events: [user] });
+    expect(tools).toEqual(toolDefinitions);
+  });
+
+  it("keeps each read-only tool's name and arguments", () => {
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, events: [user] });
+    for (const tool of tools) {
+      expect(tool.function.parameters).toEqual(toolDefinitions.find((shared) => shared.function.name === tool.function.name)?.function.parameters);
+    }
+  });
+
   it("puts the prompt first and the events after it", () => {
     const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, events: [user] });
     expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
