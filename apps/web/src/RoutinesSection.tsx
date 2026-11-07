@@ -2,7 +2,7 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { describeCadence } from "@bots/convex/scheduleTime";
 import { useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { timeLabel } from "./conversation.ts";
 import { browserTimeZone, routineStatus, runStateWords, type Routine } from "./routines.ts";
 import { errorMessage } from "./session.tsx";
@@ -93,13 +93,21 @@ function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; time
   );
 }
 
-export function RoutinesSection({ botId, botName }: { botId: Id<"bots">; botName: string }) {
+export function RoutinesSection({ botId, botName, reveal }: { botId: Id<"bots">; botName: string; reveal: boolean }) {
   const list = useQuery(api.schedules.listForBot, { botId }) ?? null;
   const now = Date.now();
   const locale = navigator.language;
+  const notesAbove = useQuery(api.memories.list, { botId });
+  const head = useRef<HTMLDivElement>(null);
+  const settled = list !== null && notesAbove !== undefined;
+  useEffect(() => {
+    if (reveal && settled) {
+      head.current?.scrollIntoView({ block: "start" });
+    }
+  }, [reveal, settled]);
   return (
     <>
-      <div className="note-head">
+      <div className="note-head" ref={head}>
         <h3 className="label">Routines</h3>
         {list !== null && (
           <span className="note-count">

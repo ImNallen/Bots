@@ -552,6 +552,22 @@ pre {
   color: var(--danger);
 }
 
+.side-activity {
+  width: calc(100% - 18px);
+  margin: 0 9px 3px;
+}
+
+.side-activity-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  background: var(--raised);
+  border-radius: 50%;
+  box-shadow: var(--shot);
+}
+
 .me {
   display: flex;
   align-items: center;
@@ -1766,6 +1782,122 @@ button.card-row:hover {
   color: var(--danger);
 }
 
+.activity {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden auto;
+  padding: 0 16px calc(24px + var(--safe-bottom));
+}
+
+.activity-column {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100%;
+  max-width: 752px;
+  margin: 0 auto;
+}
+
+.activity-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(12px + var(--safe-top)) 9px 4px;
+  background: var(--page);
+}
+
+.activity-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.activity-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-rows li + li {
+  border-top: 1px solid var(--hair);
+}
+
+.activity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  text-decoration: none;
+}
+
+.activity-row:hover {
+  background: var(--hover);
+}
+
+.activity-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.activity-when {
+  flex: none;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.activity-line {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity-line [data-tone="bad"] {
+  color: var(--danger);
+}
+
+.activity-clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-blocked {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.activity-blocked .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.activity-said {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 /* Character picker */
 .picker {
   display: flex;
@@ -1963,7 +2095,7 @@ button.card-row:hover {
     line-height: 1.34;
   }
 
-  .app[data-view="bot"] .side,
+  .app[data-view="content"] .side,
   .app[data-view="list"] .content {
     display: none;
   }
@@ -2012,6 +2144,33 @@ button.card-row:hover {
 
   .rows-note {
     font-size: 14px;
+  }
+
+  .side-activity-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .activity {
+    padding-inline: max(12px, var(--safe-left)) max(12px, var(--safe-right));
+  }
+
+  .activity-head h2 {
+    font-size: 17px;
+  }
+
+  .activity-row {
+    gap: 11px;
+  }
+
+  .activity-when,
+  .activity-line,
+  .activity-blocked {
+    font-size: 13px;
+  }
+
+  .activity-said {
+    font-size: 15px;
   }
 
   .face-badge {
