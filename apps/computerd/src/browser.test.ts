@@ -618,6 +618,16 @@ describe("browser", () => {
       expect(result.output).toContain("froze and was closed");
     });
 
+    it("keeps the frozen page when no new page opens, so the browser does not exit with its last page", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      chromium.failNext("Target.createTarget");
+      const result = await look(browser, "a");
+      expect(result.output).toContain("did not close it");
+      expect(closed()).toEqual([]);
+    });
+
     it("says so when the browser does not close the page", async () => {
       const browser = quick();
       await look(browser, "a");
