@@ -295,6 +295,7 @@ describe("createLogins", () => {
     calls.push("connect");
     return {
       identity: browser.identity,
+      onEvent: () => {},
       onClose: () => {},
       close: () => {},
       send: async (method, params = {}) => {

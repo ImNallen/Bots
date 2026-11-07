@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserInvocation } from "@bots/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createBrowser, nextPages, type CdpConnector } from "./browser.ts";
+import { createBrowser, nextPages, type CdpConnector, type CdpEvent } from "./browser.ts";
 import { createCalls } from "./calls.ts";
 import { createDesktops, desktopOf, IDLE_STOP_MS, type Desktops, type Slot } from "./desktops.ts";
 import { openJournal } from "./journal.ts";
@@ -14,6 +14,7 @@ function fakeChromium() {
   const pages = new Map<string, { openerId?: string }>([["target-0", {}]]);
   const sent: Sent[] = [];
   const closeListeners: Array<() => void> = [];
+  const eventListeners: Array<(event: CdpEvent) => void> = [];
   let nextTarget = 1;
   let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
   let sendHook: ((method: string) => void) | undefined;
@@ -29,6 +30,7 @@ function fakeChromium() {
       return targetId;
     },
     closeSocket: () => closeListeners.splice(0).forEach((listener) => listener()),
+    emit: (method: string, params: Record<string, unknown>, sessionId?: string) => eventListeners.forEach((listener) => listener({ method, params, sessionId })),
     onSend: (hook: (method: string) => void) => {
       sendHook = hook;
     },
@@ -46,6 +48,9 @@ function fakeChromium() {
     client: {
       identity: "browser",
       close: () => {},
+      onEvent: (listener: (event: CdpEvent) => void) => {
+        eventListeners.push(listener);
+      },
       onClose: (listener: () => void) => {
         closeListeners.push(listener);
       },
@@ -412,6 +417,77 @@ describe("browser", () => {
       });
       expect(result.outcome).toBe("cancelled");
       expect(inputSent().some((entry) => entry.method === "Input.dispatchKeyEvent")).toBe(false);
+    });
+  });
+
+  describe("a page's dialogs", () => {
+    const SESSION = "session-target-0";
+    const opens = (type: string, sessionId = SESSION) => chromium.emit("Page.javascriptDialogOpening", { type, message: "hi" }, sessionId);
+    const answers = () => chromium.sent.filter((entry) => entry.method === "Page.handleJavaScriptDialog");
+
+    it("watches every page from the moment the connection opens", async () => {
+      await look(browserOf(), "a");
+      expect(chromium.sent[0]).toMatchObject({
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] },
+      });
+    });
+
+    it.each(["alert", "confirm", "prompt"])("refuses %s, with no call running", async (type) => {
+      await look(browserOf(), "a");
+      opens(type);
+      expect(answers()).toEqual([{ method: "Page.handleJavaScriptDialog", params: { accept: false }, sessionId: SESSION }]);
+    });
+
+    it("lets a page go at beforeunload, so a page cannot refuse a navigation", async () => {
+      await look(browserOf(), "a");
+      opens("beforeunload");
+      expect(answers()).toEqual([{ method: "Page.handleJavaScriptDialog", params: { accept: true }, sessionId: SESSION }]);
+    });
+
+    it("enables Page on a new popup before the popup runs, and answers its dialog", async () => {
+      await look(browserOf(), "a");
+      chromium.sent.length = 0;
+      chromium.emit("Target.attachedToTarget", { sessionId: "popup", targetInfo: { targetId: "target-9", type: "page" }, waitingForDebugger: true });
+      const methods = chromium.sent.map((entry) => entry.method);
+      expect(methods.indexOf("Page.enable")).toBeGreaterThanOrEqual(0);
+      expect(methods.indexOf("Page.enable")).toBeLessThan(methods.indexOf("Runtime.runIfWaitingForDebugger"));
+      opens("alert", "popup");
+      expect(answers()[0]?.sessionId).toBe("popup");
+    });
+
+    it("uses the session it was given, and opens no second one for that page", async () => {
+      const browser = browserOf();
+      await look(browser, "a");
+      chromium.pages.set("target-9", {});
+      chromium.emit("Target.attachedToTarget", { sessionId: "auto", targetInfo: { targetId: "target-9", type: "page" }, waitingForDebugger: false });
+      await look(browser, "a");
+      expect(lastEvaluated(chromium)).toBe("auto");
+      expect(chromium.sent.filter((entry) => entry.method === "Target.attachToTarget" && entry.params.targetId === "target-9")).toEqual([]);
+    });
+
+    it("leaves a dialog to a person who has the screen, and clears what is left at the next call", async () => {
+      let person = true;
+      const browser = createBrowser({ desktops: machine.desktops, connector: machine.connector, personHasScreen: () => person });
+      await look(browser, "a");
+      opens("confirm");
+      expect(answers()).toEqual([]);
+      await look(browser, "a");
+      expect(answers()).toEqual([]);
+      person = false;
+      await look(browser, "a");
+      expect(answers()).toEqual([{ method: "Page.handleJavaScriptDialog", params: { accept: false }, sessionId: SESSION }]);
+    });
+
+    it("closes the lease when a cancel arrives while the browser has not taken the watch", async () => {
+      const browser = createBrowser({ desktops: machine.desktops, connector: machine.connector });
+      chromium.stall("Target.setAutoAttach");
+      const abort = new AbortController();
+      const running = browser.execute({ botId: "a", tool: snapshot, signal: abort.signal });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      abort.abort(new Error("stopped"));
+      expect((await running).outcome).toBe("cancelled");
+      expect(machine.openLeases()).toBe(0);
     });
   });
 

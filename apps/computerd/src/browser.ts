@@ -37,10 +37,13 @@ const KEY_CODES: Record<string, number> = {
   ArrowRight: 39,
 };
 
+export type CdpEvent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
+
 export type Cdp = {
   // The browser's GUID, which changes at each start.
   identity: string;
   send: (method: string, params?: Record<string, unknown>, sessionId?: string) => Promise<Record<string, unknown>>;
+  onEvent: (listener: (event: CdpEvent) => void) => void;
   onClose: (listener: () => void) => void;
   close: () => void;
 };
@@ -115,9 +118,21 @@ type Connection = {
   // Oldest first. The last one is the page that the bot acts on.
   pages: string[];
   sessions: Map<string, string>;
+  // Dialogs that opened while a person had the screen. A dialog stays with the person, and anything left over goes at the next call.
+  heldDialogs: PageDialog[];
 };
 
+type PageDialog = { sessionId: string; accept: boolean };
+
 type TargetInfo = { targetId: string; type: string; openerId?: string };
+
+function sendQuietly(client: Cdp, method: string, params: Record<string, unknown>, sessionId: string): void {
+  client.send(method, params, sessionId).catch(() => {});
+}
+
+function answerDialog(client: Cdp, dialog: PageDialog): void {
+  sendQuietly(client, "Page.handleJavaScriptDialog", { accept: dialog.accept }, dialog.sessionId);
+}
 
 // Settles with the work, or rejects when `ends` aborts, whichever comes first. A page that never answers leaves its reply waiting
 // in the connection, which is a small cost for each frozen call.
@@ -180,39 +195,75 @@ export function createBrowser(args: {
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
   const queues = new Map<string, Promise<unknown>>();
 
-  async function connectionFor(botId: string, cdpPort: number): Promise<Connection> {
+  async function connectionFor(botId: string, cdpPort: number, signal: AbortSignal): Promise<Connection> {
     const known = connections.get(botId);
     if (known?.cdpPort === cdpPort) {
       return known;
     }
     const client = await connector(cdpPort);
-    const connection: Connection = { cdpPort, client, pages: [], sessions: new Map() };
-    connections.set(botId, connection);
+    const connection: Connection = { cdpPort, client, pages: [], sessions: new Map(), heldDialogs: [] };
+    client.onEvent((event) => onBrowserEvent(botId, connection, event));
     client.onClose(() => {
       if (connections.get(botId) === connection) {
         connections.delete(botId);
       }
     });
+    // Each new page, popups too, waits for this socket before its first script, so no dialog can open before Page.enable. A dialog
+    // that opened with no socket here sends no event, even after Page.enable, so that page goes the way of any frozen page.
+    const limit = AbortSignal.any([signal, AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS)]);
+    try {
+      await untilEnd(limit, () => client.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] }));
+    } catch (error) {
+      client.close();
+      throw error;
+    }
+    connections.set(botId, connection);
     return connection;
   }
 
-  async function sessionFor(connection: Connection, client: Cdp, targetId: string): Promise<string> {
-    const { sessions } = connection;
-    const existing = sessions.get(targetId);
-    if (existing !== undefined) {
-      return existing;
+  // Nothing here waits for an answer, because a frozen page never gives one, and the tool's next step finds that out for itself.
+  // CDP keeps the order on one session, so Page.enable comes before the page runs.
+  function adoptSession(connection: Connection, targetId: string, sessionId: string): void {
+    if (connection.sessions.has(targetId)) {
+      return;
     }
-    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
-    const id = String(sessionId);
-    sessions.set(targetId, id);
-    await client.send("Page.enable", {}, id);
-    await client.send("Runtime.enable", {}, id);
+    connection.sessions.set(targetId, sessionId);
+    sendQuietly(connection.client, "Page.enable", {}, sessionId);
+    sendQuietly(connection.client, "Runtime.enable", {}, sessionId);
     // A bot's input through CDP needs the page to believe it has focus, and only one window can have X focus.
-    await client.send("Emulation.setFocusEmulationEnabled", { enabled: true }, id);
-    return id;
+    sendQuietly(connection.client, "Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
   }
 
-  // Asking on every look means nothing has to watch for events, and nothing is lost across a restart.
+  function onBrowserEvent(botId: string, connection: Connection, event: CdpEvent): void {
+    if (event.method === "Target.attachedToTarget") {
+      const { sessionId, targetInfo, waitingForDebugger } = event.params as { sessionId: string; targetInfo: TargetInfo; waitingForDebugger: boolean };
+      adoptSession(connection, targetInfo.targetId, sessionId);
+      if (waitingForDebugger) {
+        sendQuietly(connection.client, "Runtime.runIfWaitingForDebugger", {}, sessionId);
+      }
+    }
+    if (event.method === "Page.javascriptDialogOpening" && event.sessionId !== undefined) {
+      // Leaving is what a bot asked for when it navigates, and refusing is the safe answer to anything a page asks.
+      const dialog = { sessionId: event.sessionId, accept: event.params.type === "beforeunload" };
+      if (personHasScreen?.(botId) === true) {
+        connection.heldDialogs.push(dialog);
+      } else {
+        answerDialog(connection.client, dialog);
+      }
+    }
+  }
+
+  async function sessionFor(connection: Connection, client: Cdp, targetId: string): Promise<string> {
+    const known = connection.sessions.get(targetId);
+    if (known !== undefined) {
+      return known;
+    }
+    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
+    adoptSession(connection, targetId, String(sessionId));
+    return connection.sessions.get(targetId) as string;
+  }
+
+  // Asking on every look means that which page is current needs no events, and nothing is lost across a restart.
   async function currentPage(connection: Connection, client: Cdp): Promise<{ targetId: string; sessionId: string }> {
     const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
     connection.pages = nextPages(connection.pages, targetInfos);
@@ -350,7 +401,10 @@ export function createBrowser(args: {
     try {
       // A cancel during a slow start still sends nothing.
       signal.throwIfAborted();
-      const connection = await connectionFor(botId, lease.cdpPort);
+      const connection = await connectionFor(botId, lease.cdpPort, signal);
+      if (personHasScreen?.(botId) !== true) {
+        connection.heldDialogs.splice(0).forEach((dialog) => answerDialog(connection.client, dialog));
+      }
       const call = startPageCall(connection.client, signal, toolDeadlineMs);
       try {
         const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, tool)}`);
@@ -415,12 +469,20 @@ export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
   });
   let nextId = 1;
   const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
+  const eventListeners: ((event: CdpEvent) => void)[] = [];
   socket.on("message", (raw: Buffer) => {
     const message = JSON.parse(raw.toString("utf8")) as {
       id?: number;
       result?: Record<string, unknown>;
       error?: { message: string };
+      method?: string;
+      params?: Record<string, unknown>;
+      sessionId?: string;
     };
+    if (message.method !== undefined) {
+      const event = { method: message.method, params: message.params ?? {}, sessionId: message.sessionId };
+      eventListeners.forEach((listener) => listener(event));
+    }
     if (message.id !== undefined) {
       const waiter = pending.get(message.id);
       pending.delete(message.id);
@@ -451,6 +513,9 @@ export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
         pending.set(id, { resolve, reject });
         socket.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }));
       }),
+    onEvent: (listener) => {
+      eventListeners.push(listener);
+    },
     // A socket can close before anyone listens, and a stale connection would then fail every later call.
     onClose: (listener) => {
       if (socket.readyState === WebSocket.OPEN) {
