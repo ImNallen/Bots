@@ -1,8 +1,8 @@
 import { ConvexError } from "convex/values";
+import { DESCRIPTION_PROBLEMS, parseDescription } from "./memories.js";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_TITLE_LENGTH = 64;
-const MAX_DESCRIPTION_LENGTH = 8000;
 
 export function parseBotName(name: string): string {
   const trimmed = name.trim();
@@ -28,9 +28,13 @@ export function parseBotProfile(args: { name: string; title: string; description
   title: string | undefined;
   description: string | undefined;
 } {
+  const description = parseDescription(args.description);
+  if (description.kind === "refused") {
+    throw new ConvexError(DESCRIPTION_PROBLEMS[description.problem].owner);
+  }
   return {
     name: parseBotName(args.name),
     title: parseOptionalText({ label: "Title", text: args.title, max: MAX_TITLE_LENGTH }),
-    description: parseOptionalText({ label: "Description", text: args.description, max: MAX_DESCRIPTION_LENGTH }),
+    description: description.text,
   };
 }

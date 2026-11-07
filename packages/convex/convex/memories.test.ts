@@ -1,6 +1,6 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
-import { looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseNote } from "./memories.js";
+import { DESCRIPTION_PROBLEMS, looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseDescription, parseNote } from "./memories.js";
 
 const note = (text: string, otherNotes = 0) => parseNote({ text, otherNotes });
 const textOfLength = (length: number) => "word ".repeat(length).slice(0, length).replace(/ $/, "x");
@@ -121,5 +121,38 @@ describe("parseAbout", () => {
   it("refuses a secret and a direction control, as a note does", () => {
     expect(() => parseAbout("password=hunter2")).toThrow(/looks like/);
     expect(() => parseAbout("a\u202Eb")).toThrow(/direction/);
+  });
+});
+
+describe("parseDescription", () => {
+  it("trims the text, keeps the lines inside, and reads a blank text as a clear", () => {
+    expect(parseDescription(" A scout.\n\nIt reads notes.\n")).toEqual({ kind: "ok", text: "A scout.\n\nIt reads notes." });
+    expect(parseDescription(" \n\t")).toEqual({ kind: "ok", text: undefined });
+  });
+
+  it("allows 8,000 characters and refuses 8,001", () => {
+    const full = `${"word ".repeat(1599)}words`;
+    expect(parseDescription(full)).toEqual({ kind: "ok", text: full });
+    expect(parseDescription(`${full}s`)).toEqual({ kind: "refused", problem: "tooLong" });
+  });
+
+  it.each([
+    ["a control character", "a\u0007b", "characters"],
+    ["a text-direction character", "a\u202Eb", "characters"],
+    ["a line separator", "a\u2028b", "characters"],
+    ["a password pair", "password=hunter2", "secret"],
+    ["a key", `sk-${"a1".repeat(12)}`, "secret"],
+    ["a card number", "4242 4242 4242 4242", "secret"],
+  ])("refuses %s", (_label, text, problem) => {
+    expect(parseDescription(text)).toEqual({ kind: "refused", problem });
+  });
+
+  it("names the description to the owner, and tells the bot that nothing changed", () => {
+    expect(DESCRIPTION_PROBLEMS.tooLong.owner).toMatch(/^Description .* 8,000 /);
+    expect(DESCRIPTION_PROBLEMS.characters.owner).toMatch(/^Description /);
+    expect(DESCRIPTION_PROBLEMS.secret.owner).toMatch(/description was not saved/);
+    for (const { bot } of Object.values(DESCRIPTION_PROBLEMS)) {
+      expect(bot).toMatch(/nothing changed/);
+    }
   });
 });

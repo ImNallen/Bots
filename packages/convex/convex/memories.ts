@@ -7,6 +7,7 @@ import type { MemoryCall, RunEventBody } from "./validators.js";
 const MAX_NOTES = 40;
 const MAX_NOTE_LENGTH = 500;
 const MAX_ABOUT_LENGTH = 2000;
+const MAX_DESCRIPTION_LENGTH = 8000;
 
 const TOKEN_RUN_WITHOUT_SLASH_OR_DOT = /[A-Za-z0-9_+=-]{32,}/;
 
@@ -88,6 +89,30 @@ export function parseAbout(about: string): string | undefined {
     throw new ConvexError(ABOUT_PROBLEMS[problem]);
   }
   return text === "" ? undefined : text;
+}
+
+export const DESCRIPTION_PROBLEMS: Record<TextProblem, { owner: string; bot: string }> = {
+  tooLong: {
+    owner: `Description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters`,
+    bot: `Your description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters, so nothing changed. Write a shorter one.`,
+  },
+  characters: {
+    owner: "Description cannot hold control characters or characters that change the text's direction",
+    bot: "Your description cannot hold control characters or characters that change the text's direction, so nothing changed. Write it without them.",
+  },
+  secret: {
+    owner: "This looks like a password, key, token, or card number, so the description was not saved. For a login, take over the bot's screen",
+    bot: "This looks like a password, key, token, or card number, so nothing changed. Do not try again. For a login, ask your owner to take over and log in.",
+  },
+};
+
+export function parseDescription(description: string): { kind: "ok"; text: string | undefined } | { kind: "refused"; problem: TextProblem } {
+  const text = description.trim();
+  const problem = textProblem(text, MAX_DESCRIPTION_LENGTH);
+  if (problem !== null) {
+    return { kind: "refused", problem };
+  }
+  return { kind: "ok", text: text === "" ? undefined : text };
 }
 
 export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"memories">[]> {

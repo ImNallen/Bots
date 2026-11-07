@@ -42,7 +42,17 @@ describe("parseBotProfile", () => {
   });
 
   it("allows an 8,000 character description and refuses 8,001, and the error names the description", () => {
-    expect(profile({ description: "x".repeat(8000) }).description).toHaveLength(8000);
-    expect(() => profile({ description: "x".repeat(8001) })).toThrow(/^Description.* 8,000 /);
+    const full = `${"word ".repeat(1599)}words`;
+    expect(full).toHaveLength(8000);
+    expect(profile({ description: full }).description).toBe(full);
+    expect(() => profile({ description: `${full}s` })).toThrow(/^Description.* 8,000 /);
+  });
+
+  it.each([
+    ["a secret", "password=hunter2", /looks like a password/],
+    ["a control character", "a\u0007b", /^Description cannot hold control characters/],
+    ["a character that changes the text's direction", "a\u202Eb", /^Description cannot hold control characters/],
+  ])("refuses %s from the owner, and the error says why", (_label, description, message) => {
+    expect(() => profile({ description })).toThrow(message);
   });
 });
