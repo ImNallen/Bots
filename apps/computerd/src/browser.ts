@@ -20,7 +20,7 @@ const CLOSE_PAGE_MS = 3000;
 type PageFate = "answers" | "closed" | "keptForOwner" | "stuck";
 
 const PAGE_FATE_OUTPUT: Record<PageFate, string> = {
-  answers: "Take a new snapshot to see where the page got to.",
+  answers: "Any navigation in progress was stopped. Take a new snapshot to see where the page got to.",
   closed: "The page froze and was closed. The next browser tool starts on a new blank page.",
   keptForOwner: "The page is not answering. It stayed open because the owner has the screen.",
   stuck: "The page froze, and the browser did not close it.",
@@ -374,22 +374,24 @@ export function createBrowser(args: {
     if (targetId === undefined || sessionId === undefined) {
       return "answers";
     }
+    const personIsThere = personHasScreen?.(botId) === true;
+    // Chromium holds a session's page calls during a navigation, so a server that never answers would look like a frozen page.
+    if (!personIsThere) {
+      sendQuietly(client, "Page.stopLoading", {}, sessionId);
+    }
     const probe = AbortSignal.timeout(frozenProbeMs);
     await untilEnd(probe, () => client.send("Runtime.evaluate", { expression: "1" }, sessionId)).catch(() => {});
     if (!probe.aborted) {
       return "answers";
     }
-    if (personHasScreen?.(botId) === true) {
+    if (personIsThere) {
       return "keptForOwner";
     }
+    // An error here means the page is already gone, so only the limit means that the browser did not act.
     const limit = AbortSignal.timeout(CLOSE_PAGE_MS);
-    try {
-      await untilEnd(limit, () => client.send("Target.closeTarget", { targetId }));
-      await untilEnd(limit, () => client.send("Target.createTarget", { url: "about:blank" }));
-      return "closed";
-    } catch {
-      return "stuck";
-    }
+    await untilEnd(limit, () => client.send("Target.closeTarget", { targetId })).catch(() => {});
+    await untilEnd(limit, () => client.send("Target.createTarget", { url: "about:blank" })).catch(() => {});
+    return limit.aborted ? "stuck" : "closed";
   }
 
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<ToolResult> {
