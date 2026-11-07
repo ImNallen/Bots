@@ -53,7 +53,7 @@ type Connection = {
   computer: Computer;
   issued: Set<string>;
   waiters: Map<string, Set<(result: ToolResult) => void>>;
-  onDrop: Set<() => void>;
+  onDrop: Set<(closeCode: number | undefined) => void>;
 };
 
 type SocketState =
@@ -93,12 +93,12 @@ export function startLink(args: {
   const pendingStreams = new Map<string, PendingStream>();
   const openStreams = new Map<Id<"users">, number>();
 
-  function dropConnection(connection: Connection): void {
+  function dropConnection(connection: Connection, closeCode?: number): void {
     if (connections.get(connection.computer.ownerId) === connection) {
       connections.delete(connection.computer.ownerId);
     }
     for (const notify of connection.onDrop) {
-      notify();
+      notify(closeCode);
     }
     connection.onDrop.clear();
   }
@@ -259,11 +259,11 @@ export function startLink(args: {
       }
     });
 
-    socket.on("close", () => {
+    socket.on("close", (code) => {
       clearTimeout(helloTimer);
       if (state.kind === "ready") {
         log({ level: "info", event: "computer-disconnected", computerId: state.connection.computer.computerId });
-        dropConnection(state.connection);
+        dropConnection(state.connection, code);
       }
     });
     socket.on("error", (error) => {
@@ -321,7 +321,10 @@ export function startLink(args: {
     return raceStep(call, (settle, cleanup) => {
       const { socket } = connection;
       const onResult = (result: ToolResult) => settle({ kind: "result", result });
-      const onDrop = () => settle({ kind: "retry" });
+      // A computerd that does not know `browsing` closes its link on it, and it would close again at every retry, for as long as the run
+      // lives. Any other drop retries, and the journal stops a call from running twice.
+      const onDrop = (closeCode: number | undefined) =>
+        settle(call.browsing !== undefined && closeCode === LINK_CLOSE.invalidMessage ? { kind: "gaveUp" } : { kind: "retry" });
       const waiters = connection.waiters.get(call.callId) ?? new Set();
       connection.waiters.set(call.callId, waiters);
       waiters.add(onResult);

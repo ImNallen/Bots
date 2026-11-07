@@ -155,6 +155,31 @@ describe("link", () => {
       await computer.closed;
     });
 
+    it("ends as unavailable, with one send, when a computerd refuses the field and closes its link", async () => {
+      const computer = await connectComputer();
+      const call = link.call({ ...callArgs("run:older"), tool: snapshot, browsing });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      computer.socket.close(LINK_CLOSE.invalidMessage);
+      await computer.closed;
+      const reconnected = await connectComputer();
+      expect(await call).toMatchObject({ outcome: "unavailable" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reconnected.received.some((message) => message.kind === "toolCall")).toBe(false);
+      reconnected.socket.close();
+      await reconnected.closed;
+    });
+
+    it("says cancelled, not unavailable, for a run that was stopped as the computerd refused the field", async () => {
+      const computer = await connectComputer();
+      const abort = new AbortController();
+      const call = link.call({ ...callArgs("run:older-cancel", { cancel: abort.signal }), tool: snapshot, browsing });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      abort.abort();
+      computer.socket.close(LINK_CLOSE.invalidMessage);
+      await computer.closed;
+      expect(await call).toMatchObject({ outcome: "cancelled" });
+    });
+
     it("retries after a link that dropped for another reason, so a restart of computerd keeps its journal's answer", async () => {
       const first = await connectComputer();
       const call = link.call({ ...callArgs("run:restart"), tool: snapshot, browsing });
@@ -166,6 +191,20 @@ describe("link", () => {
       expect(second.received.find((message) => message.kind === "toolCall")).toMatchObject({ callId: "run:restart", browsing });
       answer(second, "run:restart", "replayed");
       expect((await call).output).toBe("replayed");
+      second.socket.close();
+      await second.closed;
+    });
+
+    it("retries a chat call after the same close, so a computerd that refuses another bot's field does not fail a chat", async () => {
+      const first = await connectComputer();
+      const call = link.call(callArgs("run:neighbour"));
+      await until(() => first.received.some((message) => message.kind === "toolCall"));
+      first.socket.close(LINK_CLOSE.invalidMessage);
+      await first.closed;
+      const second = await connectComputer();
+      await until(() => second.received.some((message) => message.kind === "toolCall"));
+      answer(second, "run:neighbour", "still here");
+      expect((await call).output).toBe("still here");
       second.socket.close();
       await second.closed;
     });
