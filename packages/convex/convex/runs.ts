@@ -1,26 +1,28 @@
 import { paginationOptsValidator } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { capText } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
+import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
+import { EARLIER_REPORTS, applyScheduleCreate } from "./schedules.js";
 import { ensureChatThread } from "./threads.js";
-import { memoryCall, runEventBody, terminalRunState, type TerminalRunState } from "./validators.js";
+import { memoryCall, runEventBody, scheduleCreate, terminalRunState, type RunEventBody, type TerminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
 const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
-const NO_PROGRESS_REASON = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress. Send another message to try again.`;
-const DEADLINE_REASON = "The routine ran past its 30 minute limit";
+const NO_PROGRESS = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress.`;
 const NO_REPORT_REASON = "The routine ended without a report";
 const MAX_REPORT_LENGTH = 8000;
-const EARLIER_REPORTS = 3;
 
-const UNANSWERED_CALL_OUTPUT =
-  "The run stopped before this call reported a result, so the outcome is unknown. It may have run, and it may still be running.";
+export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
+  return `${NO_PROGRESS} ${run.scheduleId === undefined ? "Send another message to try again." : "The routine tries again at its next time."}`;
+}
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
+const appendBody = v.union(runEventBody, memoryCall, scheduleCreate);
 
 async function requireLease(
   ctx: MutationCtx,
@@ -33,28 +35,9 @@ async function requireLease(
   return run;
 }
 
-async function deleteStream(ctx: MutationCtx, runId: Id<"runs">): Promise<void> {
-  const stream = await ctx.db
-    .query("runStreams")
-    .withIndex("by_run", (q) => q.eq("runId", runId))
-    .unique();
-  if (stream !== null) {
-    await ctx.db.delete(stream._id);
-  }
-}
-
-function pastDeadline(run: Pick<Doc<"runs">, "deadlineAt">, now: number): boolean {
-  return run.deadlineAt !== undefined && now > run.deadlineAt;
-}
-
-async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: TerminalRunState): Promise<void> {
-  await ctx.db.patch(runId, { state, endedAt: Date.now() });
-  await deleteStream(ctx, runId);
-}
-
 export function finishedState(args: { run: Pick<Doc<"runs">, "cancelRequested" | "deadlineAt">; state: TerminalRunState; now: number }): TerminalRunState {
   const { run, state, now } = args;
-  return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? { kind: "failed", reason: DEADLINE_REASON } : state;
+  return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? DEADLINE_FAILURE : state;
 }
 
 async function lastTurnTextOf(ctx: QueryCtx, runId: Id<"runs">): Promise<string | null> {
@@ -91,39 +74,21 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
   await endRun(ctx, reportRunId, { kind: "done" });
 }
 
-// Every later model request replays this history, and a tool call with no result would make it malformed.
-async function closeUnansweredCalls(ctx: MutationCtx, run: Doc<"runs">): Promise<void> {
-  const answered = new Set<string>();
-  for await (const event of ctx.db
-    .query("runEvents")
-    .withIndex("by_run_seq", (q) => q.eq("runId", run._id))
-    .order("desc")) {
-    if (event.body.kind === "toolResult") {
-      answered.add(event.body.toolCallId);
-      continue;
-    }
-    if (event.body.kind !== "assistantTurn") {
-      return;
-    }
-    let seq = run.nextSeq;
-    for (const call of event.body.toolCalls.filter(({ id }) => !answered.has(id))) {
-      await ctx.db.insert("runEvents", {
-        runId: run._id,
-        threadId: run.threadId,
-        seq,
-        body: {
-          kind: "toolResult",
-          toolCallId: call.id,
-          name: call.name,
-          outcome: "unavailable",
-          output: UNANSWERED_CALL_OUTPUT,
-          truncated: false,
-        },
-      });
-      seq += 1;
-    }
-    await ctx.db.patch(run._id, { nextSeq: seq });
-    return;
+function endedByThisClaim(run: Doc<"runs">) {
+  return { kind: "ended" as const, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
+}
+
+type AppendBody = Infer<typeof appendBody>;
+
+async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody): Promise<RunEventBody> {
+  switch (body.kind) {
+    case "memorySave":
+    case "memoryForget":
+      return await applyMemoryCall(ctx, run, body);
+    case "scheduleCreate":
+      return await applyScheduleCreate(ctx, run, body);
+    default:
+      return body;
   }
 }
 
@@ -166,16 +131,12 @@ export const claim = mutation({
     await requireService(ctx);
     const now = Date.now();
     const run = await ctx.db.get(runId);
-    const claimable =
-      run !== null &&
-      (run.state.kind === "queued" || (run.state.kind === "running" && run.state.leaseUntil < now));
-    if (!claimable) {
+    if (run === null || !noRunnerHolds(run, now)) {
       return { kind: "unavailable" as const };
     }
     if (pastDeadline(run, now)) {
-      await closeUnansweredCalls(ctx, run);
-      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: DEADLINE_REASON });
-      return { kind: "unavailable" as const };
+      await endPastDeadline(ctx, run);
+      return endedByThisClaim(run);
     }
     // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
     const computer = await ctx.db
@@ -189,8 +150,8 @@ export const claim = mutation({
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
       await closeUnansweredCalls(ctx, run);
-      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON });
-      return { kind: "unavailable" as const };
+      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: noProgressReason(run) });
+      return endedByThisClaim(run);
     }
     const leaseToken = crypto.randomUUID();
     await ctx.db.patch(runId, {
@@ -226,14 +187,14 @@ export const heartbeat = mutation({
 });
 
 export const append = mutation({
-  args: { ...fence, expectedSeq: v.number(), body: v.union(runEventBody, memoryCall) },
+  args: { ...fence, expectedSeq: v.number(), body: appendBody },
   handler: async (ctx, { runId, leaseToken, expectedSeq, body }) => {
     await requireService(ctx);
     const run = await requireLease(ctx, { runId, leaseToken });
     if (run.nextSeq !== expectedSeq) {
       throw new ConvexError(`Expected seq ${run.nextSeq}, got ${expectedSeq}`);
     }
-    const stored = body.kind === "memorySave" || body.kind === "memoryForget" ? await applyMemoryCall(ctx, run, body) : body;
+    const stored = await storedBodyOf(ctx, run, body);
     await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body: stored });
     await ctx.db.patch(runId, { nextSeq: expectedSeq + 1 });
     await deleteStream(ctx, runId);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { finishedState } from "./runs.js";
+import type { Id } from "./_generated/dataModel.js";
+import { finishedState, noProgressReason } from "./runs.js";
 import type { TerminalRunState } from "./validators.js";
 
 const NOW = 1_000_000;
@@ -30,5 +31,17 @@ describe("finishedState", () => {
   it.each<TerminalRunState>([{ kind: "done" }, { kind: "failed", reason: "It broke." }])("keeps %j past the deadline, because the run ended by itself", (state) => {
     const run = { cancelRequested: false, deadlineAt: NOW - 1 };
     expect(finishedState({ run, state, now: NOW })).toEqual(state);
+  });
+});
+
+describe("noProgressReason", () => {
+  it("tells a chat's owner to send another message", () => {
+    expect(noProgressReason({ scheduleId: undefined })).toMatch(/Send another message/);
+  });
+
+  it("tells a routine's owner that it tries again, because a routine has no message to send", () => {
+    const reason = noProgressReason({ scheduleId: "s" as Id<"schedules"> });
+    expect(reason).toMatch(/tries again at its next time/);
+    expect(reason).not.toMatch(/Send another message/);
   });
 });

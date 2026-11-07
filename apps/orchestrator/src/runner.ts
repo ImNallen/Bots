@@ -1,6 +1,6 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, makeCallId, parseToolCall } from "@bots/protocol";
+import { isMemoryInvocation, isScheduleInvocation, makeCallId, parseToolCall } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
@@ -19,6 +19,7 @@ import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   browsingForCall,
+  browsingOf,
   browsingToEnd,
   modelRequest,
   nextAction,
@@ -179,6 +180,8 @@ async function callModel(args: {
         assignment: profile.assignment,
         about: profile.about,
         notes: profile.notes,
+        timeZone: profile.timeZone,
+        routines: profile.routines,
       },
       events: events.map((event) => event.body),
     }),
@@ -245,6 +248,9 @@ async function runTool(args: {
     return invocation.name === "memory_save"
       ? { kind: "memorySave", toolCallId: call.id, text: invocation.args.text }
       : { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
+  }
+  if (isScheduleInvocation(invocation)) {
+    return { kind: "scheduleCreate", toolCallId: call.id, ...invocation.args };
   }
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),
@@ -374,6 +380,13 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
     refused.add(runId);
     const claim = await service.mutation(api.runs.claim, { runId });
     if (claim.kind === "unavailable") {
+      return;
+    }
+    if (claim.kind === "ended") {
+      const browsing = browsingOf(claim.capability, runId);
+      if (browsing !== undefined) {
+        args.link.sendBrowsingEnd({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+      }
       return;
     }
     refused.delete(runId);

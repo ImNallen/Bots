@@ -6,14 +6,13 @@ import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
-import { activeRunOfBot, chatThreadOf } from "./threads.js";
+import { promptRoutines, routinesOfBot } from "./schedules.js";
+import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
 const DEFAULT_APPROVAL_LEVEL = "outside";
 // Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
 const TAKEOVER_MS = 15 * 60 * 1000;
-// One event is at most 1 MiB, so a batch stays well under what a mutation may read.
-const PURGE_BATCH = 8;
 const OVERVIEW_EVENTS_PER_BOT = 6;
 // A query may read 16 MiB and one event can be 1 MiB. Past this, a bot's row has no tool or message, and the list still loads.
 const OVERVIEW_EVENT_BYTES = 8 * 1024 * 1024;
@@ -227,6 +226,8 @@ export const promptFor = query({
       assignment: bot?.assignment,
       about: owner?.about,
       notes: promptNotes(await notesOf(ctx, botId)),
+      timeZone: owner?.timeZone,
+      routines: promptRoutines(await routinesOfBot(ctx, botId), owner?.timeZone),
     };
   },
 });
@@ -254,8 +255,8 @@ export const remove = mutation({
     for (const note of await notesOf(ctx, botId)) {
       await ctx.db.delete(note._id);
     }
-    for await (const schedule of ctx.db.query("schedules").withIndex("by_bot", (q) => q.eq("botId", botId))) {
-      await ctx.db.delete(schedule._id);
+    for (const routine of await routinesOfBot(ctx, botId)) {
+      await ctx.db.delete(routine._id);
     }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });
@@ -270,7 +271,6 @@ export const remove = mutation({
   },
 });
 
-// Each step takes one batch and schedules the next. A thread goes last, so a thread that is gone means its whole history is.
 export const purge = internalMutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }): Promise<void> => {
@@ -281,28 +281,7 @@ export const purge = internalMutation({
     if (thread === null) {
       return;
     }
-    const run = await ctx.db
-      .query("runs")
-      .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-      .first();
-    const batch =
-      run === null
-        ? await ctx.db
-            .query("approvals")
-            .withIndex("by_thread_state", (q) => q.eq("threadId", thread._id))
-            .take(PURGE_BATCH)
-        : [
-            ...(await ctx.db
-              .query("runEvents")
-              .withIndex("by_run_seq", (q) => q.eq("runId", run._id))
-              .take(PURGE_BATCH)),
-            ...(await ctx.db
-              .query("runStreams")
-              .withIndex("by_run", (q) => q.eq("runId", run._id))
-              .take(PURGE_BATCH)),
-          ];
-    const documents = batch.length > 0 ? batch : [run ?? thread];
-    await Promise.all(documents.map((document) => ctx.db.delete(document._id)));
+    await purgeThreadBatch(ctx, thread._id);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });
   },
 });

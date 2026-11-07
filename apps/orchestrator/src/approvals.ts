@@ -7,11 +7,20 @@ export type ToolDecision = "run" | "ask" | "reject";
 
 const POLL_MS = 2000;
 
+const ASKS_AT_EVERY_LEVEL: Record<ToolEffect, boolean> = {
+  reads: false,
+  changesVm: false,
+  changesOutside: false,
+  changesMemory: false,
+  changesSchedule: true,
+};
+
 const ASKS_AT_OUTSIDE: Record<ToolEffect, (touchedComputer: boolean) => boolean> = {
   reads: () => false,
   changesVm: () => false,
   changesOutside: () => true,
   changesMemory: (touchedComputer) => touchedComputer,
+  changesSchedule: () => true,
 };
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
@@ -21,6 +30,9 @@ export const READ_ONLY_OUTPUT = "This run is read-only, so this call did not run
 export const FINAL_CALL_OUTPUT = "This run has reached its limit and had to write its report, so this call did not run.";
 
 function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }): boolean {
+  if (ASKS_AT_EVERY_LEVEL[toolEffect(args.toolName)]) {
+    return true;
+  }
   switch (args.level) {
     case "everything":
       return true;

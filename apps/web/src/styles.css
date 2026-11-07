@@ -1206,6 +1206,12 @@ button.tool:hover {
   border-radius: 13px;
 }
 
+.composer-note {
+  padding-inline: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Screen. Dark in both themes, like the desktop it frames. */
 .screen {
   position: fixed;
@@ -1741,6 +1747,23 @@ button.card-row:hover {
 
 .note-new {
   padding: 10px;
+}
+
+/* Routines */
+.routine-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.routine-runs [data-tone="bad"] {
+  color: var(--danger);
 }
 
 /* Character picker */

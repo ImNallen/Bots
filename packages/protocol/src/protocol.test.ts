@@ -163,6 +163,37 @@ describe("browser tools", () => {
   });
 });
 
+describe("a routine's cadence", () => {
+  const propose = (cadence: unknown) => parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "Read the news.", cadence }) });
+
+  it("sends the model no schema with a choice in it, because every chat run sends these", () => {
+    expect(JSON.stringify(toolDefinitions)).not.toMatch(/"(oneOf|anyOf|allOf)"/);
+  });
+
+  it("gives each kind only its own fields", () => {
+    const weekly = { kind: "weekly", weekdays: [1, 5], hour: 8, minute: 30 };
+    expect(propose(weekly)).toEqual({ kind: "ok", invocation: { name: "schedule_propose", args: { instruction: "Read the news.", cadence: weekly } } });
+    expect(propose({ kind: "everyHours", hours: 6 })).toEqual({
+      kind: "ok",
+      invocation: { name: "schedule_propose", args: { instruction: "Read the news.", cadence: { kind: "everyHours", hours: 6 } } },
+    });
+  });
+
+  it.each([
+    ["weekly with no time", { kind: "weekly", weekdays: [1] }],
+    ["weekly with hours too", { kind: "weekly", weekdays: [1], hour: 8, minute: 0, hours: 2 }],
+    ["everyHours with no hours", { kind: "everyHours" }],
+    ["everyHours with a weekday", { kind: "everyHours", hours: 2, weekdays: [1] }],
+    ["a repeated day", { kind: "weekly", weekdays: [1, 1], hour: 8, minute: 0 }],
+    ["an hour out of range", { kind: "weekly", weekdays: [1], hour: 24, minute: 0 }],
+    ["hours out of range", { kind: "everyHours", hours: 25 }],
+    ["an unknown kind", { kind: "daily", hour: 8 }],
+    ["an unknown field", { kind: "everyHours", hours: 2, seconds: 1 }],
+  ])("refuses %s", (_label, cadence) => {
+    expect(propose(cadence).kind).toBe("invalid");
+  });
+});
+
 describe("parseToolCall", () => {
   it("applies the shell default timeout", () => {
     expect(parseToolCall({ name: "shell", arguments: '{"command":"ls"}' })).toEqual({
@@ -197,6 +228,7 @@ describe("parseToolCall", () => {
       "browser_press",
       "memory_save",
       "memory_forget",
+      "schedule_propose",
     ]);
     for (const tool of toolDefinitions) {
       expect(tool.function.parameters).toMatchObject({ type: "object" });
@@ -227,6 +259,7 @@ describe("toolEffect", () => {
       browser_press: "changesOutside",
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
+      schedule_propose: "changesSchedule",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);
@@ -260,7 +293,13 @@ describe("memory tools", () => {
     expect(isMemoryInvocation({ name: "read_file", args: { path: "a" } })).toBe(false);
   });
 
-  it("counts every published tool but the memory tools as a computer tool, and no unknown name", () => {
+  it("stays off the link's wire type, so a computerd closes the link on a routine call", () => {
+    const propose = { name: "schedule_propose", args: { instruction: "a", cadence: { kind: "everyHours", hours: 1 } } };
+    expect(toolInvocation.safeParse(propose).success).toBe(false);
+    expect(isComputerTool("schedule_propose")).toBe(false);
+  });
+
+  it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
     const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
     expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press"]);
     expect(isComputerTool("constructor")).toBe(false);

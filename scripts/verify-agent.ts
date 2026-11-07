@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { api } from "@bots/convex";
-import type { Id } from "@bots/convex/dataModel";
+import type { Doc, Id } from "@bots/convex/dataModel";
+import { describeCadence } from "@bots/convex/scheduleTime";
 import { OUTPUT_CAP_BYTES,
   callIdToFileStem,
   computerMessage,
@@ -23,7 +24,7 @@ import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
 import { decryptApiKey, hashComputerToken } from "../apps/orchestrator/src/secrets.ts";
 import { paths, parsePrivateJwk, readEnvFile, runCommand, runConvex } from "./lib.ts";
 
-const WATCHDOG_MS = 15 * 60 * 1000;
+const WATCHDOG_MS = 25 * 60 * 1000;
 const LOOPBACK = "127.0.0.1";
 const AUDIENCE = "bots";
 const SERVICE_SUBJECT = "service:orchestrator";
@@ -425,6 +426,55 @@ function spawnOrchestrator(args: {
   child.stdout?.on("data", (part: Buffer) => orchestratorLogs.push(part));
   child.stderr?.on("data", (part: Buffer) => orchestratorLogs.push(part));
   return child;
+}
+
+async function spawnOrchestratorKilledBetweenCommitAndReply(bodyMark: string) {
+  const committed = Promise.withResolvers<FunctionArgs<typeof api.runs.append>>();
+  const proxy = createServer((incoming, response) => {
+    const parts: Buffer[] = [];
+    incoming.on("data", (part: Buffer) => parts.push(part));
+    incoming.on("end", () => {
+      const sent = Buffer.concat(parts).toString("utf8");
+      fetch(`${convexUrl}${incoming.url}`, {
+        method: incoming.method,
+        headers: { "Content-Type": "application/json", Authorization: incoming.headers.authorization ?? "" },
+        body: incoming.method === "POST" ? sent : undefined,
+      })
+        .then(async (upstream) => {
+          const reply = await upstream.text();
+          if (upstream.ok && sent.includes('"runs:append"') && sent.includes(bodyMark)) {
+            await killOrchestrator();
+            committed.resolve((JSON.parse(sent) as { args: [FunctionArgs<typeof api.runs.append>] }).args[0]);
+            response.destroy();
+            return;
+          }
+          response.writeHead(upstream.status, { "Content-Type": "application/json" });
+          response.end(reply);
+        })
+        .catch(() => response.destroy());
+    });
+  });
+  const proxyPort = await new Promise<number>((resolve) => {
+    proxy.listen(0, LOOPBACK, () => {
+      const address = proxy.address();
+      resolve(typeof address === "object" && address !== null ? address.port : 0);
+    });
+  });
+  await killOrchestrator();
+  orchestrator = spawnOrchestrator({
+    login: TEST_LOGIN,
+    port: orchestratorPort,
+    linkPort,
+    computerToken: COMPUTER_TOKEN,
+    convexUrl: `http://${LOOPBACK}:${proxyPort}`,
+  });
+  return {
+    committed: committed.promise,
+    close: () => {
+      proxy.closeAllConnections();
+      proxy.close();
+    },
+  };
 }
 
 function waitForHealthy(port: number): Promise<boolean> {
@@ -980,7 +1030,7 @@ try {
       });
       await check("those attempts changed nothing", async () => {
         const stored = await service.query(api.bots.promptFor, { botId });
-        assert.deepEqual(stored, { name, title: before.title, assignment: before.assignment, notes: [] });
+        assert.deepEqual(stored, { name, title: before.title, assignment: before.assignment, notes: [], routines: [] });
       });
 
       const after = { botId, name: `renamed-${nonce}`, title: `Lead ${nonce}`, assignment: `Summarize the ${nonce} changelog.` };
@@ -1019,7 +1069,7 @@ try {
 
     await first.mutation(api.bots.remove, { botId });
     await check("a bot that is gone reads as a bot named Bot", async () => {
-      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", notes: [] });
+      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", notes: [], routines: [] });
     });
   });
 
@@ -1137,49 +1187,10 @@ try {
       const lostNote = `reply lost ${nonce}`;
       const lostText = `memory reply lost ${nonce}`;
       scripted(lostText, [tools(saveCall(lostNote))]);
-      const committed = Promise.withResolvers<FunctionArgs<typeof api.runs.append>>();
-      const httpProxyThatDropsTheSaveReply = createServer((incoming, response) => {
-        const parts: Buffer[] = [];
-        incoming.on("data", (part: Buffer) => parts.push(part));
-        incoming.on("end", () => {
-          const sent = Buffer.concat(parts).toString("utf8");
-          fetch(`${convexUrl}${incoming.url}`, {
-            method: incoming.method,
-            headers: { "Content-Type": "application/json", Authorization: incoming.headers.authorization ?? "" },
-            body: incoming.method === "POST" ? sent : undefined,
-          })
-            .then(async (upstream) => {
-              const reply = await upstream.text();
-              if (upstream.ok && sent.includes('"runs:append"') && sent.includes('"memorySave"')) {
-                await killOrchestrator();
-                committed.resolve((JSON.parse(sent) as { args: [FunctionArgs<typeof api.runs.append>] }).args[0]);
-                response.destroy();
-                return;
-              }
-              response.writeHead(upstream.status, { "Content-Type": "application/json" });
-              response.end(reply);
-            })
-            .catch(() => response.destroy());
-        });
-      });
-      const proxyPort = await new Promise<number>((resolve) => {
-        httpProxyThatDropsTheSaveReply.listen(0, LOOPBACK, () => {
-          const address = httpProxyThatDropsTheSaveReply.address();
-          resolve(typeof address === "object" && address !== null ? address.port : 0);
-        });
-      });
-      await killOrchestrator();
-      orchestrator = spawnOrchestrator({
-        login: TEST_LOGIN,
-        port: orchestratorPort,
-        linkPort,
-        computerToken: COMPUTER_TOKEN,
-        convexUrl: `http://${LOOPBACK}:${proxyPort}`,
-      });
+      const lostAppendProxy = await spawnOrchestratorKilledBetweenCommitAndReply('"memorySave"');
       const lostRun = await lost.send(lostText);
-      const lostAppend = await committed.promise;
-      httpProxyThatDropsTheSaveReply.closeAllConnections();
-      httpProxyThatDropsTheSaveReply.close();
+      const lostAppend = await lostAppendProxy.committed;
+      lostAppendProxy.close();
       await check("a SIGKILL after the commit and before its reply leaves the note and the result together", async () => {
         const run = await lost.run(lostRun);
         assert.equal(orchestrator, null);
@@ -1613,9 +1624,9 @@ try {
       assert.ok(result.kind === "ok", `convex run ${fn} failed`);
       return JSON.parse(result.stdout) as T;
     };
-    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<Routine>("schedules:createForCheck", { botId, instruction });
+    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<Routine>("scheduleChecks:createForCheck", { botId, instruction });
     const fire = (routine: Routine, deadlineAt?: number) =>
-      adminRun<Id<"runs">>("schedules:fireForCheck", { scheduleId: routine.scheduleId, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
+      adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: routine.scheduleId, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
     const call = (name: string, args: object): FakeToolCall => ({ name, arguments: JSON.stringify(args) });
     const readCall = (path: string) => call("read_file", { path });
     const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
@@ -1669,7 +1680,7 @@ try {
     try {
       await check("neither a user's token nor the service token can reach what makes a read-only run", async () => {
         for (const client of [first, second, service, anonymous]) {
-          for (const name of ["schedules:createForCheck", "schedules:fireForCheck"]) {
+          for (const name of ["scheduleChecks:createForCheck", "scheduleChecks:fireForCheck"]) {
             await assertRejected(client.mutation(makeFunctionReference<"mutation">(name), {}), /Could not find public function/);
           }
         }
@@ -1965,7 +1976,7 @@ try {
 
       const lateRun = fire(manualRoutine, Date.now() - 1);
       await check("claim fails a run past its deadline with the same reason", async () => {
-        assert.deepEqual(await service.mutation(api.runs.claim, { runId: lateRun }), { kind: "unavailable" });
+        assert.equal((await service.mutation(api.runs.claim, { runId: lateRun })).kind, "ended");
         assert.deepEqual((await ended(manual, manualRoutine, lateRun)).state, { kind: "failed", reason: DEADLINE_REASON });
         assert.equal(typeof runRow(lateRun).endedAt, "number");
       });
@@ -2235,6 +2246,878 @@ try {
       for (const chat of chats) {
         await chat.client.mutation(api.bots.remove, { botId: chat.botId }).catch(() => {});
       }
+    }
+  });
+
+  await scenario("schedule. a routine fires by itself, reads, cannot change anything, and reports in the chat", async () => {
+    const ZONE = "Europe/Stockholm";
+    const OTHER_ZONE = "America/New_York";
+    const MINUTE = 60_000;
+    const HOUR = 60 * MINUTE;
+    const QUIET_MS = 2 * MINUTE;
+    const CLOCK_MARGIN_MS = 3000;
+    const justPast = () => Date.now() - CLOCK_MARGIN_MS;
+    const NOT_APPROVED = /did not approve/;
+    const FORBIDDEN = ["browser_click", "browser_press", "browser_type", "memory_forget", "memory_save", "schedule_propose", "shell", "write_file"];
+    const WEEKLY = { kind: "weekly" as const, weekdays: [1, 4], hour: 9, minute: 0 };
+    const WEEKLY_WORDS = "Every Monday and Thursday at 09:00, Europe/Stockholm time";
+    const HOURLY = { kind: "everyHours" as const, hours: 1 };
+    type Cadence = Doc<"schedules">["cadence"];
+    type Routine = Doc<"schedules">;
+    type ThreadRows = { thread: boolean; runs: number; events: number };
+
+    const adminRun = <T>(fn: string, args: object = {}): T => {
+      const result = runConvex(["run", fn, JSON.stringify(args)]);
+      assert.ok(result.kind === "ok", `convex run ${fn} failed: ${result.kind === "failed" ? result.output : ""}`);
+      const printed = result.stdout.trim();
+      return JSON.parse(printed === "" ? "null" : printed) as T;
+    };
+    const fireDue = () => runConvex(["run", "schedules:fireDue", "{}"]);
+    const routineRow = (scheduleId: Id<"schedules">) => adminRun<Routine | null>("scheduleChecks:routineForCheck", { scheduleId });
+    const threadRows = (threadId: Id<"threads">) => adminRun<ThreadRows>("scheduleChecks:rowsOfThreadForCheck", { threadId });
+    const move = (scheduleId: Id<"schedules">, nextFireAt: number) => adminRun<null>("scheduleChecks:moveForCheck", { scheduleId, nextFireAt });
+    const seedRuns = (scheduleId: Id<"schedules">, count: number, state: object, extra: object = {}) =>
+      adminRun<Id<"runs">[]>("scheduleChecks:seedRunsForCheck", { scheduleId, count, state, ...extra });
+    const ownerClients: ConvexHttpClient[] = [first, second];
+    const newOwner = async (name: string, timeZone: string | null = ZONE) => {
+      const client = clientFor(await signToken(`dev:verify-schedule-${name}-${nonce}@localhost`));
+      await client.mutation(api.users.ensureCurrent, {});
+      if (timeZone !== null) {
+        await client.mutation(api.users.setTimeZone, { timeZone });
+      }
+      ownerClients.push(client);
+      return client;
+    };
+    const call = (name: string, args: object): FakeToolCall => ({ name, arguments: JSON.stringify(args) });
+    const proposeCall = (instruction: string, cadence: unknown) => call("schedule_propose", { instruction, cadence });
+    const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
+    const text = (words: string): Reply => ({ kind: "text", text: words });
+    const chatFor = (client: ConvexHttpClient, name: string, level: "everything" | "outside" | "shell" | "nothing" = "nothing") => newChat({ client, name: `schedule-${name}`, level });
+    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<{ scheduleId: Id<"schedules">; threadId: Id<"threads"> }>("scheduleChecks:createForCheck", { botId, instruction });
+    const listOf = (client: ConvexHttpClient, botId: Id<"bots">) => client.query(api.schedules.listForBot, { botId });
+    const routinesOf = async (client: ConvexHttpClient, botId: Id<"bots">) => (await listOf(client, botId))?.routines ?? [];
+    const waitForCard = (chat: Chat) =>
+      waitFor({
+        description: "the proposal's card",
+        probe: async () => (await chat.client.query(api.approvals.pendingForThread, { threadId: chat.threadId }))[0],
+      });
+    const runIn = async (client: ConvexHttpClient, threadId: Id<"threads">, runId: Id<"runs">) =>
+      (await client.query(api.threads.timeline, { threadId })).runs.find((run) => run._id === runId);
+    const endedIn = (client: ConvexHttpClient, threadId: Id<"threads">, runId: Id<"runs">, timeoutMs = 90_000) =>
+      waitFor({
+        description: `run ${runId} to end`,
+        timeoutMs,
+        intervalMs: 200,
+        probe: async () => {
+          const run = await runIn(client, threadId, runId);
+          return run !== undefined && TERMINAL.includes(run.state.kind) ? run : null;
+        },
+      });
+    const reportsIn = async (client: ConvexHttpClient, threadId: Id<"threads">) =>
+      (await client.query(api.threads.timeline, { threadId })).runs.flatMap(bodiesOf).filter((body) => body.kind === "routineReport");
+    const inJournal = (runId: Id<"runs">, toolCallId: string | undefined) =>
+      shellIn(mainContainer.id, `ls ${JOURNAL_DIR}`).includes(callIdToFileStem(`${runId}:${toolCallId}`));
+    const callIdOf = (run: TimelineRun, name: string) =>
+      turnsOf(run)
+        .flatMap((turn) => turn.toolCalls)
+        .find((entry) => entry.name === name)?.id;
+    const asAgent = (command: string) => shellIn(mainContainer.id, `sudo -n -u agent timeout 20 bash -c '${command}'`);
+    const cancelActive = async (client: ConvexHttpClient, botId: Id<"bots">) => {
+      const active = await client.query(api.threads.activeRun, { botId });
+      if (active !== null) {
+        await client.mutation(api.runs.requestCancel, { runId: active._id });
+      }
+    };
+    const idle = (client: ConvexHttpClient, botId: Id<"bots">) =>
+      waitFor({
+        description: "the bot to have no active run",
+        timeoutMs: 40_000,
+        probe: async () => ((await client.query(api.threads.activeRun, { botId })) === null ? true : null),
+      });
+    const proposeAndApprove = async (chat: Chat, instruction: string, cadence: Cadence) => {
+      const message = `please schedule ${instruction}`;
+      fake.script(message, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall(instruction, cadence)) : text("created it")));
+      const runId = await chat.send(message);
+      const card = await waitForCard(chat);
+      await chat.client.mutation(api.approvals.decide, { approvalId: card._id, decision: "approved" });
+      return await chat.settled(runId);
+    };
+
+    type DirectRun = { runId: Id<"runs">; leaseToken: string; seq: number };
+    const claimDirectly = async (chat: Chat, message: string): Promise<DirectRun> => {
+      const runId = await chat.send(message);
+      const claimed = await service.mutation(api.runs.claim, { runId });
+      assert.ok(claimed.kind === "claimed", "the claim was refused");
+      return { runId, leaseToken: claimed.leaseToken, seq: claimed.nextSeq };
+    };
+    const appendDirectly = async (run: DirectRun, body: FunctionArgs<typeof api.runs.append>["body"]) => {
+      const stored = await service.mutation(api.runs.append, { runId: run.runId, leaseToken: run.leaseToken, expectedSeq: run.seq, body });
+      run.seq += 1;
+      return stored;
+    };
+    const proposeDirectly = async (args: {
+      run: DirectRun;
+      client: ConvexHttpClient;
+      callId: string;
+      instruction: string;
+      cadence?: Cadence;
+      answer?: "approved" | "denied" | "pending" | "none";
+      toolName?: string;
+    }) => {
+      const { run, client, callId, instruction, cadence = HOURLY, answer = "approved", toolName = "schedule_propose" } = args;
+      await appendDirectly(run, {
+        kind: "assistantTurn",
+        text: "",
+        toolCalls: [{ id: callId, name: "schedule_propose", arguments: JSON.stringify({ instruction, cadence }) }],
+        usage: { promptTokens: 1, completionTokens: 1 },
+        model: "direct",
+      });
+      if (answer !== "none") {
+        const { approvalId } = await service.mutation(api.approvals.request, { runId: run.runId, toolCallId: callId, toolName });
+        if (answer !== "pending") {
+          await client.mutation(api.approvals.decide, { approvalId, decision: answer });
+        }
+      }
+      return await appendDirectly(run, { kind: "scheduleCreate", toolCallId: callId, instruction, cadence });
+    };
+    const chats: Chat[] = [];
+    const tracked = async (client: ConvexHttpClient, name: string, level?: "everything" | "outside" | "shell" | "nothing") => {
+      const chat = await chatFor(client, name, level);
+      chats.push(chat);
+      return chat;
+    };
+
+    try {
+      await check("no token can reach what fires a routine, purges one, or sets one up for a check", async () => {
+        const names = ["schedules:fireDue", "schedules:purgeOldRuns", "schedules:purgeThread", "scheduleChecks:createForCheck", "scheduleChecks:fireForCheck", "scheduleChecks:moveForCheck", "scheduleChecks:seedRunsForCheck"];
+        for (const client of [first, second, service, anonymous]) {
+          for (const name of names) {
+            await assertRejected(client.mutation(makeFunctionReference<"mutation">(name), {}), /Could not find public function/);
+          }
+        }
+      });
+
+      await putKey(MISTRAL_KEY);
+      await second.mutation(api.users.ensureCurrent, {});
+      await first.mutation(api.users.setTimeZone, { timeZone: ZONE });
+
+      for (const level of ["everything", "outside", "shell", "nothing"] as const) {
+        const chat = await tracked(first, `deny-${level}`, level);
+        const message = `schedule deny ${level} ${nonce}`;
+        fake.script(message, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall(`denied routine ${level}`, WEEKLY)) : text("understood")));
+        const runId = await chat.send(message);
+        const card = await waitForCard(chat);
+        await first.mutation(api.approvals.decide, { approvalId: card._id, decision: "denied" });
+        const done = await chat.settled(runId);
+        await check(`at the level ${level}, a proposal shows a card, and denying it creates nothing`, async () => {
+          assert.deepEqual(resultsOf(done).map((result) => result.outcome), ["denied"]);
+          assert.match(resultsOf(done)[0]?.output ?? "", /denied/);
+          assert.deepEqual(await routinesOf(first, chat.botId), []);
+        });
+      }
+
+      const invalidChat = await tracked(first, "invalid");
+      const invalidText = `schedule invalid ${nonce}`;
+      fake.script(invalidText, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall("too often", { kind: "everyHours", hours: 0 })) : text("understood")));
+      const invalidDone = await invalidChat.settled(await invalidChat.send(invalidText));
+      await check("a proposal with a schedule outside the rules is an invalid call, with no card", async () => {
+        assert.deepEqual(resultsOf(invalidDone).map((result) => result.outcome), ["invalid"]);
+        assert.deepEqual(await first.query(api.approvals.pendingForThread, { threadId: invalidChat.threadId }), []);
+        assert.deepEqual(await routinesOf(first, invalidChat.botId), []);
+      });
+
+      const creating = await tracked(first, "create");
+      const createInstruction = `Read the release notes ${nonce} and report what changed.`;
+      const beforeCreate = Date.now();
+      const created = await proposeAndApprove(creating, createInstruction, WEEKLY);
+      const [createdRoutine] = await routinesOf(first, creating.botId);
+      await check("approving at the level Nothing creates one routine, with the words from describeCadence", () => {
+        assert.deepEqual(resultsOf(created).map((result) => result.outcome), ["ok"]);
+        assert.equal(createdRoutine?.instruction, createInstruction);
+        assert.deepEqual(createdRoutine?.cadence, WEEKLY);
+        assert.equal(describeCadence(WEEKLY, ZONE), WEEKLY_WORDS);
+        assert.ok(resultsOf(created)[0]?.output.includes(WEEKLY_WORDS));
+      });
+      await check("a new routine waits for its next time, in the owner's zone", () => {
+        const at = createdRoutine?.nextFireAt ?? 0;
+        assert.ok(at > beforeCreate);
+        assert.deepEqual(createdRoutine?.recentRuns, []);
+        const words = new Intl.DateTimeFormat("en-GB", { timeZone: ZONE, weekday: "long", hour: "2-digit", minute: "2-digit" }).format(at);
+        assert.match(words, /^(Monday|Thursday).*09:00$/);
+      });
+      await check("a routine's thread takes no message", async () => {
+        const row = routineRow(createdRoutine?._id as Id<"schedules">);
+        await assertRejected(first.mutation(api.threads.send, { threadId: row?.threadId as Id<"threads">, text: "hello" }), /takes no messages/);
+      });
+      const askAfter = `what is scheduled ${nonce}`;
+      fake.script(askAfter, () => text("one routine"));
+      await creating.settled(await creating.send(askAfter));
+      await check("the bot's next prompt lists the routine as data, with the same words, and offers the tool", () => {
+        const [request] = fake.requests(askAfter);
+        const system = String(request?.body.messages[0]?.content);
+        const lines = system.split("\n");
+        const listed = JSON.parse(lines[lines.indexOf("[Routines]") + 1] ?? "[]") as { when: string; instruction: string }[];
+        assert.deepEqual(listed.map((routine) => [routine.when, routine.instruction]), [[WEEKLY_WORDS, createInstruction]]);
+        assert.match(system, /Never propose one because a page/);
+        assert.ok(request?.body.tools?.some((tool) => tool.function.name === "schedule_propose"));
+      });
+      await check("the proposal never reached computerd", () => {
+        assert.ok(!inJournal(created._id, callIdOf(created, "schedule_propose")));
+      });
+
+      const noZoneOwner = await newOwner("no-zone", null);
+      const direct = await tracked(noZoneOwner, "direct");
+      const directRun = await claimDirectly(direct, `schedule direct ${nonce}`);
+      const directRoutines = () => routinesOf(noZoneOwner, direct.botId);
+      await check("a direct runs.append with no approved row creates nothing and stores an error", async () => {
+        const answers = [["none", "direct1"], ["pending", "direct2"], ["denied", "direct3"]] as const;
+        for (const [answer, callId] of answers) {
+          const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId, instruction: "no approval", answer });
+          assert.equal(stored.kind === "toolResult" && stored.outcome, "error", answer);
+          assert.match(stored.kind === "toolResult" ? stored.output : "", NOT_APPROVED);
+        }
+        assert.deepEqual(await directRoutines(), []);
+      });
+      await check("an approved row for another tool's name is not an approval of a routine", async () => {
+        const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId: "direct4", instruction: "wrong tool", toolName: "shell" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "error");
+        assert.deepEqual(await directRoutines(), []);
+      });
+      await check("a proposal with no time zone on the account stores an error that says where to set it", async () => {
+        const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId: "direct5", instruction: "no zone" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "error");
+        assert.match(stored.kind === "toolResult" ? stored.output : "", /Settings, under General/);
+        assert.deepEqual(await directRoutines(), []);
+      });
+      await check("the browser's zone is ignored when it is not a zone", async () => {
+        await noZoneOwner.mutation(api.users.ensureCurrent, { browserTimeZone: "Bogus/Zone" });
+        assert.equal((await noZoneOwner.query(api.users.current, {}))?.timeZone, undefined);
+      });
+      await check("the browser's zone fills an account with none, and it replaces no zone that is set", async () => {
+        await noZoneOwner.mutation(api.users.ensureCurrent, { browserTimeZone: ZONE });
+        assert.equal((await noZoneOwner.query(api.users.current, {}))?.timeZone, ZONE);
+        await noZoneOwner.mutation(api.users.ensureCurrent, { browserTimeZone: OTHER_ZONE });
+        assert.equal((await noZoneOwner.query(api.users.current, {}))?.timeZone, ZONE);
+      });
+      await check("a refused rule stores an error: a secret, a long text, a bad character, and a schedule too close together", async () => {
+        const refused: [string, string, Cadence, RegExp][] = [
+          ["rule1", "use password=hunter2 to log in", HOURLY, /looks like a password/],
+          ["rule2", "z ".repeat(1001), HOURLY, /2,000 characters/],
+          ["rule3", "read a‮b", HOURLY, /control characters/],
+          ["rule4", "   ", HOURLY, /needs an instruction/],
+          ["rule5", "half an hour", { kind: "everyHours", hours: 0.5 }, /not one a routine can have/],
+        ];
+        for (const [callId, instruction, cadence, expected] of refused) {
+          const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId, instruction, cadence });
+          assert.equal(stored.kind === "toolResult" && stored.outcome, "error", callId);
+          assert.match(stored.kind === "toolResult" ? stored.output : "", expected);
+        }
+        assert.deepEqual(await directRoutines(), []);
+      });
+      await check("a stale lease or a stale sequence number creates nothing", async () => {
+        const body = { kind: "scheduleCreate" as const, toolCallId: "stale", instruction: "stale", cadence: HOURLY };
+        await assertRejected(service.mutation(api.runs.append, { runId: directRun.runId, leaseToken: "stale", expectedSeq: directRun.seq, body }), /Lease lost/);
+        await assertRejected(service.mutation(api.runs.append, { runId: directRun.runId, leaseToken: directRun.leaseToken, expectedSeq: directRun.seq - 1, body }), /Expected seq/);
+        assert.deepEqual(await directRoutines(), []);
+      });
+      await check("only the service token can append a routine", async () => {
+        const body = { kind: "scheduleCreate" as const, toolCallId: "owner", instruction: "owner", cadence: HOURLY };
+        await assertRejected(noZoneOwner.mutation(api.runs.append, { runId: directRun.runId, leaseToken: directRun.leaseToken, expectedSeq: directRun.seq, body }), /Not authorized/);
+      });
+      await check("approved, it creates a routine and a result in one mutation", async () => {
+        const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId: "direct6", instruction: "approved" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "ok");
+        assert.equal((await directRoutines()).length, 1);
+      });
+      await check("a routine past the limit of 10 for a bot stores an error", async () => {
+        for (let index = 2; index <= 10; index += 1) {
+          await proposeDirectly({ run: directRun, client: noZoneOwner, callId: `bot${index}`, instruction: `routine ${index}` });
+        }
+        assert.equal((await directRoutines()).length, 10);
+        const stored = await proposeDirectly({ run: directRun, client: noZoneOwner, callId: "bot11", instruction: "one too many" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "error");
+        assert.match(stored.kind === "toolResult" ? stored.output : "", /10 routines/);
+        assert.equal((await directRoutines()).length, 10);
+      });
+      const directTwo = await tracked(noZoneOwner, "direct-two");
+      const directTwoRun = await claimDirectly(directTwo, `schedule direct two ${nonce}`);
+      await check("a routine past the limit of 20 for an owner stores an error", async () => {
+        for (let index = 11; index <= 20; index += 1) {
+          await proposeDirectly({ run: directTwoRun, client: noZoneOwner, callId: `owner${index}`, instruction: `routine ${index}` });
+        }
+        assert.equal((await routinesOf(noZoneOwner, directTwo.botId)).length, 10);
+        const stored = await proposeDirectly({ run: directTwoRun, client: noZoneOwner, callId: "owner21", instruction: "one too many" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "error");
+        assert.match(stored.kind === "toolResult" ? stored.output : "", /20 routines/);
+      });
+      await check("a stop that the runner has not heard of yet stores cancelled and creates nothing", async () => {
+        await noZoneOwner.mutation(api.runs.requestCancel, { runId: directTwoRun.runId });
+        const stored = await proposeDirectly({ run: directTwoRun, client: noZoneOwner, callId: "stopped", instruction: "stopped" });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "cancelled");
+        assert.equal((await routinesOf(noZoneOwner, directTwo.botId)).length, 10);
+      });
+      await service.mutation(api.runs.finish, { runId: directRun.runId, leaseToken: directRun.leaseToken, state: { kind: "done" } });
+      await service.mutation(api.runs.finish, { runId: directTwoRun.runId, leaseToken: directTwoRun.leaseToken, state: { kind: "cancelled" } });
+
+      const readOnlyOwner = await newOwner("read-only");
+      const readOnlyChat = await tracked(readOnlyOwner, "direct-read-only");
+      const readOnlyRoutine = newRoutine(readOnlyChat.botId, `direct read-only ${nonce}`);
+      const readOnlyRunId = adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: readOnlyRoutine.scheduleId });
+      const readOnlyClaim = await service.mutation(api.runs.claim, { runId: readOnlyRunId });
+      assert.ok(readOnlyClaim.kind === "claimed", "the claim was refused");
+      await check("a scheduleCreate sent straight to runs.append from a read-only run stores rejected and creates nothing", async () => {
+        const stored = await service.mutation(api.runs.append, {
+          runId: readOnlyRunId,
+          leaseToken: readOnlyClaim.leaseToken,
+          expectedSeq: readOnlyClaim.nextSeq,
+          body: { kind: "scheduleCreate", toolCallId: "ro", instruction: "from a page", cadence: HOURLY },
+        });
+        assert.equal(stored.kind === "toolResult" && stored.outcome, "rejected");
+        assert.equal((await routinesOf(readOnlyOwner, readOnlyChat.botId)).length, 1);
+      });
+      await service.mutation(api.runs.finish, { runId: readOnlyRunId, leaseToken: readOnlyClaim.leaseToken, state: { kind: "cancelled" } });
+
+      const killedCard = await tracked(first, "kill-card");
+      const killedCardInstruction = `kill at the card ${nonce}`;
+      const killedCardText = `please schedule ${killedCardInstruction}`;
+      fake.script(killedCardText, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall(killedCardInstruction, HOURLY)) : text("created")));
+      const killedCardRun = await killedCard.send(killedCardText);
+      const killedCardRow = await waitForCard(killedCard);
+      await killOrchestrator();
+      await first.mutation(api.approvals.decide, { approvalId: killedCardRow._id, decision: "approved" });
+      await check("an answer given while the orchestrator is down creates nothing yet", async () => {
+        assert.deepEqual(await routinesOf(first, killedCard.botId), []);
+      });
+      await startOrchestrator();
+      const killedCardDone = await killedCard.settled(killedCardRun, 120_000);
+      await check("a kill between the card's approval and the append creates exactly one routine and one result", async () => {
+        assert.equal((await routinesOf(first, killedCard.botId)).length, 1);
+        assert.deepEqual(resultsOf(killedCardDone).map((result) => result.outcome), ["ok"]);
+      });
+
+      const killedReply = await tracked(first, "kill-reply");
+      const killedReplyInstruction = `kill after the commit ${nonce}`;
+      const killedReplyText = `please schedule ${killedReplyInstruction}`;
+      fake.script(killedReplyText, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall(killedReplyInstruction, HOURLY)) : text("created")));
+      const replyProxy = await spawnOrchestratorKilledBetweenCommitAndReply('"scheduleCreate"');
+      const killedReplyRun = await killedReply.send(killedReplyText);
+      const killedReplyCard = await waitForCard(killedReply);
+      await first.mutation(api.approvals.decide, { approvalId: killedReplyCard._id, decision: "approved" });
+      const replyAppend = await replyProxy.committed;
+      replyProxy.close();
+      await check("a SIGKILL after the commit and before its reply leaves the routine and the result together", async () => {
+        const run = await killedReply.run(killedReplyRun);
+        assert.equal(orchestrator, null);
+        assert.equal((await routinesOf(first, killedReply.botId)).length, 1);
+        assert.equal(run === undefined ? 0 : resultsOf(run).length, 1);
+      });
+      await check("the same call sent again is refused and creates nothing", async () => {
+        await assertRejected(service.mutation(api.runs.append, replyAppend), /Expected seq/);
+        assert.equal((await routinesOf(first, killedReply.botId)).length, 1);
+      });
+      await startOrchestrator();
+      const killedReplyDone = await killedReply.settled(killedReplyRun, 180_000);
+      await check("the next runner does not repeat a routine it never heard the answer to", async () => {
+        assert.equal((await routinesOf(first, killedReply.botId)).length, 1);
+        assert.deepEqual(resultsOf(killedReplyDone).map((result) => result.outcome), ["ok"]);
+      });
+
+      const firing = await tracked(first, "fire", "everything");
+      const keptNote = `note to keep ${nonce}`;
+      const keptNoteId = await first.mutation(api.memories.write, { botId: firing.botId, text: keptNote });
+      const fireInstruction = `schedule fire ${nonce}`;
+      const fireReport = `fire report ${nonce}`;
+      asAgent(`mkdir -p /workspace/${firing.botId} && cd /workspace/${firing.botId} && mkfifo hold.fifo`);
+      fake.script(`please schedule ${fireInstruction}`, ({ toolResults }) => (toolResults.length === 0 ? tools(proposeCall(fireInstruction, HOURLY)) : text("created")));
+      const fireChatRun = await firing.send(`please schedule ${fireInstruction}`);
+      await first.mutation(api.approvals.decide, { approvalId: (await waitForCard(firing))._id, decision: "approved" });
+      await firing.settled(fireChatRun);
+      const [fireRoutine] = await routinesOf(first, firing.botId);
+      assert.ok(fireRoutine !== undefined, "the routine was not created");
+      const fireRow = routineRow(fireRoutine._id);
+      assert.ok(fireRow !== null, "no routine row");
+      fake.script(fireInstruction, ({ toolResults }) =>
+        toolResults.length === 0
+          ? tools(
+              shellCall("echo ran >> shell-ran.txt"),
+              call("read_file", { path: "hold.fifo" }),
+              call("write_file", { path: "file-ran.txt", content: "ran" }),
+              call("browser_click", { ref: 1 }),
+              call("browser_type", { ref: 1, text: "ran" }),
+              call("browser_press", { key: "Enter" }),
+              call("memory_save", { text: `planted ${nonce}` }),
+              call("memory_forget", { id: keptNoteId }),
+              proposeCall(`planted routine ${nonce}`, HOURLY),
+            )
+          : text(fireReport),
+      );
+      const notesBefore = (await first.query(api.memories.list, { botId: firing.botId }))?.notes;
+      move(fireRoutine._id, justPast());
+      console.log("info  waiting for the real cron, which ticks once a minute and waits out the 2 minutes after the chat run");
+      const waitedFrom = Date.now();
+      const firedRun = await waitFor({
+        description: "the real cron to fire the routine",
+        timeoutMs: 240_000,
+        intervalMs: 500,
+        probe: async () => (await routinesOf(first, firing.botId))[0]?.recentRuns[0],
+      });
+      console.log(`info  the real cron fired after ${Math.round((Date.now() - waitedFrom) / 1000)} s`);
+      const held = await waitFor({
+        description: "the turn to be stored, with its read held open",
+        timeoutMs: 60_000,
+        probe: async () => {
+          const run = await runIn(first, fireRow.threadId, firedRun._id);
+          return run !== undefined && resultsOf(run).length === 1 && inJournal(firedRun._id, callIdOf(run, "read_file")) ? run : null;
+        },
+      });
+      await check("the fire advanced the routine past now", () => {
+        assert.ok((routineRow(fireRoutine._id)?.nextFireAt ?? 0) > Date.now() + 50 * MINUTE);
+      });
+      await check("the composer can see the routine's run, which the chat's timeline does not hold", async () => {
+        const active = await first.query(api.threads.activeRun, { botId: firing.botId });
+        assert.deepEqual(active, { _id: firedRun._id, routine: true, cancelRequested: false });
+        assert.equal((await first.query(api.threads.timeline, { threadId: firing.threadId })).runs.some((run) => run._id === firedRun._id), false);
+      });
+      await check("a message during a routine is refused", async () => {
+        await assertRejected(firing.send("hello"), /already has an active run/);
+      });
+      await killOrchestrator();
+      await check("a SIGKILL lands between the turn and the rest of its results", () => {
+        assert.equal(turnsOf(held).length, 1);
+        assert.deepEqual(resultsOf(held).map((result) => [result.name, result.outcome]), [["shell", "rejected"]]);
+      });
+      asAgent(`echo released > /workspace/${firing.botId}/hold.fifo`);
+      await startOrchestrator();
+      const fired = await endedIn(first, fireRow.threadId, firedRun._id, 120_000);
+      const firedRejected = resultsOf(fired).filter((result) => result.name !== "read_file");
+      await check("all 8 forbidden tools in one turn each store rejected, also after the resume, at the level that asks about everything", () => {
+        assert.deepEqual(firedRejected.map((result) => result.name).toSorted(), FORBIDDEN);
+        assert.deepEqual([...new Set(firedRejected.map((result) => result.outcome))], ["rejected"]);
+      });
+      await check("computerd's journal has the read and no entry for any forbidden tool", () => {
+        assert.ok(inJournal(firedRun._id, callIdOf(fired, "read_file")));
+        for (const name of FORBIDDEN) {
+          assert.ok(!inJournal(firedRun._id, callIdOf(fired, name)), `${name} reached the journal`);
+        }
+        assert.deepEqual(linesOf({ container: mainContainer.id, path: workspaceFile(firing, "shell-ran.txt") }), []);
+        assert.deepEqual(linesOf({ container: mainContainer.id, path: workspaceFile(firing, "file-ran.txt") }), []);
+      });
+      await check("no note and no routine changed, and no card exists", async () => {
+        assert.deepEqual((await first.query(api.memories.list, { botId: firing.botId }))?.notes, notesBefore);
+        assert.equal((await routinesOf(first, firing.botId)).length, 1);
+        assert.deepEqual(await first.query(api.approvals.pendingForThread, { threadId: fireRow.threadId }), []);
+      });
+      await check("the run ended done, and its report is in the bot's chat", async () => {
+        assert.equal(fired.state.kind, "done");
+        assert.deepEqual((await reportsIn(first, firing.threadId)).map((report) => report.text), [fireReport]);
+        assert.equal((await routinesOf(first, firing.botId))[0]?.recentRuns[0]?.state.kind, "done");
+      });
+
+      const twice = await tracked(first, "twice");
+      const twiceInstruction = `schedule twice ${nonce}`;
+      fake.script(twiceInstruction, () => text(`twice report ${nonce}`));
+      const twiceRoutine = newRoutine(twice.botId, twiceInstruction);
+      move(twiceRoutine.scheduleId, justPast());
+      const firedOnce = fireDue();
+      const firedTwice = fireDue();
+      await check("calling fireDue twice makes one run", async () => {
+        assert.equal(firedOnce.kind, "ok");
+        assert.equal(firedTwice.kind, "ok");
+        assert.equal((await routinesOf(first, twice.botId))[0]?.recentRuns.length, 1);
+      });
+
+      const three = await tracked(first, "three");
+      const threeInstruction = `schedule three rejected ${nonce}`;
+      fake.script(threeInstruction, ({ toolResults }) => {
+        switch (toolResults.length) {
+          case 0:
+            return tools(shellCall("echo ran"));
+          case 1:
+            return tools(call("write_file", { path: "x", content: "x" }));
+          case 2:
+            return tools(call("memory_save", { text: "planted" }));
+          default:
+            return text(`three report ${nonce}`);
+        }
+      });
+      const threeRoutine = newRoutine(three.botId, threeInstruction);
+      const threeRun = adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: threeRoutine.scheduleId });
+      const threeDone = await endedIn(first, threeRoutine.threadId, threeRun);
+      await check("3 rejected calls in a row get a final call with no tools, and the run ends with its report", () => {
+        const requests = fake.requests(threeInstruction);
+        assert.equal(requests.length, 4);
+        assert.ok((requests[2]?.body.tools?.length ?? 0) > 0);
+        assert.equal(requests[3]?.body.tools, undefined);
+        assert.match(String(requests[3]?.body.messages[0]?.content), /write your report now/i);
+        assert.equal(threeDone.state.kind, "done");
+        assert.deepEqual(resultsOf(threeDone).map((result) => result.outcome), ["rejected", "rejected", "rejected"]);
+      });
+
+      const testing = await tracked(first, "test-now");
+      const testInstruction = `schedule test now ${nonce}`;
+      const testReport = `test report ${nonce}`;
+      asAgent(`mkdir -p /workspace/${testing.botId} && cd /workspace/${testing.botId} && mkfifo test.fifo`);
+      fake.script(testInstruction, ({ toolResults }) => (toolResults.length === 0 ? tools(call("read_file", { path: "test.fifo" })) : text(testReport)));
+      const testRoutine = newRoutine(testing.botId, testInstruction);
+      const testWhen = Date.now() + 5 * HOUR;
+      move(testRoutine.scheduleId, testWhen);
+      await check("a routine with no run yet has an empty history", async () => {
+        assert.deepEqual((await routinesOf(first, testing.botId))[0]?.recentRuns, []);
+      });
+      const testRun = await first.mutation(api.schedules.runNow, { scheduleId: testRoutine.scheduleId });
+      await check("Test now starts a run, and it does not move the next time", () => {
+        assert.equal(routineRow(testRoutine.scheduleId)?.nextFireAt, testWhen);
+      });
+      await check("Test now and deleting the routine are refused while it runs", async () => {
+        await assertRejected(first.mutation(api.schedules.runNow, { scheduleId: testRoutine.scheduleId }), /already has an active run/);
+        await assertRejected(first.mutation(api.schedules.remove, { scheduleId: testRoutine.scheduleId }), /Stop it before you delete it/);
+      });
+      await waitFor({
+        description: "the Test now run to read its file",
+        probe: async () => {
+          const run = await runIn(first, testRoutine.threadId, testRun);
+          return run !== undefined && inJournal(testRun, callIdOf(run, "read_file")) ? true : null;
+        },
+      });
+      asAgent(`echo released > /workspace/${testing.botId}/test.fifo`);
+      await endedIn(first, testRoutine.threadId, testRun);
+      await check("Test now reports in the chat, and shows in the routine's history", async () => {
+        assert.deepEqual((await reportsIn(first, testing.threadId)).map((report) => report.text), [testReport]);
+        assert.equal((await routinesOf(first, testing.botId))[0]?.recentRuns[0]?._id, testRun);
+      });
+      await check("deleting a routine purges its thread, and a report already in the chat stays", async () => {
+        await first.mutation(api.schedules.remove, { scheduleId: testRoutine.scheduleId });
+        assert.deepEqual(await routinesOf(first, testing.botId), []);
+        const rows = await waitFor({
+          description: "the routine's thread to be purged",
+          timeoutMs: 30_000,
+          probe: () => {
+            const counted = threadRows(testRoutine.threadId);
+            return counted.thread ? null : counted;
+          },
+        });
+        assert.deepEqual(rows, { thread: false, runs: 0, events: 0 });
+        assert.deepEqual((await reportsIn(first, testing.threadId)).map((report) => report.text), [testReport]);
+      });
+
+      const pauses = await newOwner("pause");
+      const pausing = await tracked(pauses, "pause");
+      const pausedRoutine = newRoutine(pausing.botId, `schedule pause ${nonce}`);
+      await seedRuns(pausedRoutine.scheduleId, 3, { kind: "failed", reason: "No Mistral API key is set." }, { endedAt: Date.now() - 10 * MINUTE });
+      move(pausedRoutine.scheduleId, justPast());
+      fireDue();
+      await check("a routine whose last 3 runs failed pauses itself and says why", () => {
+        const row = routineRow(pausedRoutine.scheduleId);
+        assert.equal(row?.nextFireAt, undefined);
+        assert.match(row?.pausedBecause ?? "", /3 failed runs in a row.*No Mistral API key/);
+      });
+      await check("Pause and Resume work for the owner, and Resume sets resumedAt and clears the reason", async () => {
+        const before = Date.now();
+        await pauses.mutation(api.schedules.resume, { scheduleId: pausedRoutine.scheduleId });
+        const row = routineRow(pausedRoutine.scheduleId);
+        assert.ok((row?.nextFireAt ?? 0) > before);
+        assert.ok((row?.resumedAt ?? 0) >= before - 5000);
+        assert.equal(row?.pausedBecause, undefined);
+      });
+      await check("Resume works after an auto-pause: the next due time starts a run, and does not pause again", async () => {
+        move(pausedRoutine.scheduleId, justPast());
+        fireDue();
+        const row = routineRow(pausedRoutine.scheduleId);
+        assert.ok((row?.nextFireAt ?? 0) > Date.now());
+        assert.equal(row?.pausedBecause, undefined);
+        assert.equal((await routinesOf(pauses, pausing.botId))[0]?.recentRuns[0]?.state.kind, "queued");
+        assert.equal((await pauses.query(api.threads.activeRun, { botId: pausing.botId }))?.routine, true);
+      });
+      await check("Stop ends a routine's queued run at once, and then Pause clears the next time", async () => {
+        await cancelActive(pauses, pausing.botId);
+        await idle(pauses, pausing.botId);
+        await pauses.mutation(api.schedules.pause, { scheduleId: pausedRoutine.scheduleId });
+        const row = routineRow(pausedRoutine.scheduleId);
+        assert.equal(row?.nextFireAt, undefined);
+        assert.equal(row?.pausedBecause, undefined);
+      });
+
+      const lates = await newOwner("late");
+      const lateChat = await tracked(lates, "late");
+      const lateRoutine = newRoutine(lateChat.botId, `schedule late ${nonce}`);
+      const scheduledFor = Date.now() - 2 * HOUR;
+      move(lateRoutine.scheduleId, scheduledFor);
+      fireDue();
+      await check("a fire 2 hours late sets lastMissed, advances, and starts no run, with an idle bot", async () => {
+        const row = routineRow(lateRoutine.scheduleId);
+        assert.equal(row?.lastMissed?.at, scheduledFor);
+        assert.match(row?.lastMissed?.reason ?? "", /could not run/);
+        assert.ok((row?.nextFireAt ?? 0) > Date.now());
+        assert.deepEqual((await routinesOf(lates, lateChat.botId))[0]?.recentRuns, []);
+      });
+      const busyRoutine = newRoutine(lateChat.botId, `schedule late busy ${nonce}`);
+      await seedRuns(busyRoutine.scheduleId, 1, { kind: "queued" }, { deadlineAt: Date.now() + 30 * MINUTE });
+      const busyFor = Date.now() - 2 * HOUR;
+      move(lateRoutine.scheduleId, busyFor);
+      fireDue();
+      await check("a fire 2 hours late also sets lastMissed with a busy bot, and says it was busy", async () => {
+        const row = routineRow(lateRoutine.scheduleId);
+        assert.equal(row?.lastMissed?.at, busyFor);
+        assert.match(row?.lastMissed?.reason ?? "", /busy/);
+        assert.deepEqual((await routinesOf(lates, lateChat.botId)).find((routine) => routine._id === lateRoutine.scheduleId)?.recentRuns, []);
+      });
+      const waitingFor = Date.now() - 5 * MINUTE;
+      move(lateRoutine.scheduleId, waitingFor);
+      fireDue();
+      await check("inside the 15 minutes, a busy bot makes a fire try again next tick and changes nothing", () => {
+        const row = routineRow(lateRoutine.scheduleId);
+        assert.equal(row?.nextFireAt, waitingFor);
+        assert.equal(row?.lastMissed?.at, busyFor);
+      });
+
+      const zones = await newOwner("zones");
+      const zoneChat = await tracked(zones, "zones");
+      const zoneRun = await claimDirectly(zoneChat, `schedule zones ${nonce}`);
+      await proposeDirectly({ run: zoneRun, client: zones, callId: "zoneweekly", instruction: "weekly in the future", cadence: WEEKLY });
+      await proposeDirectly({ run: zoneRun, client: zones, callId: "zonewaiting", instruction: "weekly past due", cadence: WEEKLY });
+      await proposeDirectly({ run: zoneRun, client: zones, callId: "zonehours", instruction: "every 24 hours", cadence: { kind: "everyHours", hours: 24 } });
+      await proposeDirectly({ run: zoneRun, client: zones, callId: "zonepaused", instruction: "weekly paused", cadence: WEEKLY });
+      const zoneRoutines = await routinesOf(zones, zoneChat.botId);
+      const zoneRoutine = (instruction: string) => {
+        const found = zoneRoutines.find((routine) => routine.instruction === instruction);
+        assert.ok(found !== undefined, instruction);
+        return found._id;
+      };
+      const weeklyFuture = zoneRoutine("weekly in the future");
+      const weeklyWaiting = zoneRoutine("weekly past due");
+      const everyDay = zoneRoutine("every 24 hours");
+      const weeklyPaused = zoneRoutine("weekly paused");
+      await zones.mutation(api.schedules.pause, { scheduleId: weeklyPaused });
+      const waitingAt = Date.now() - 5 * MINUTE;
+      const everyDayAt = Date.now() + 10 * MINUTE;
+      move(weeklyWaiting, waitingAt);
+      move(everyDay, everyDayAt);
+      const weeklyFutureBefore = routineRow(weeklyFuture)?.nextFireAt;
+      await zones.mutation(api.users.setTimeZone, { timeZone: ZONE });
+      await check("setTimeZone to the same zone moves nothing", () => {
+        assert.equal(routineRow(weeklyFuture)?.nextFireAt, weeklyFutureBefore);
+        assert.equal(routineRow(weeklyWaiting)?.nextFireAt, waitingAt);
+        assert.equal(routineRow(weeklyWaiting)?.lastMissed, undefined);
+        assert.equal(routineRow(everyDay)?.nextFireAt, everyDayAt);
+      });
+      await zones.mutation(api.users.setTimeZone, { timeZone: OTHER_ZONE });
+      await check("setTimeZone to another zone moves only a weekly routine still in the future", () => {
+        const moved = routineRow(weeklyFuture)?.nextFireAt ?? 0;
+        assert.notEqual(moved, weeklyFutureBefore);
+        const words = new Intl.DateTimeFormat("en-GB", { timeZone: OTHER_ZONE, weekday: "long", hour: "2-digit", minute: "2-digit" }).format(moved);
+        assert.match(words, /^(Monday|Thursday).*09:00$/);
+        assert.equal(routineRow(weeklyWaiting)?.nextFireAt, waitingAt);
+        assert.equal(routineRow(everyDay)?.nextFireAt, everyDayAt);
+        assert.equal(routineRow(weeklyPaused)?.nextFireAt, undefined);
+      });
+      await check("a name that is not a time zone is refused", async () => {
+        await assertRejected(zones.mutation(api.users.setTimeZone, { timeZone: "Bogus/Zone" }), /not a time zone/);
+        assert.equal((await zones.query(api.users.current, {}))?.timeZone, OTHER_ZONE);
+      });
+      await service.mutation(api.runs.finish, { runId: zoneRun.runId, leaseToken: zoneRun.leaseToken, state: { kind: "done" } });
+
+      const quiets = await newOwner("quiet");
+      const justEnded = await tracked(quiets, "just-ended");
+      const justEndedRoutine = newRoutine(justEnded.botId, `schedule just ended ${nonce}`);
+      await seedRuns(justEndedRoutine.scheduleId, 1, { kind: "cancelled" }, { endedAt: Date.now() });
+      const justEndedFor = justPast();
+      move(justEndedRoutine.scheduleId, justEndedFor);
+      fireDue();
+      await check("a run that just ended blocks a fire", async () => {
+        assert.equal(routineRow(justEndedRoutine.scheduleId)?.nextFireAt, justEndedFor);
+        assert.equal((await routinesOf(quiets, justEnded.botId))[0]?.recentRuns.length, 1);
+      });
+      await quiets.mutation(api.schedules.pause, { scheduleId: justEndedRoutine.scheduleId });
+      const longEnded = await tracked(quiets, "long-ended");
+      const longEndedRoutine = newRoutine(longEnded.botId, `schedule long ended ${nonce}`);
+      await seedRuns(longEndedRoutine.scheduleId, 1, { kind: "cancelled" }, { endedAt: Date.now() - QUIET_MS - CLOCK_MARGIN_MS });
+      move(longEndedRoutine.scheduleId, justPast());
+      fireDue();
+      await check("a run that ended 2 minutes ago does not", async () => {
+        assert.equal((await routinesOf(quiets, longEnded.botId))[0]?.recentRuns.length, 2);
+      });
+      await cancelActive(quiets, longEnded.botId);
+      const heldScreen = await tracked(quiets, "take-over");
+      const heldRoutine = newRoutine(heldScreen.botId, `schedule take-over ${nonce}`);
+      await quiets.mutation(api.bots.takeOver, { botId: heldScreen.botId });
+      const heldFor = justPast();
+      move(heldRoutine.scheduleId, heldFor);
+      fireDue();
+      await check("a take-over blocks a fire", async () => {
+        assert.equal(routineRow(heldRoutine.scheduleId)?.nextFireAt, heldFor);
+        assert.deepEqual((await routinesOf(quiets, heldScreen.botId))[0]?.recentRuns, []);
+        await assertRejected(quiets.mutation(api.schedules.runNow, { scheduleId: heldRoutine.scheduleId }), /Give back/);
+      });
+      await quiets.mutation(api.bots.releaseTakeover, { botId: heldScreen.botId });
+      await quiets.mutation(api.schedules.pause, { scheduleId: heldRoutine.scheduleId });
+
+      const keeps = await newOwner("keep-done");
+      const keepDone = await tracked(keeps, "keep-done");
+      const keepDoneRoutine = newRoutine(keepDone.botId, `schedule keep done ${nonce}`);
+      const keepOld = Date.now() - 2 * 24 * 60 * MINUTE;
+      await seedRuns(keepDoneRoutine.scheduleId, 3, { kind: "done" }, { endedAt: keepOld });
+      await seedRuns(keepDoneRoutine.scheduleId, 22, { kind: "cancelled" }, { endedAt: keepOld });
+      move(keepDoneRoutine.scheduleId, justPast());
+      fireDue();
+      await check("retention keeps the newest 20 raw runs and the 3 newest finished ones, and removes the events of the rest", async () => {
+        const rows = await waitFor({
+          description: "the old runs to be purged",
+          timeoutMs: 30_000,
+          probe: () => {
+            const counted = threadRows(keepDoneRoutine.threadId);
+            return counted.runs === 23 ? counted : null;
+          },
+        });
+        assert.deepEqual(rows, { thread: true, runs: 23, events: 45 });
+        const reports = await service.query(api.runs.earlierReports, { runId: (await routinesOf(keeps, keepDone.botId))[0]?.recentRuns[0]?._id as Id<"runs"> });
+        assert.equal(reports.length, 3);
+      });
+      await cancelActive(keeps, keepDone.botId);
+      const trims = await newOwner("keep-twenty");
+      const keepTwenty = await tracked(trims, "keep-twenty");
+      const keepTwentyRoutine = newRoutine(keepTwenty.botId, `schedule keep twenty ${nonce}`);
+      await seedRuns(keepTwentyRoutine.scheduleId, 25, { kind: "done" }, { endedAt: keepOld });
+      move(keepTwentyRoutine.scheduleId, justPast());
+      fireDue();
+      await check("retention keeps exactly 20 runs of a routine that keeps succeeding", async () => {
+        const rows = await waitFor({
+          description: "the old runs to be purged",
+          timeoutMs: 30_000,
+          probe: () => {
+            const counted = threadRows(keepTwentyRoutine.threadId);
+            return counted.runs === 20 ? counted : null;
+          },
+        });
+        assert.deepEqual(rows, { thread: true, runs: 20, events: 39 });
+      });
+      await cancelActive(trims, keepTwenty.botId);
+
+      const limits = await newOwner("limit");
+      const limitChat = await tracked(limits, "limit");
+      const limitRoutine = newRoutine(limitChat.botId, `schedule limit ${nonce}`);
+      await seedRuns(limitRoutine.scheduleId, 15, { kind: "done" }, { endedAt: keepOld });
+      await seedRuns(limitRoutine.scheduleId, 2, { kind: "done" }, { endedAt: keepOld, asReports: true });
+      for (const index of [1, 2]) {
+        await seedRuns(newRoutine(limitChat.botId, `schedule limit ${index} ${nonce}`).scheduleId, 16, { kind: "done" }, { endedAt: keepOld });
+      }
+      move(limitRoutine.scheduleId, justPast());
+      fireDue();
+      await check("47 runs and 2 reports in a day still fire, because a report does not count", async () => {
+        const fired = (await routinesOf(limits, limitChat.botId)).find((routine) => routine._id === limitRoutine.scheduleId);
+        assert.equal(fired?.recentRuns[0]?.state.kind, "queued");
+      });
+      const limitOther = await tracked(limits, "limit-other");
+      const limitOtherRoutine = newRoutine(limitOther.botId, `schedule limit other ${nonce}`);
+      const limitFor = justPast();
+      move(limitOtherRoutine.scheduleId, limitFor);
+      fireDue();
+      await check("the 49th run in a day is refused for the owner's other bot, as a missed run", async () => {
+        const row = routineRow(limitOtherRoutine.scheduleId);
+        assert.equal(row?.lastMissed?.at, limitFor);
+        assert.match(row?.lastMissed?.reason ?? "", /limit of 48/);
+        assert.deepEqual((await routinesOf(limits, limitOther.botId))[0]?.recentRuns, []);
+      });
+      await check("Test now is refused over that limit too", async () => {
+        await assertRejected(limits.mutation(api.schedules.runNow, { scheduleId: limitOtherRoutine.scheduleId }), /limit of 48/);
+      });
+      await cancelActive(limits, limitChat.botId);
+
+      const strands = await newOwner("stranded");
+      const stranded = await tracked(strands, "stranded");
+      const strandedRoutine = newRoutine(stranded.botId, `schedule stranded ${nonce}`);
+      const [queuedLate] = await seedRuns(strandedRoutine.scheduleId, 1, { kind: "queued" }, { deadlineAt: Date.now() - 1000 });
+      await check("a queued run past its deadline keeps the bot busy only until the next tick", async () => {
+        assert.notEqual(await strands.query(api.threads.activeRun, { botId: stranded.botId }), null);
+        fireDue();
+        assert.equal(await strands.query(api.threads.activeRun, { botId: stranded.botId }), null);
+        assert.equal((await runIn(strands, strandedRoutine.threadId, queuedLate as Id<"runs">))?.state.kind, "failed");
+      });
+      const lostRunner = await tracked(strands, "lost-runner");
+      const lostRunnerRoutine = newRoutine(lostRunner.botId, `schedule lost runner ${nonce}`);
+      const [expiredLease] = await seedRuns(lostRunnerRoutine.scheduleId, 1, { kind: "running", leaseToken: "gone", leaseUntil: Date.now() - 1000 }, { deadlineAt: Date.now() - 1000 });
+      const liveRunner = await tracked(strands, "live-runner");
+      const liveRunnerRoutine = newRoutine(liveRunner.botId, `schedule live runner ${nonce}`);
+      const [heldLease] = await seedRuns(liveRunnerRoutine.scheduleId, 1, { kind: "running", leaseToken: "live", leaseUntil: Date.now() + 60_000 }, { deadlineAt: Date.now() - 1000 });
+      fireDue();
+      await check("a running run past its deadline ends only if its lease expired, and a held lease hears of it from its heartbeat", async () => {
+        const lost = await runIn(strands, lostRunnerRoutine.threadId, expiredLease as Id<"runs">);
+        assert.deepEqual(lost?.state, { kind: "failed", reason: "The routine ran past its 30 minute limit" });
+        const beat = await service.mutation(api.runs.heartbeat, { runId: heldLease as Id<"runs">, leaseToken: "live" });
+        assert.deepEqual(beat, { kind: "renewed", cancelRequested: true });
+        await service.mutation(api.runs.finish, { runId: heldLease as Id<"runs">, leaseToken: "live", state: { kind: "cancelled" } });
+      });
+
+      const guarded = await tracked(first, "guarded");
+      const guardedRoutine = newRoutine(guarded.botId, `schedule guarded ${nonce}`);
+      move(guardedRoutine.scheduleId, Date.now() + 5 * HOUR);
+      await check("another user cannot read or change a routine", async () => {
+        assert.equal(await listOf(second, guarded.botId), null);
+        assert.equal(await second.query(api.threads.activeRun, { botId: guarded.botId }), null);
+        for (const mutation of [api.schedules.pause, api.schedules.resume, api.schedules.runNow, api.schedules.remove]) {
+          await assertRejected(second.mutation(mutation, { scheduleId: guardedRoutine.scheduleId }), /Routine not found/);
+        }
+      });
+      await check("the service token cannot use the owner's mutations", async () => {
+        assert.equal(await listOf(service, guarded.botId), null);
+        for (const mutation of [api.schedules.pause, api.schedules.resume, api.schedules.runNow, api.schedules.remove]) {
+          await assertRejected(service.mutation(mutation, { scheduleId: guardedRoutine.scheduleId }), /Routine not found/);
+        }
+        await assertRejected(service.mutation(api.users.setTimeZone, { timeZone: ZONE }), /User not found/);
+      });
+      await check("no token at all reaches a routine", async () => {
+        await assertRejected(anonymous.query(api.schedules.listForBot, { botId: guarded.botId }), /Not authenticated/);
+        await assertRejected(anonymous.mutation(api.schedules.pause, { scheduleId: guardedRoutine.scheduleId }), /Not authenticated/);
+        await assertRejected(anonymous.mutation(api.users.setTimeZone, { timeZone: ZONE }), /Not authenticated/);
+      });
+      await check("none of those attempts changed the routine", () => {
+        assert.ok((routineRow(guardedRoutine.scheduleId)?.nextFireAt ?? 0) > Date.now());
+      });
+
+      const removing = await chatFor(first, "remove-bot");
+      const removingInstruction = `schedule remove bot ${nonce}`;
+      fake.script(removingInstruction, () => text(`remove report ${nonce}`));
+      const removingRoutine = newRoutine(removing.botId, removingInstruction);
+      move(removingRoutine.scheduleId, Date.now() + 5 * HOUR);
+      const removingRun = await first.mutation(api.schedules.runNow, { scheduleId: removingRoutine.scheduleId });
+      await endedIn(first, removingRoutine.threadId, removingRun);
+      await check("deleting a bot deletes its routines and leaves no thread, run, or event behind", async () => {
+        await first.mutation(api.bots.remove, { botId: removing.botId });
+        assert.equal(routineRow(removingRoutine.scheduleId), null);
+        const rows = await waitFor({
+          description: "the bot's threads to be purged",
+          timeoutMs: 30_000,
+          probe: () => {
+            const routineThread = threadRows(removingRoutine.threadId);
+            const chatThread = threadRows(removing.threadId);
+            return routineThread.thread || chatThread.thread ? null : [routineThread, chatThread];
+          },
+        });
+        assert.deepEqual(rows, [{ thread: false, runs: 0, events: 0 }, { thread: false, runs: 0, events: 0 }]);
+      });
+    } finally {
+      for (const client of ownerClients) {
+        const bots = await client.query(api.bots.list, {}).catch(() => []);
+        for (const bot of bots) {
+          for (const routine of await routinesOf(client, bot._id).catch(() => [])) {
+            await client.mutation(api.schedules.pause, { scheduleId: routine._id }).catch(() => {});
+          }
+        }
+      }
+      for (const chat of chats) {
+        await cancelActive(chat.client, chat.botId).catch(() => {});
+      }
+      for (const chat of chats) {
+        await idle(chat.client, chat.botId).catch(() => {});
+        await chat.client.mutation(api.bots.remove, { botId: chat.botId }).catch((error: unknown) => console.log(`info  could not delete ${chat.botId}: ${String(error)}`));
+      }
+      await check("this scenario leaves no routine behind, so nothing keeps firing on a shared backend", async () => {
+        for (const client of ownerClients) {
+          const user = await client.query(api.users.current, {});
+          const left = user === null ? [] : adminRun<Routine[]>("scheduleChecks:routinesOfOwnerForCheck", { ownerId: user._id });
+          assert.deepEqual(left.filter((routine) => routine.nextFireAt !== undefined).map((routine) => routine._id), []);
+          assert.deepEqual(left.map((routine) => routine._id), []);
+        }
+      });
     }
   });
 
@@ -3682,7 +4565,7 @@ try {
       for (;;) {
         await sleep(LEASE_MS + 1000);
         const next = await service.mutation(api.runs.claim, { runId: pendingRunId });
-        if (next.kind === "unavailable") {
+        if (next.kind === "ended") {
           return;
         }
       }
@@ -3761,7 +4644,7 @@ try {
     });
     await check("a cancel holds through the failed attempts, and the limit ends that run as cancelled", async () => {
       assert.deepEqual(cancelled.flags, [false, true, true, true, true]);
-      assert.deepEqual(cancelled.last, { kind: "unavailable" });
+      assert.equal(cancelled.last.kind, "ended");
       assert.equal((await stuckThenCancelled.run(cancelledRunId))?.state.kind, "cancelled");
     });
 

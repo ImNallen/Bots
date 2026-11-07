@@ -7,10 +7,12 @@ import { FACE_STATES, useShownActivity } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
 import { ChatItem } from "./ChatItem.tsx";
 import { characterOf, tintOf, type Character } from "./character.ts";
-import { conversationItems, isActive, type Timeline } from "./conversation.ts";
+import { composerView, heldRunEnded, type HeldSend } from "./composerState.ts";
+import { conversationItems } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
+import { browserTimeZone } from "./routines.ts";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
@@ -25,14 +27,17 @@ function fitToContent(field: HTMLTextAreaElement | null) {
   }
 }
 
-function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][number] | undefined; botName: string }) {
-  const { threadId, activeRun, botName } = props;
+function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: string }) {
+  const { botId, threadId, botName } = props;
   const send = useMutation(api.threads.send);
   const requestCancel = useMutation(api.runs.requestCancel);
+  const activeRun = useQuery(api.threads.activeRun, { botId }) ?? null;
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [held, setHeld] = useState<HeldSend>(null);
   const [error, setError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const view = composerView({ activeRun, held, botName });
 
   useLayoutEffect(() => fitToContent(field.current), [text]);
   useEffect(() => {
@@ -41,10 +46,7 @@ function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][
     return () => window.removeEventListener("resize", refit);
   }, []);
 
-  async function submit() {
-    if (text.trim() === "" || sending || activeRun !== undefined) {
-      return;
-    }
+  async function deliver() {
     setSending(true);
     setError(null);
     try {
@@ -55,6 +57,32 @@ function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][
     } finally {
       setSending(false);
     }
+  }
+
+  const activeRunId = activeRun?._id ?? null;
+  useEffect(() => {
+    if (heldRunEnded(held, activeRunId)) {
+      setHeld(null);
+      void deliver();
+    }
+  }, [held, activeRunId]);
+
+  async function stopThenSend(runId: Id<"runs">) {
+    setError(null);
+    setHeld({ runId });
+    try {
+      await requestCancel({ runId });
+    } catch (failure) {
+      setHeld(null);
+      setError(errorMessage(failure));
+    }
+  }
+
+  async function submit() {
+    if (text.trim() === "" || sending || !view.sendOffered) {
+      return;
+    }
+    await (activeRun === null ? deliver() : stopThenSend(activeRun._id));
   }
 
   async function stop(runId: Id<"runs">) {
@@ -78,28 +106,6 @@ function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][
     }
   }
 
-  function action() {
-    if (activeRun === undefined) {
-      return (
-        <button type="submit" className="send" aria-label={sending ? "Sending" : "Send"} disabled={sending || text.trim() === ""}>
-          <Icon name="up" />
-        </button>
-      );
-    }
-    if (activeRun.cancelRequested) {
-      return (
-        <button type="button" className="send send-stopping" disabled>
-          Stopping
-        </button>
-      );
-    }
-    return (
-      <button type="button" className="send send-stop" aria-label="Stop" onClick={() => void stop(activeRun._id)}>
-        <Icon name="stop" />
-      </button>
-    );
-  }
-
   return (
     <form className="composer" onSubmit={handleSubmit}>
       <label htmlFor="message" className="visually-hidden">
@@ -111,13 +117,33 @@ function Composer(props: { threadId: Id<"threads">; activeRun: Timeline["runs"][
           ref={field}
           rows={1}
           value={text}
-          disabled={activeRun !== undefined}
-          placeholder={activeRun !== undefined ? `${botName} is working` : `Message ${botName}`}
+          disabled={view.fieldDisabled}
+          readOnly={sending || held !== null}
+          placeholder={view.placeholder}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={handleKeyDown}
         />
-        {action()}
+        {view.stop === "stopping" && (
+          <button type="button" className="send send-stopping" disabled>
+            Stopping
+          </button>
+        )}
+        {view.stop === "offered" && activeRun !== null && (
+          <button type="button" className="send send-stop" aria-label="Stop" onClick={() => void stop(activeRun._id)}>
+            <Icon name="stop" />
+          </button>
+        )}
+        {view.sendOffered && (
+          <button type="submit" className="send" aria-label={sending ? "Sending" : "Send"} disabled={sending || text.trim() === ""}>
+            <Icon name="up" />
+          </button>
+        )}
       </div>
+      {view.note !== null && (
+        <p className="composer-note" role="status">
+          {view.note}
+        </p>
+      )}
       {error !== null && (
         <p className="error" role="alert">
           {error}
@@ -162,10 +188,11 @@ function useStickToBottom(mounted: boolean) {
   return { scroller, onScroll };
 }
 
-function Conversation(props: { threadId: Id<"threads">; botName: string; character: Character }) {
-  const { threadId, botName, character } = props;
+function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: string; character: Character }) {
+  const { botId, threadId, botName, character } = props;
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
+  const user = useQuery(api.users.current);
   const { scroller, onScroll } = useStickToBottom(timeline !== undefined);
   if (timeline === undefined) {
     return (
@@ -174,7 +201,13 @@ function Conversation(props: { threadId: Id<"threads">; botName: string; charact
       </p>
     );
   }
-  const items = conversationItems({ timeline, pending: pending ?? [], now: Date.now(), locale: navigator.language });
+  const items = conversationItems({
+    timeline,
+    pending: pending ?? [],
+    now: Date.now(),
+    locale: navigator.language,
+    timeZone: user?.timeZone ?? browserTimeZone(),
+  });
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
@@ -193,7 +226,7 @@ function Conversation(props: { threadId: Id<"threads">; botName: string; charact
         </section>
       </div>
       <div className="dock">
-        <Composer threadId={threadId} activeRun={timeline.runs.find(isActive)} botName={botName} />
+        <Composer botId={botId} threadId={threadId} botName={botName} />
       </div>
     </>
   );
@@ -235,7 +268,7 @@ function BotThread(props: { botId: Id<"bots">; botName: string; character: Chara
     case "failed":
       return <ProblemNotice title="Could not open the conversation" message={thread.message} />;
     case "ready":
-      return <Conversation threadId={thread.threadId} botName={botName} character={character} />;
+      return <Conversation botId={botId} threadId={thread.threadId} botName={botName} character={character} />;
   }
 }
 

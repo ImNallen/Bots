@@ -14,6 +14,7 @@ const CLAIMED = { kind: "claimed", leaseToken: "t", threadId: "thread", botId: "
 
 function world() {
   const claims: string[] = [];
+  const browsingEnds: unknown[] = [];
   let answer: (runId: string) => Promise<unknown> = async () => UNAVAILABLE;
   let polled: string[] = [];
   let listUpdate: (ids: string[]) => void = () => {};
@@ -30,9 +31,11 @@ function world() {
       return () => {};
     },
   } as unknown as Service;
-  startRunner({ service, link: {} as Link, masterKey: Buffer.alloc(32), mistral: { baseUrl: "http://127.0.0.1:1", model: "m" }, ownerScope: "owner" as Id<"users">, log: () => {} });
+  const link = { sendBrowsingEnd: (args: unknown) => browsingEnds.push(args) } as unknown as Link;
+  startRunner({ service, link, masterKey: Buffer.alloc(32), mistral: { baseUrl: "http://127.0.0.1:1", model: "m" }, ownerScope: "owner" as Id<"users">, log: () => {} });
   return {
     claims,
+    browsingEnds,
     answerWith: (next: typeof answer) => {
       answer = next;
     },
@@ -107,6 +110,22 @@ describe("the runner's claims", () => {
     queue(ids);
     await vi.advanceTimersByTimeAsync(POLL_MS - 1);
     expect(claims).toEqual(ids);
+  });
+
+  it("ends the logged-out window of a read-only run that its claim ended, because no runner is left to do it", async () => {
+    const { queue, answerWith, browsingEnds } = world();
+    answerWith(async () => ({ kind: "ended", ownerId: "owner", botId: "bot", capability: "readOnly" }));
+    queue(["late"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(browsingEnds).toEqual([{ ownerId: "owner", botId: "bot", browsing: { kind: "loggedOut", key: "late" } }]);
+  });
+
+  it("sends nothing for a chat run that its claim ended", async () => {
+    const { queue, answerWith, browsingEnds } = world();
+    answerWith(async () => ({ kind: "ended", ownerId: "owner", botId: "bot", capability: "full" }));
+    queue(["stuck"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(browsingEnds).toEqual([]);
   });
 
   it("gives a freed slot to the next queued run when a claimed run ends", async () => {

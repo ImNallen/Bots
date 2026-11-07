@@ -10,6 +10,8 @@ const TIMELINE_USER_RUNS = 30;
 const TIMELINE_MAX_RUNS = 200;
 // A query may read 16 MiB. One event is at most 1 MiB, so stopping here cannot overshoot the limit.
 const TIMELINE_BYTES = 8 * 1024 * 1024;
+// One event is at most 1 MiB, so a batch stays well under what a mutation may read.
+const PURGE_BATCH = 8;
 const encoder = new TextEncoder();
 
 async function requireOwnedThread(ctx: QueryCtx, threadId: Id<"threads">): Promise<Doc<"threads">> {
@@ -47,6 +49,50 @@ export async function activeRunOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<
     }
   }
   return null;
+}
+
+export const activeRun = query({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    const { user } = await requireIdentity(ctx);
+    const bot = await ctx.db.get(botId);
+    if (user === null || bot === null || bot.ownerId !== user._id) {
+      return null;
+    }
+    const run = await activeRunOfBot(ctx, botId);
+    return run === null ? null : { _id: run._id, routine: run.scheduleId !== undefined, cancelRequested: run.cancelRequested };
+  },
+});
+
+export async function purgeRunBatch(ctx: MutationCtx, runId: Id<"runs">): Promise<void> {
+  const details = [
+    ...(await ctx.db
+      .query("runEvents")
+      .withIndex("by_run_seq", (q) => q.eq("runId", runId))
+      .take(PURGE_BATCH)),
+    ...(await ctx.db
+      .query("runStreams")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .take(PURGE_BATCH)),
+  ];
+  await Promise.all(details.length > 0 ? details.map((document) => ctx.db.delete(document._id)) : [ctx.db.delete(runId)]);
+}
+
+// A thread goes last, so a thread that is gone means its whole history is. Each call deletes one batch, and its caller schedules the next.
+export async function purgeThreadBatch(ctx: MutationCtx, threadId: Id<"threads">): Promise<void> {
+  const run = await ctx.db
+    .query("runs")
+    .withIndex("by_thread", (q) => q.eq("threadId", threadId))
+    .first();
+  if (run !== null) {
+    await purgeRunBatch(ctx, run._id);
+    return;
+  }
+  const approvals = await ctx.db
+    .query("approvals")
+    .withIndex("by_thread_state", (q) => q.eq("threadId", threadId))
+    .take(PURGE_BATCH);
+  await Promise.all(approvals.length > 0 ? approvals.map((approval) => ctx.db.delete(approval._id)) : [ctx.db.delete(threadId)]);
 }
 
 export const ensureForBot = mutation({
@@ -117,7 +163,7 @@ export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newest
   return shown;
 }
 
-function publicState(state: RunState) {
+export function publicState(state: RunState) {
   switch (state.kind) {
     case "running":
       return { kind: "running" as const };

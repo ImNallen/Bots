@@ -38,7 +38,7 @@ function result(toolCallId: string, outcome: Extract<Body, { kind: "toolResult" 
 const shell = (command: string, callId = "c1") => ({ id: callId, name: "shell", arguments: JSON.stringify({ command }) });
 
 function itemsOf(runs: Run[], pending: PendingApproval[] = [], omittedOlder = false): DisplayItem[] {
-  return conversationItems({ timeline: { runs, omittedOlder }, pending, now: NOW, locale: "en-US" });
+  return conversationItems({ timeline: { runs, omittedOlder }, pending, now: NOW, locale: "en-US", timeZone: "Europe/Stockholm" });
 }
 
 function only<K extends DisplayItem["kind"]>(items: DisplayItem[], kind: K): Extract<DisplayItem, { kind: K }> {
@@ -98,6 +98,34 @@ describe("conversationItems", () => {
   it("leaves out a turn with no words", () => {
     const items = itemsOf([run({ bodies: [turn("  \n", [shell("ls")]), result("c1", "ok")] })]);
     expect(kinds(items)).toEqual(["time", "tool"]);
+  });
+
+  describe("a routine's card", () => {
+    const propose = (args: unknown) => ({ id: "c1", name: "schedule_propose", arguments: JSON.stringify(args) });
+    const card = (args: unknown) => only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [propose(args)])] })], [approval()]), "approval");
+
+    it("takes its title from the schedule and the owner's zone, and shows the instruction in full", () => {
+      const instruction = `Read the news.\n${"And the weather. ".repeat(100)}`;
+      expect(card({ instruction, cadence: { kind: "weekly", weekdays: [1, 4], hour: 9, minute: 0 } })).toMatchObject({
+        title: "Create this routine? Every Monday and Thursday at 09:00, Europe/Stockholm time.",
+        arguments: [{ label: null, value: instruction }],
+      });
+    });
+
+    it("says how often for a routine with no wall time", () => {
+      expect(card({ instruction: "x", cadence: { kind: "everyHours", hours: 6 } }).title).toBe("Create this routine? Every 6 hours.");
+    });
+
+    it("shows what the call said if a card ever holds a schedule the rule refuses", () => {
+      const args = { instruction: "x", cadence: { kind: "everyHours", hours: 0 } };
+      expect(card(args)).toMatchObject({ title: "Create this routine?", arguments: [{ label: "instruction", value: "x" }, { label: "cadence" }] });
+    });
+
+    it("words its row once it is done", () => {
+      const body = result("c1", "ok", "Created routine r1.");
+      const row = only(itemsOf([run({ bodies: [turn("", [propose({ instruction: "Read the news.", cadence: { kind: "everyHours", hours: 6 } })]), body] })]), "tool");
+      expect(row).toMatchObject({ name: "Created a routine", summary: "Read the news.", status: "finished" });
+    });
   });
 
   describe("tool rows", () => {

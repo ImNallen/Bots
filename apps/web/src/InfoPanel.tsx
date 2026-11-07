@@ -8,6 +8,7 @@ import { characterOf, type Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Icon } from "./Icon.tsx";
 import { MemorySection } from "./MemorySection.tsx";
+import { RoutinesSection } from "./RoutinesSection.tsx";
 import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
@@ -192,7 +193,7 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
   }
   return (
     <div className="card confirm" ref={revealOnMount}>
-      <p>Delete {name}? Its conversation, memory, files, and browser profile go for good. Logins it passed to other bots stay with them.</p>
+      <p>Delete {name}? Its conversation, memory, routines, files, and browser profile go for good. Logins it passed to other bots stay with them.</p>
       {step.kind === "failed" && (
         <p className="error" role="alert">
           {step.message}
@@ -246,6 +247,7 @@ export function InfoPanel(props: {
       <h3 className="label">Profile</h3>
       <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
       <MemorySection botId={bot._id} botName={bot.name} />
+      <RoutinesSection botId={bot._id} botName={bot.name} />
       <h3 className="label">Approvals</h3>
       <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
       <h3 className="label">Character</h3>

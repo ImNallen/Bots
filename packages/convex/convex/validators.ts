@@ -70,6 +70,17 @@ export const memoryCall = v.union(
 
 export type MemoryCall = Infer<typeof memoryCall>;
 
+export const cadence = v.union(
+  v.object({ kind: v.literal("weekly"), weekdays: v.array(v.number()), hour: v.number(), minute: v.number() }),
+  v.object({ kind: v.literal("everyHours"), hours: v.number() }),
+);
+
+export type Cadence = Infer<typeof cadence>;
+
+export const scheduleCreate = v.object({ kind: v.literal("scheduleCreate"), toolCallId: v.string(), instruction: v.string(), cadence });
+
+export type ScheduleCreate = Infer<typeof scheduleCreate>;
+
 export const desiredVm = v.object({
   slot: v.number(),
   cores: v.number(),

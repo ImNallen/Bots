@@ -75,7 +75,7 @@ We can add Better Auth later without a large rewrite. Four rules keep that chang
 
 `AUTH_MODE=dev` returns a token for one fixed login without Tailscale. A dev-mode server would be an open door if it were ever exposed, because bots have a shell. The orchestrator rejects a dev-mode request if it has a forwarding header or a host name other than loopback. That check also covers a dev-mode server placed behind `tailscale serve` by mistake.
 
-A dev-mode orchestrator registers its own login's computer at startup, and it claims only that login's runs. Test orchestrators therefore share one Convex backend with a developer's own without touching each other's runs.
+A dev-mode orchestrator registers its own login's computer at startup, and it claims only that login's runs. Test orchestrators therefore share one Convex backend with a developer's own without touching each other's runs. [A bot with no runner](#a-bot-with-no-runner) says what that means for a routine.
 
 ## Why only the control VM joins the tailnet
 
@@ -236,8 +236,8 @@ The bot page deletes a bot, and it refuses during a run or a take-over, because 
 
 | Where | What goes | When |
 |---|---|---|
-| Convex | The bot's row, its notes, and its schedules | At once, in the mutation, so nothing new can start on it. Notes and schedules go here because few enough fit one mutation, and `purge` stops early for a bot with no thread |
-| Convex | Every thread of the bot, with its runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. Each thread goes last |
+| Convex | The bot's row, its notes, and its routines | At once, in the mutation, so nothing new can start on it. Notes and routines go here because few enough fit one mutation, and `purge` stops early for a bot with no thread |
+| Convex | Every thread of the bot, including each routine's, with its runs, events, streams, and approvals | In batches, because one thread can hold more than a mutation may read. Each thread goes last |
 | The VM | Its desktop, profile, workspace, and any take-over baseline | Within about 15 seconds, by the reconcile loop |
 | The VM | Its tool results in the `computerd` journal | At the journal's own limit of 7 days |
 
@@ -348,11 +348,11 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Level | What asks first |
 |---|---|
 | Everything | Every tool |
-| Outside, the default | Shell commands and browser actions that change something, and a memory tool once a computer tool has a result in this run |
-| Shell | Shell commands |
-| Nothing | No tool |
+| Outside, the default | Shell commands and browser actions that change something, a memory tool once a computer tool has a result in this run, and a routine's proposal |
+| Shell | Shell commands, and a routine's proposal |
+| Nothing | Only a routine's proposal |
 
-Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A new effect fails the typecheck until `needsApproval` gives its answer.
+Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A proposal asks at every level, as [How a routine fires](#how-a-routine-fires) explains. A new effect fails the typecheck until `needsApproval` gives its answer.
 
 A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
 
@@ -419,7 +419,7 @@ At the Shell and Nothing levels, no save shows a card. The owner chose those lev
 
 A routine runs with nobody watching, so nobody can answer a question card. A read-only run therefore has no approvals to rely on. It reads, and everything else is refused.
 
-Nothing starts a read-only run yet. Only `schedules:fireForCheck` makes one, which is an internal function that needs the admin key, and `scripts/verify-agent.ts` is its one caller. A later `fireDue` calls the same `startReadOnlyRun`. Neither a user's token nor the service token can reach it, and no mutation changes a run's capability.
+A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `fireDue`, which only Convex's cron and the admin key can reach, `runNow`, which is the owner's Test now on the owner's own routine, and `scheduleChecks:fireForCheck`, which needs the admin key and has `scripts/verify-agent.ts` as its one caller. The service token reaches none of them, and no mutation changes a run's capability.
 
 ### What decides a call
 
@@ -427,14 +427,14 @@ Nothing starts a read-only run yet. Only `schedules:fireForCheck` makes one, whi
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget` |
+| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget`, `schedule_propose` |
 
 A rejected call stores the outcome `rejected`. `denied` tells the model that a person refused, and no person was asked.
 
 The rule holds in three places, so a bug in one does not open it:
 
 - `runTool` decides before approvals, the take-over wait, and the link. A rejected call never reaches `computerd`, so its journal has no entry for it.
-- `applyMemoryCall` stores `rejected` unless the run is `full`, in the same mutation that would write the note.
+- `applyMemoryCall` and `applyScheduleCreate` store `rejected` unless the run is `full`, in the same mutation that would write the note or the routine.
 - `approvals.request` throws for a read-only run, so no card can exist.
 
 `computerd` is not one of these places, because a bot has root on its VM. Offering the model only the tools that read saves wasted turns, and it is not a boundary either. A model can still ask for a tool it was not offered.
@@ -462,7 +462,7 @@ Raw pages stay in that thread, so they cannot push the owner's messages off the 
 
 A report's row has trigger `schedule` and no `scheduleId`, so `runs.by_schedule` holds only a routine's own runs. `threads.timeline` counts only trigger `user` toward its 30 runs and reads at most 200 runs. So a chat with 40 reports keeps the owner's messages on the page, and only about 200 reports in a row push them off. The page then says that older messages are not shown.
 
-A bot has one browser, so it has one active run across all of its threads. `activeRunOfBot` is the one check, and `threads.send`, `startReadOnlyRun`, and `bots.remove` use it. `bots.overview` shows a routine's run as what the bot is doing, and its last message stays the chat's.
+A bot has one browser, so it has one active run across all of its threads. `activeRunOfBot` is the one check, and `threads.send`, `threads.activeRun`, `startReadOnlyRun`, `fireDue`, `schedules.remove`, and `bots.remove` use it. `bots.overview` shows a routine's run as what the bot is doing, and its last message stays the chat's.
 
 ### How a run ends
 
@@ -479,7 +479,9 @@ The token limit reads the newest prompt and not a sum, because each prompt repea
 
 A limit always gives the run a chance to report. The final call offers no tools, and its prompt says to write the report now. If that call still asks for a tool, the call is recorded as rejected, nothing runs, and the run finishes with the turn's text. No flag marks a final call. A turn is final if a limit already held before it, so a resumed run reaches the same answer from the same events.
 
-`heartbeat` answers `cancelRequested: true` past the deadline and does not store that, so `run.cancelRequested` still means that the owner pressed Stop. The runner then stops as it does for a Stop. `runs.finish` turns its `cancelled` into `failed` when the deadline has passed and the owner did not stop it, and `claim` fails a run that is already late. An owner's Stop stays `cancelled`. `endRun` is the one writer of a terminal state and of `endedAt`.
+`heartbeat` answers `cancelRequested: true` past the deadline and does not store that, so `run.cancelRequested` still means that the owner pressed Stop. The runner then stops as it does for a Stop. `runs.finish` turns its `cancelled` into `failed` when the deadline has passed and the owner did not stop it, and `claim` fails a run that is already late. `fireDue` does the same for a run that no runner holds, as [A bot with no runner](#a-bot-with-no-runner) explains. An owner's Stop stays `cancelled`. `endRun` in `runEnd.ts` is the one writer of a terminal state and of `endedAt`.
+
+A chat run's failure after 5 attempts with no progress says to send another message. A routine's says that it tries again at its next time, because a routine has no message to send.
 
 ### What read-only does not mean
 
@@ -501,10 +503,10 @@ In `computerd`, a `Connection` holds the bot's own `ContextPages` and at most on
 
 | What ends the window | Why it holds |
 |---|---|
-| `browsingEnd` from the runner | `finish` sends it before `runs.finish`, so a crash between the two sends it again from the resumed run. A run that never reached the browser sends nothing |
+| `browsingEnd` from the runner | `finish` sends it before `runs.finish`, so a crash between the two sends it again from the resumed run. A run that never reached the browser sends nothing. A `claim` that ends a run answers `ended`, and the runner sends it then, because no other runner is left to do so |
 | A browser call for another key, or a chat call | A bot has one active run, so such a call means that the window's run is over |
 | A page that freezes | The whole context ends, along with any frozen opener, and it opens no replacement. The next call of the run makes a new context with a blank page. If a person has the screen, the window stays, as a page of the bot's own does |
-| 10 minutes with no call | This covers a lost `browsingEnd`, as when `claim` fails a late run and no runner is left to send one. A live run gets here only if a model call or a take-over lasts that long, and its next call then gets a blank page |
+| 10 minutes with no call | This covers a lost `browsingEnd`, as when the link is down at the run's end, or when `fireDue` ends a late run. A live run gets here only if a model call or a take-over lasts that long, and its next call then gets a blank page |
 | `computerd` dies, or its socket closes | The context is made with `disposeOnDetach`, so Chromium ends it with the socket. So a restart leaves no window and has no old context to find. The resumed run's next call makes a new one with the same key |
 | The desktop stops | The browser and everything in it stop. Nothing about a window holds a desktop, so the idle stop runs as usual |
 
@@ -553,6 +555,16 @@ Addresses make a snapshot larger. On real pages, on 2026-11-07, with a snapshot'
 
 The Wikipedia page passed the cap in both cases, so the model reads the same 32 KiB of a page that is twice as long, and sees less of its text.
 
+Addresses cost more tokens per byte than prose does. We counted snapshot lines built from three real pages on 2026-11-07, with the v3 tekken tokenizer from Mistral's `mistral-common` package. Which tokenizer `mistral-large-4` uses is not something we checked.
+
+| Page | Bytes, up to the cap | Tokens | Bytes per token |
+|---|---|---|---|
+| Hacker News | 4,196 | 1,443 | 2.91 |
+| Lobsters | 20,494 | 8,207 | 2.50 |
+| Wikipedia, list of HTTP status codes | 32,768 | 12,663 | 2.59 |
+
+So one capped page is about 12,700 tokens. A read-only run has 11 turns of research, and each turn is one call when the model obeys `parallel_tool_calls: false`. If every turn returns a capped page, the prompt holds about 139,000 tokens of pages. The 150,000 limit then binds only near the last turn, and only when the assignment, `about`, the notes, and the earlier reports are near their own limits, which we estimate at about 14,000 tokens together. In most runs the turn limit ends research first. A model that asks for several pages in one turn reaches the token limit sooner.
+
 We tested these on Chromium 156 in a container, with its sandbox on, a visible Xvfb display, and Xfce's window manager. `scripts/verify-logged-out.ts` repeats the ones marked as such:
 
 | Test | Result |
@@ -566,6 +578,91 @@ We tested these on Chromium 156 in a container, with its sandbox on, a visible X
 | A context made with `disposeOnDetach: false` | It outlives the socket, which is why this one is not |
 | A dispose when the default context has no page, without the page that `computerd` now opens | The browser exited |
 | A page that burns a core | 0.96 of a core while its window is open, and 0.00 after `browsingEnd` |
+
+## How a routine fires
+
+A routine is a saved instruction and a schedule, owned by one bot. The owner asks the bot in plain words, the bot proposes it, and the owner approves a card. After that it runs with nobody watching, as a [read-only run](#how-a-read-only-run-works), and its report appears in the bot's chat. There is no edit. The owner asks for a new routine and deletes the old one.
+
+### One mutation creates a routine
+
+`schedule_propose` has the effect `changesSchedule`. A read-only run rejects it. A chat run asks at every approval level, including Nothing, because a routine outlives the run that made it and runs later with nobody watching.
+
+The tool has two arguments, the instruction and the cadence, and it refuses any other. So the model cannot attach a description of its own to the card. The card's title comes from `describeCadence` in `scheduleTime.ts` and the owner's time zone, and the card shows the whole instruction behind the lock that makes a person reach the end of a long command. The panel and the prompt read the same function, so what the owner approves and what the bot later says cannot differ.
+
+When the owner approves, the runner sends `runs.append` a `scheduleCreate` call. `applyScheduleCreate` makes these checks in that one mutation:
+
+| Check | If it fails |
+|---|---|
+| The lease and the sequence number | The mutation throws, and nothing is stored |
+| The run's capability is `full` | The result is `rejected` |
+| The owner has not pressed Stop | The result is `cancelled` |
+| The approval row for this run and call is `approved`, for this tool | The result is `error` |
+| The owner has a time zone | The result is `error`, and it says that Settings holds the zone |
+| The instruction is at most 2,000 characters and `textProblem` accepts it, which is the same character and secret rule as a note's | The result is `error` |
+| `parseCadence` accepts the schedule, which has at least 1 hour between runs | The result is `error` |
+| The bot has fewer than 10 routines and the owner fewer than 20 | The result is `error` |
+
+The approval comes from Convex and not from the runner, so a runner cannot create a routine that the owner did not approve. A card that the owner denied, or that expired, stores what any denied call stores.
+
+The routine, its thread, and the tool result commit together. A kill before the mutation repeats the call, which finds the same approval row. A kill after the commit finds the result, so nothing repeats, and a resend fails the sequence check. `verify:agent` runs both with a SIGKILL.
+
+A new routine waits for its next time. Test now runs it at once.
+
+### What a tick decides
+
+`crons.ts` runs `fireDue` once a minute. It takes up to 32 due rows from `by_next_fire`, and `decideFire`, which is pure, answers for each one. The first row of this table that holds decides.
+
+| Facts | Decision | What changes |
+|---|---|---|
+| More than 15 minutes late, with the bot busy or not | Miss | Sets `lastMissed`, advances `nextFireAt`, and starts no run |
+| The bot is busy | Wait | Nothing, so the next tick asks again |
+| The owner has 48 scheduled runs in the last 24 hours | Miss | Sets `lastMissed` and advances `nextFireAt` |
+| The newest 3 runs since `resumedAt` all failed | Pause | Clears `nextFireAt` and sets `pausedBecause` |
+| Anything else | Fire | Inserts a queued run and its `scheduleFired` event, and advances `nextFireAt` |
+
+A bot is busy if `activeRunOfBot` finds a run, if a take-over is on, or if a run ended less than 2 minutes ago, which `runs.by_bot_ended` answers. The 2 minutes give the owner time to reply to a run before a routine takes the bot.
+
+Advancing asks `nextFireAfter` for the next time after now, so fires that a downtime missed collapse into one `lastMissed`. A failed run is not retried, and the routine runs again at its next time.
+
+A report's row has trigger `schedule` and no `scheduleId`, so the limit of 48 filters on `scheduleId`, and a fire counts once. Test now counts toward the limit. It inserts the same run and leaves `nextFireAt` alone. It refuses during an active run, a take-over, or over the limit. It ignores the 2 minute rule, because the owner asked for this run.
+
+Resume sets `resumedAt` and clears `pausedBecause`. The pause rule counts only runs created after `resumedAt`, so a routine that paused itself over a missing key runs again once the key is back. Without this it would pause again at its next tick, on the same three old failures.
+
+### A routine's time follows Settings
+
+`users.timeZone` is an IANA name. The web sends the browser's zone to `users.ensureCurrent`, which stores it when the account has none, and Settings changes it. A weekly routine runs at a wall time in that zone. `nextFireAfter` reads the zone through `Intl.DateTimeFormat`, so a local time that a clock change skips fires once on its day at the shifted instant, and a local time that repeats fires once at its earlier instant. Tests walk a daily routine across 14 months in eight zones.
+
+`users.setTimeZone` does nothing when the zone did not change. Otherwise it recomputes only `weekly` routines whose `nextFireAt` is still in the future. A routine past its time keeps that time, so it can still fire inside its 15 minutes. A paused routine stays paused. An `everyHours` routine does not change, because it has no wall time. It counts from each fire, so its runs stay at least that many hours apart, and it moves later by the tick's delay each time.
+
+### What a routine leaves behind
+
+A routine keeps its newest 20 raw runs. `runs.earlierReports` reads a routine's own finished runs, so `runToPurge` also keeps the newest 3 of those, however old. A fire that finds an older run schedules `purgeOldRuns`, which deletes one batch of events at a time, then the run, and schedules itself again.
+
+Deleting a routine deletes its row at once and purges its thread in batches, with the thread last. A report already in the chat stays. `schedules.remove` refuses while that routine's run is active. Deleting a bot deletes its routines in the same mutation, and `bots.purge` takes every thread of the bot.
+
+### A bot with no runner
+
+A queued run holds no lease, so with no runner it stays queued. Every tick therefore starts with `endRunsPastDeadline`, which fails a queued run past its deadline, and a running run past its deadline whose lease expired. So no routine's run keeps a bot busy for much longer than its 30 minute limit. A run whose lease is still held is left alone, because its runner hears of the deadline from its heartbeat.
+
+In production one orchestrator serves every owner, so this matters only while it is down. When it comes back, `claim` fails any late run that the cron has not reached yet.
+
+On a shared dev backend the cron fires for every owner, and a dev orchestrator claims only its own login's runs. A routine whose owner has no orchestrator running therefore stays queued, and its bot is busy, for 30 minutes. The run then fails with the deadline reason. After three of those the routine pauses itself, so it stops making runs. Stop ends such a run at once. Delete a test login's routines when the test ends, or they fire until they pause.
+
+### Sending during a routine
+
+The chat's timeline does not hold a routine's run, because that run is in its own thread. The composer therefore reads `threads.activeRun`. During a chat run the box is locked and has Stop, as it always was. During a routine the box stays open, says that sending stops the routine, and has both Stop and Send.
+
+Pressing Send calls `requestCancel` and holds the text in the page, in a read-only box. When the held run is no longer the active run, the composer calls `threads.send`. A runner hears of a stop at its next heartbeat, 5 seconds at most, and a running tool takes up to 10 seconds more to report that it was cancelled.
+
+If a fire wins that race, `threads.send` refuses, and the composer shows the error and keeps the text. The 2 minute rule makes this rare, because the stopped run has just ended. If the page closes first, the text goes, as any draft does.
+
+### What a routine can still do
+
+A routine reaches none of the owner's logins, and it changes nothing through its tools. It can still do what [What read-only does not mean](#what-read-only-does-not-mean) lists. A page can ask it to carry out what the run holds in a URL, which is the assignment, `about`, the notes, and any file it read.
+
+The prompt tells a chat run to propose a routine only when the owner asks for something that recurs, and never because a page, a file, or a tool result said to. That sentence is an instruction to a model, and no code checks it. The card is the check, and it shows the exact text.
+
+A chat run still browses logged in, so a page in a chat run can log the bot into another account, which a later take-over then spreads. Downloads in a chat run are not blocked. The roadmap lists both.
 
 ## Where secrets live
 
