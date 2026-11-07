@@ -15,6 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const FIRE_GRACE_MS = 15 * 60 * 1000;
 const QUIET_AFTER_A_RUN_MS = 2 * 60 * 1000;
 const DUE_PER_TICK = 32;
+const DUE_READ_PER_TICK = 512;
 const MAX_ROUTINES_PER_BOT = 10;
 const MAX_ROUTINES_PER_OWNER = 20;
 const MAX_SCHEDULED_RUNS_A_DAY = 48;
@@ -60,17 +61,32 @@ export function decideFire(args: {
   return { kind: "fire" };
 }
 
-export function runToPurge<Run extends { state: RunState }>(newestFirst: readonly Run[]): Run | null {
+// A run stays for its first day whatever else holds, because the limit on scheduled runs a day counts these rows.
+export function runToPurge<Run extends { state: RunState; _creationTime: number }>(newestFirst: readonly Run[], now: number): Run | null {
   let done = 0;
   for (const [index, run] of newestFirst.entries()) {
     const isDone = run.state.kind === "done";
     const keptForReports = isDone && done < EARLIER_REPORTS;
     done += isDone ? 1 : 0;
-    if (index >= KEEP_RUNS && !keptForReports) {
+    if (index >= KEEP_RUNS && !keptForReports && now - run._creationTime > DAY_MS) {
       return run;
     }
   }
   return null;
+}
+
+// A routine that only waits changes nothing, so it must not use up a tick. Otherwise busy bots' routines would keep an idle bot's
+// routine out of every tick until it was marked missed.
+export async function actOnDue<Row>(due: readonly Row[], consider: (row: Row) => Promise<"waited" | "acted">, limit: number): Promise<void> {
+  let acted = 0;
+  for (const row of due) {
+    if (acted === limit) {
+      return;
+    }
+    if ((await consider(row)) === "acted") {
+      acted += 1;
+    }
+  }
 }
 
 const RUNS_THAT_HOLD_A_PURGE = KEEP_RUNS + EARLIER_REPORTS + 1;
@@ -111,7 +127,7 @@ export async function startReadOnlyRun(ctx: MutationCtx, schedule: Doc<"schedule
 
 async function fireRoutine(ctx: MutationCtx, schedule: Doc<"schedules">): Promise<Id<"runs">> {
   const runId = await startReadOnlyRun(ctx, schedule);
-  if (runToPurge(await newestRunsOf(ctx, schedule._id, RUNS_THAT_HOLD_A_PURGE)) !== null) {
+  if (runToPurge(await newestRunsOf(ctx, schedule._id, RUNS_THAT_HOLD_A_PURGE), Date.now()) !== null) {
     await ctx.scheduler.runAfter(0, internal.schedules.purgeOldRuns, { scheduleId: schedule._id });
   }
   return runId;
@@ -142,11 +158,11 @@ async function zoneOfOwner(ctx: QueryCtx, ownerId: Id<"users">): Promise<string>
   return (await ctx.db.get(ownerId))?.timeZone ?? FALLBACK_ZONE;
 }
 
-async function considerDue(ctx: MutationCtx, schedule: Doc<"schedules">, scheduledFor: number, now: number): Promise<void> {
+async function considerDue(ctx: MutationCtx, schedule: Doc<"schedules">, scheduledFor: number, now: number): Promise<"waited" | "acted"> {
   const bot = await ctx.db.get(schedule.botId);
   if (bot === null) {
     await ctx.db.delete(schedule._id);
-    return;
+    return "acted";
   }
   const decision = decideFire({
     scheduledFor,
@@ -159,17 +175,17 @@ async function considerDue(ctx: MutationCtx, schedule: Doc<"schedules">, schedul
   const nextTime = async () => nextFireAfter(schedule.cadence, await zoneOfOwner(ctx, schedule.ownerId), now);
   switch (decision.kind) {
     case "wait":
-      return;
+      return "waited";
     case "miss":
       await ctx.db.patch(schedule._id, { nextFireAt: await nextTime(), lastMissed: { at: scheduledFor, reason: decision.reason } });
-      return;
+      return "acted";
     case "pause":
       await ctx.db.patch(schedule._id, { nextFireAt: undefined, pausedBecause: decision.reason });
-      return;
+      return "acted";
     case "fire":
       await fireRoutine(ctx, schedule);
       await ctx.db.patch(schedule._id, { nextFireAt: await nextTime() });
-      return;
+      return "acted";
   }
 }
 
@@ -181,19 +197,15 @@ export const fireDue = internalMutation({
     const due = await ctx.db
       .query("schedules")
       .withIndex("by_next_fire", (q) => q.gte("nextFireAt", 0).lte("nextFireAt", now))
-      .take(DUE_PER_TICK);
-    for (const schedule of due) {
-      if (schedule.nextFireAt !== undefined) {
-        await considerDue(ctx, schedule, schedule.nextFireAt, now);
-      }
-    }
+      .take(DUE_READ_PER_TICK);
+    await actOnDue(due, (schedule) => considerDue(ctx, schedule, schedule.nextFireAt ?? now, now), DUE_PER_TICK);
   },
 });
 
 export const purgeOldRuns = internalMutation({
   args: { scheduleId: v.id("schedules") },
   handler: async (ctx, { scheduleId }) => {
-    const run = runToPurge(await newestRunsOf(ctx, scheduleId, RUNS_THAT_HOLD_A_PURGE));
+    const run = runToPurge(await newestRunsOf(ctx, scheduleId, RUNS_THAT_HOLD_A_PURGE), Date.now());
     if (run !== null) {
       await purgeRunBatch(ctx, run._id);
       await ctx.scheduler.runAfter(0, internal.schedules.purgeOldRuns, { scheduleId });
