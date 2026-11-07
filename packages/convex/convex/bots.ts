@@ -1,9 +1,10 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { decideActivity, lastMessageOf } from "./activity.js";
-import { requireIdentity, requireService } from "./identity.js";
+import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
+import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
 import { isActive } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
@@ -164,15 +165,6 @@ export const ownerForViewer = query({
   },
 });
 
-async function requireOwnedBot(ctx: MutationCtx, botId: Id<"bots">) {
-  const { user } = await requireIdentity(ctx);
-  const bot = await ctx.db.get(botId);
-  if (user === null || bot === null || bot.ownerId !== user._id) {
-    throw new ConvexError("Bot not found");
-  }
-  return bot;
-}
-
 // The web app calls this to start and then to renew, so a renewal is the same call.
 export const takeOver = mutation({
   args: { botId: v.id("bots") },
@@ -229,7 +221,14 @@ export const promptFor = query({
   handler: async (ctx, { botId }) => {
     await requireService(ctx);
     const bot = await ctx.db.get(botId);
-    return { name: bot?.name ?? "Bot", title: bot?.title, assignment: bot?.assignment };
+    const owner = bot === null ? null : await ctx.db.get(bot.ownerId);
+    return {
+      name: bot?.name ?? "Bot",
+      title: bot?.title,
+      assignment: bot?.assignment,
+      about: owner?.about,
+      notes: promptNotes(await notesOf(ctx, botId)),
+    };
   },
 });
 
@@ -259,6 +258,9 @@ export const remove = mutation({
       if (latest !== null && isActive(latest.state)) {
         throw new ConvexError("This bot has an active run. Stop it before you delete it");
       }
+    }
+    for (const note of await notesOf(ctx, botId)) {
+      await ctx.db.delete(note._id);
     }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });

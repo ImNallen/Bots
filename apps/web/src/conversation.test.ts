@@ -89,8 +89,19 @@ describe("conversationItems", () => {
       ["browser_click", "Clicked on the page"],
       ["browser_type", "Typed on the page"],
       ["browser_press", "Pressed a key"],
+      ["memory_save", "Saved a note"],
+      ["memory_forget", "Forgot a note"],
     ])("words %s in plain language", (name, words) => {
       expect(row(name, {}).name).toBe(words);
+    });
+
+    it("shows a saved note's text in its row, so every save is visible in the chat", () => {
+      expect(row("memory_save", { text: "Out on Fridays." }).summary).toBe("Out on Fridays.");
+    });
+
+    it("shows a save that the rules refused as failed, with the reason in its output", () => {
+      const refused = row("memory_save", { text: "password=hunter2" }, result("c1", "error", "This looks like a password."));
+      expect(refused).toMatchObject({ status: "failed", note: "failed", output: { text: "This looks like a password." } });
     });
 
     it("shows the raw name of an unknown tool, including one named like an object's property", () => {
@@ -145,6 +156,19 @@ describe("conversationItems", () => {
         approvalId: "a1",
         title: "Run this command?",
         arguments: [{ label: null, value: "printf 'a\nb'" }],
+      });
+    });
+
+    it("asks about a save with the exact text, and about a forget with its id", () => {
+      const askOf = (name: string, args: object) =>
+        only(itemsOf([pendingRun({ id: "c1", name, arguments: JSON.stringify(args) })], [approval()]), "approval");
+      expect(askOf("memory_save", { text: "Out\non Fridays." })).toMatchObject({
+        title: "Save this note?",
+        arguments: [{ label: null, value: "Out\non Fridays." }],
+      });
+      expect(askOf("memory_forget", { id: "note1" })).toMatchObject({
+        title: "Forget this note?",
+        arguments: [{ label: null, value: "note1" }],
       });
     });
 
@@ -203,6 +227,13 @@ describe("conversationItems", () => {
       expect(status(thinking)).toMatchObject({ mode: "thinking", text: "Thinking" });
       const afterTool = run({ state: { kind: "running" }, bodies: [turn("", [shell("ls")]), result("c1", "ok")] });
       expect(status(afterTool)).toMatchObject({ mode: "thinking", text: "Thinking" });
+    });
+
+    it("says a memory tool's step while it runs", () => {
+      const running = (name: string) =>
+        only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [{ id: "c1", name, arguments: "{}" }])] })]), "status").text;
+      expect(running("memory_save")).toBe("Saving a note");
+      expect(running("memory_forget")).toBe("Forgetting a note");
     });
 
     it("names the first call of the newest turn with no result", () => {

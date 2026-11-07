@@ -29,6 +29,8 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   browser_click: "Clicking on the page",
   browser_type: "Typing on the page",
   browser_press: "Pressing a key",
+  memory_save: "Saving a note",
+  memory_forget: "Forgetting a note",
 };
 
 export function isToolName(tool: string): tool is ToolName {

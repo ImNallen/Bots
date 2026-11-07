@@ -1,12 +1,13 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { approvalLevel, approvalState, botColor, botShape, desiredVm, observedVm, runEventBody, runState } from "./validators.js";
+import { approvalLevel, approvalState, botColor, botShape, desiredVm, noteSource, observedVm, runEventBody, runState } from "./validators.js";
 
 export default defineSchema({
   users: defineTable({
     authSubject: v.string(),
     email: v.string(),
     displayName: v.string(),
+    about: v.optional(v.string()),
   }).index("by_auth_subject", ["authSubject"]),
 
   bots: defineTable({
@@ -22,6 +23,12 @@ export default defineSchema({
     title: v.optional(v.string()),
     assignment: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),
+
+  memories: defineTable({
+    botId: v.id("bots"),
+    text: v.string(),
+    source: noteSource,
+  }).index("by_bot", ["botId"]),
 
   // A deleted bot whose files may still be on its owner's VM. The reconcile loop removes both.
   removedBots: defineTable({

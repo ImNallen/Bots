@@ -23,6 +23,15 @@ export async function requireIdentity(ctx: QueryCtx): Promise<CurrentIdentity> {
   return { identity, user };
 }
 
+export async function requireOwnedBot(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"bots">> {
+  const { user } = await requireIdentity(ctx);
+  const bot = await ctx.db.get(botId);
+  if (user === null || bot === null || bot.ownerId !== user._id) {
+    throw new ConvexError("Bot not found");
+  }
+  return bot;
+}
+
 export async function requireService(ctx: QueryCtx): Promise<void> {
   const identity = await ctx.auth.getUserIdentity();
   if (identity?.subject !== SERVICE_SUBJECT) {

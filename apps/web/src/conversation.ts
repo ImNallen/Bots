@@ -51,6 +51,8 @@ const TOOL_WORDS = {
   browser_click: { done: "Clicked on the page", ask: "Click on this page?", icon: "pointer" },
   browser_type: { done: "Typed on the page", ask: "Type on this page?", icon: "text" },
   browser_press: { done: "Pressed a key", ask: "Press this key?", icon: "key" },
+  memory_save: { done: "Saved a note", ask: "Save this note?", icon: "text" },
+  memory_forget: { done: "Forgot a note", ask: "Forget this note?", icon: "close" },
 } as const satisfies Record<ToolName, { done: string; ask: string; icon: IconName }>;
 
 // A denied result has no row at all, so this table has no entry for it.

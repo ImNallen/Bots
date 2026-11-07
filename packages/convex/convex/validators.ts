@@ -51,6 +51,18 @@ export const runState = v.union(
 export type RunState = Infer<typeof runState>;
 export type RunEventBody = Infer<typeof runEventBody>;
 
+export const noteSource = v.union(
+  v.object({ kind: v.literal("owner") }),
+  v.object({ kind: v.literal("bot"), runId: v.id("runs") }),
+);
+
+export const memoryCall = v.union(
+  v.object({ kind: v.literal("memorySave"), toolCallId: v.string(), text: v.string() }),
+  v.object({ kind: v.literal("memoryForget"), toolCallId: v.string(), noteId: v.string() }),
+);
+
+export type MemoryCall = Infer<typeof memoryCall>;
+
 export const desiredVm = v.object({
   slot: v.number(),
   cores: v.number(),
