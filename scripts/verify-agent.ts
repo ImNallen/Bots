@@ -143,8 +143,7 @@ function unansweredToolCall(messages: FakeMessage[]): string | null {
   return null;
 }
 
-// Mistral's own validator refuses these orders, and a serving request must end on a user or tool message.
-function refusedOrder(messages: FakeMessage[]): string | null {
+function orderProblem(messages: FakeMessage[]): string | null {
   for (const [index, message] of messages.entries()) {
     const previous = messages[index - 1]?.role;
     if ((previous === "user" && message.role !== "assistant") || (previous === "tool" && message.role !== "assistant" && message.role !== "tool")) {
@@ -265,7 +264,7 @@ function startFakeMistral() {
       requests.set(text, seen);
       const script = scripts.get(text);
       const reply: Reply =
-        script === undefined || unansweredToolCall(body.messages) !== null || refusedOrder(body.messages) !== null
+        script === undefined || unansweredToolCall(body.messages) !== null || orderProblem(body.messages) !== null
           ? { kind: "status", status: 400 }
           : script({ attempt: seen.length, toolResults: toolMessagesAfterLatestUser(body.messages) });
       streamReply(response, reply).catch(() => response.destroy());
@@ -1798,6 +1797,7 @@ try {
       await check("browser_navigate and browser_snapshot reach computerd, and this image has no desktop to answer them", () => {
         for (const name of ["browser_navigate", "browser_snapshot"]) {
           const result = resultsOf(readDone).find((entry) => entry.name === name);
+          console.log(`info  ${name} in this image: ${result?.output.slice(0, 120)}`);
           assert.equal(result?.outcome, "error");
           assert.match(result?.output ?? "", /browser action failed/);
           assert.ok(inJournal(readRun, callIdOf(readDone, name)));
@@ -1829,6 +1829,13 @@ try {
       const directRun = fire(manualRoutine);
       const direct = await claimManually(directRun);
       const fenced = { runId: directRun, leaseToken: direct.leaseToken };
+      await check("only the service token can read a run's events and its routine's earlier reports", async () => {
+        const paginationOpts = { numItems: 8, cursor: null };
+        for (const client of [first, second, anonymous]) {
+          await assertRejected(client.query(api.runs.eventsPage, { runId: directRun, paginationOpts }), /Not authorized/);
+          await assertRejected(client.query(api.runs.earlierReports, { runId: directRun }), /Not authorized/);
+        }
+      });
       await check("approvals.request with the service token throws for a read-only run", async () => {
         await assertRejected(service.mutation(api.approvals.request, { runId: directRun, toolCallId: "direct", toolName: "shell" }), /read-only/);
         assert.ok(!rowsOf("approvals").some((line) => line.includes(directRun)), "an approval row exists");
@@ -1969,6 +1976,18 @@ try {
         assert.equal(timedDone.cancelRequested, false);
         assert.deepEqual(await reportsIn(first, timed.threadId), []);
       });
+      const busyChat = `readonly busy chat ${nonce}`;
+      fake.script(busyChat, () => ({ kind: "stall", partial: "stuck" }));
+      const busyChatRun = await timed.send(busyChat);
+      await waitFor({
+        description: "the chat run to reach the model",
+        probe: async () => ((await timed.run(busyChatRun))?.stream?.text === "stuck" ? true : null),
+      });
+      await check("a routine cannot fire while the bot's chat run is active", () => {
+        assert.throws(() => fire(timedRoutine), /failed/);
+      });
+      await first.mutation(api.runs.requestCancel, { runId: busyChatRun });
+      await timed.settled(busyChatRun, 30_000);
       const stopInstruction = `readonly stop ${nonce}`;
       fake.script(stopInstruction, () => ({ kind: "stall", partial: "stuck" }));
       const stopRoutine = newRoutine(timed.botId, stopInstruction);
@@ -2131,6 +2150,9 @@ try {
           const run = await runOf(removed, holdRoutine, holdRun);
           return run !== undefined && inJournal(holdRun, callIdOf(run, "read_file")) ? true : null;
         },
+      });
+      await check("another routine of the bot cannot fire while one runs", () => {
+        assert.throws(() => fire(holdRoutine), /failed/);
       });
       await check("an owner's message sent while a routine runs is refused", async () => {
         await assertRejected(removed.send(`too soon ${nonce}`), /active run/);

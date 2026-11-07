@@ -1,12 +1,15 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import { activeRunOfBot } from "./threads.js";
 
 const RUN_LIMIT_MS = 30 * 60 * 1000;
 
-// The one way to make a read-only run. No public function reaches it, so neither a user's token nor the service's can.
-export async function startReadOnlyRun(ctx: MutationCtx, schedule: Doc<"schedules">, deadlineAt: number): Promise<Id<"runs">> {
+export async function startReadOnlyRun(ctx: MutationCtx, schedule: Doc<"schedules">, deadlineAt = Date.now() + RUN_LIMIT_MS): Promise<Id<"runs">> {
   const { threadId, botId, ownerId } = schedule;
+  if ((await activeRunOfBot(ctx, botId)) !== null) {
+    throw new ConvexError("This bot already has an active run");
+  }
   const runId = await ctx.db.insert("runs", {
     threadId,
     botId,
@@ -28,7 +31,6 @@ export async function startReadOnlyRun(ctx: MutationCtx, schedule: Doc<"schedule
   return runId;
 }
 
-// These two exist for `scripts/verify-agent.ts`, which calls them with the admin key. Nothing in production calls them.
 export const createForCheck = internalMutation({
   args: { botId: v.id("bots"), instruction: v.string() },
   handler: async (ctx, { botId, instruction }) => {
@@ -49,6 +51,6 @@ export const fireForCheck = internalMutation({
     if (schedule === null) {
       throw new ConvexError("Schedule not found");
     }
-    return await startReadOnlyRun(ctx, schedule, deadlineAt ?? Date.now() + RUN_LIMIT_MS);
+    return await startReadOnlyRun(ctx, schedule, deadlineAt);
   },
 });
