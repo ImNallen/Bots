@@ -10,7 +10,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
 | 4b | Done, with gaps listed below | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
-| 5 | Done, with gaps listed below | The standing assignment, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
+| 5 | Done, with gaps listed below | The standing assignment, now the description, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
 | 6 | **Next** | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
 | 8 | | OAuth connectors, the independent reviewer, and the Vault | Bots use saved logins without seeing the passwords, and bots no longer have passwordless `sudo` |
@@ -162,6 +162,8 @@ This is a proposal, so change it if you find a better answer:
 
 ## Step 5: a standing assignment, memory, and schedules
 
+The owner renamed the field and changed its meaning on 2026-11-07. `bots.assignment` is now `bots.description`, one general text about the bot that the owner and the bot both write, as [The description](#the-description) says. This section uses the old name where it records what happened.
+
 Before this step, a bot has only a fixed system prompt. It has no job of its own, and it remembers only what is in its thread.
 
 ### What Grok Bot does
@@ -174,11 +176,11 @@ The owner asked a Grok Bot about itself on 2026-11-06, and its answers agree wit
 
 The two sources disagree on the rest. The bot described a name, a title, and a free-text description that holds its assignment. The documentation says that a personal bot no longer has a description, that a shared bot does, and that a job is set by telling the bot in chat. It does not say how routines run or whether they are read-only, and it describes no activity view.
 
-Bots differs on purpose in four ways. The owner can read and edit each note. No bot can write a fact that another bot reads, because one injected page could then reach every bot. A save after a computer tool asks first at the default level, so a page cannot plant a note silently. Nothing stores a dated log, because the thread already records the work, and a log would be one more way into every later prompt. Add one if long threads get compaction.
+Bots differs on purpose in five ways. The owner can read and edit each note. No bot can write a fact that another bot reads, because one injected page could then reach every bot. A save after a computer tool asks first at the default level, so a page cannot plant a note silently. Nothing stores a dated log, because the thread already records the work, and a log would be one more way into every later prompt. Add one if long threads get compaction. The documentation also says that a personal bot has no description, and Bots keeps one, which the owner and the bot both write.
 
 ### What to build
 
-1. The standing assignment. Each bot gets a title and an assignment that only its owner writes, and the model reads them on each call.
+1. The standing assignment. Each bot gets a title and an assignment that only its owner writes, and the model reads them on each call. The owner changed this on 2026-11-07, as [The description](#the-description) says.
 2. The tool table, with no change in behavior. One required `effect` for each tool replaces `FREE_AT_OUTSIDE_LEVEL`.
 3. Memory. A bot saves and forgets its own notes with `memory_save` and `memory_forget`, the owner reads and edits them in the panel, and `users.about` holds what the owner writes about themselves.
 4. No freeze and no spin. A hostile page cannot freeze a browser tool, and the runner does not spin on a refused claim. These bugs affect chat bots today.
@@ -210,7 +212,7 @@ A review on 2026-11-07 settled the thread. A routine's raw pages go in its own t
 
 ### Progress on step 5
 
-1. Done. An owner sets a bot's name, title, and assignment in the info panel, and the title shows under the name there and in the chat header. `callModel` reads them through `bots.promptFor`, so an edit reaches the run's next model call. `VERIFY_SCENARIOS=assignment pnpm verify:agent` checks this with a scripted fake model, and it checks that another user and the service token cannot write them. Tested in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. Going back to a commit before this one needs a cleanup of stored titles and assignments, because the older schema has neither field and Convex checks every stored row at a deploy.
+1. Done. An owner sets a bot's name, title, and assignment in the info panel, and the title shows under the name there and in the chat header. `callModel` reads them through `bots.promptFor`, so an edit reaches the run's next model call. `VERIFY_SCENARIOS=assignment pnpm verify:agent` checks this with a scripted fake model, and it checks that another user and the service token cannot write them. Tested in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. Going back to a commit before this one needs a cleanup of stored titles and assignments, because the older schema has neither field and Convex checks every stored row at a deploy. The field is now called description, and the scenario's id is `description`.
 2. Done. Each row of `TOOLS` names a required `effect`, one of `reads`, `changesVm`, or `changesOutside`, and `needsApproval` reads it through `toolEffect`. `FREE_AT_OUTSIDE_LEVEL` is gone, and a new tool fails the typecheck until it names an effect. A test written before the change holds every level's answer for every tool, the definitions sent to the model are byte for byte the same, and `VERIFY_SCENARIOS=A,approvals pnpm verify:agent` passes. The approvals scenario stores no key, so it needs `A`. This changes `packages/protocol`, and `deploy.sh` counts that as a change to `computerd`. So deploying this change updates and restarts `computerd` on every VM, though `computerd` behaves the same. The control VM is untested.
 3. Done. A bot saves and forgets its own notes with `memory_save` and `memory_forget`, and the owner lists, adds, edits, and deletes them in the info panel. `users.about` holds what the owner writes in Settings, and all of that owner's bots read it. A note and its tool result go in one fenced mutation. At the default level, a memory tool asks once a computer tool has a result in this run. `VERIFY_SCENARIOS=memory pnpm verify:agent` checks this with a scripted fake model and a real backend, orchestrator, and `computerd`, including a SIGKILL placed after the commit and before its reply. The UI was tested with the same fake model in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. This changes `packages/protocol`, so deploying it updates and restarts `computerd` on every VM, though `computerd` behaves the same. Going back to a commit before this one needs every `users.about` cleared. A real deploy of the previous commit's schema stopped on a stored `about`, and passed with it cleared and a `memories` row still stored. An older commit's code ignores those rows, and its delete of a bot leaves them behind.
 4. Done. A page with `alert()`, `confirm()`, `prompt()`, `onbeforeunload`, or `while(true){}` no longer holds a browser tool, its desktop, or the bot's queue. A dialog is answered as soon as it opens, in any page. A tool call ends at its signal or at a 60 second deadline, a page that stays hung is closed, and the model reads that it froze. The next call works on a new page. `consider` in `runner.ts` no longer asks again at once after `unavailable`, which took `runs.claim` from 555 calls a second to 0.2 under a real fence on a Mac, and a run still starts within 5 seconds of the fence ending. Unit tests cover this with a fake browser, and a real Chromium in a private container reproduced each bug before the fix and passed after it, with the real `createDesktops` and link and a faked systemd. `pnpm verify:agent` passes, in four sets that together run every scenario. `pnpm verify:browser` and `infra/proxmox/verify-desktop.sh` need a VM and have not run on this change, so real desktops under systemd, and a real take-over, are untested. This changes `computerd`, so deploying it restarts `computerd` on every VM.
@@ -228,9 +230,19 @@ Step 5 was accepted on 2026-11-07, after these checks on the real system:
 
 The step's check itself, that the orchestrator rejects a write attempt from a scheduled run, has only run with a scripted fake model, because a real model has no reason to attempt one. So nothing shows that Mistral accepts a history that holds a call to a tool it was not offered. `pnpm verify:browser`, `pnpm verify:screen`, and `pnpm verify:takeover` have not run since this stack.
 
+### The description
+
+The owner said on 2026-11-07 that a description is a generic information field, and that like memories and routines it is meant for the AI to edit and update. `bots.description` has the old field's 8,000 character limit. The owner still edits it in the panel, and a bot replaces it with `description_set`, which works like the memory tools at every approval level. [The architecture document](architecture.md#who-can-write-a-description-and-what-limits-it) gives the reasons and the limits.
+
+No stored row held the old field when it was renamed, so no migration ran. On the Mac, 0 of 1,467 bots held a value just before each deploy. The operator found 0 of 1 on production, and that count needs repeating just before the deploy there.
+
+`VERIFY_SCENARIOS=A,description pnpm verify:agent` checks this with a scripted fake model and a real backend, orchestrator, and `computerd`, including a SIGKILL on each side of the mutation, a stale lease, a stop, a refused secret, a denied card, a read-only run, and `computerd` stopped. The `readonly` and `schedule` scenarios each forbid the tool. The panel was tested in a real browser at 1280 and 412 wide, including a bot's change that reaches the open panel and leaves the owner's unsaved text alone. A real model, the control VM, and a real phone are untested, so nothing shows when a real model chooses to call `description_set`.
+
+This changes `packages/protocol`, so deploying it restarts `computerd` on every VM. Going back to a commit before this one needs `description` cleared from every bot, because the older schema has no such field and Convex checks every stored row at a deploy.
+
 ### Later: hide memory's details
 
-The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand.
+The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.
 
 When that work starts, these things need an answer. They are proposals, so change them if you find a better answer:
 
@@ -284,6 +296,11 @@ These are open on purpose. Fix each one when the work reaches it.
 - The limit of 48 scheduled runs counts stored rows, and retention deletes them. So Test now on one routine can pass 48 runs in a day, because that routine keeps only 20. Two routines or more on a schedule reach the limit as designed.
 - `fireDue` takes 32 due rows in a tick, oldest first. If 32 routines wait for busy bots at once, the rows behind them wait with them, and they can miss their 15 minutes. With 20 routines for each owner, this needs several owners at once.
 - An owner who keeps chatting keeps a routine waiting, because a run that ended under 2 minutes ago counts as busy. After 15 minutes that fire is missed, and the panel says so.
+- A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. At the Shell and Nothing levels, `description_set` shows no card, and the chat row and the panel are the only signs.
+- The check on `description_set` covers one run. An injection still in the replayed history can pass it, because the first change of a later run has no card at the default level.
+- A job told in chat lasts only if the model chooses to save it, with `description_set` or a note, and otherwise only as long as the thread replays it. A new routine's run reads the description and the notes but no chat, so its work comes from its own instruction.
+- The card for `description_set` shows the new text and not the old text. A call that clears the description shows an empty box, with nothing that says it clears.
+- The panel's Save sends the name, the title, and the description. A bot's change that lands after the panel's last live update and before the save is overwritten. The chat row still holds that text.
 - An `everyHours` routine moves later by the cron's delay at each fire, about 30 seconds on average, so an hourly routine moves about 12 minutes in a day.
 - The panel shows a routine's run states and failure reasons. No page shows a routine's raw pages, so the owner reads only its report.
 - The panel and Activity give the next run in the zone from Settings, and past runs in the device's zone, so the two can differ.
@@ -305,7 +322,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A window whose `browsingEnd` was lost keeps running its page for up to 10 minutes after its last call, or until the bot's next browser call. This happens when the link is down at the run's end, or when `fireDue` ends a late run. A frozen page uses a CPU core for that time.
 - A live run whose next tool waits 10 minutes, for a slow model call or a long take-over, finds a blank page. The run's model reads this and opens the page again.
 - `browsingEnd` closes an older `computerd`'s link, as each logged-out call does, at a cost of about 260 ms for a reconnect each time, until that VM updates.
-- Link addresses made the 5 real logged-out snapshots measured 1.7 to 3 times as large. A long page reaches the 32 KiB cap sooner, so the model reads less of its text. A capped link-heavy page is about 12,700 tokens by the v3 tekken tokenizer, so 11 such pages reach about 139,000 of the 150,000 token limit before the assignment, the notes, and the reports count.
+- Link addresses made the 5 real logged-out snapshots measured 1.7 to 3 times as large. A long page reaches the 32 KiB cap sooner, so the model reads less of its text. A capped link-heavy page is about 12,700 tokens by the v3 tekken tokenizer, so 11 such pages reach about 139,000 of the 150,000 token limit before the description, the notes, and the reports count.
 - An address cut at 200 characters may not open, and the model reads only that it was cut.
 - A chat run's snapshot shows no link addresses, so a chat bot still has to open a link to learn where it goes.
 - `computerd` needs Chromium to name its default context, and it fails every browser tool on a browser that does not. Chromium 156 does. A VM's Chromium has not run this code.

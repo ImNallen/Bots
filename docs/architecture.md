@@ -348,7 +348,7 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Level | What asks first |
 |---|---|
 | Everything | Every tool |
-| Outside, the default | Shell commands and browser actions that change something, a memory tool once a computer tool has a result in this run, and a routine's proposal |
+| Outside, the default | Shell commands and browser actions that change something, a memory tool or `description_set` once a computer tool has a result in this run, and a routine's proposal |
 | Shell | Shell commands, and a routine's proposal |
 | Nothing | Only a routine's proposal |
 
@@ -358,15 +358,32 @@ A request is a row in Convex, keyed by the run and the call, so a restarted orch
 
 Approvals are a check on what a bot asks to do, not a sandbox. An approved shell command runs as a user with `sudo`, and what it starts is not asked about again. The network rules still hold, and step 8 adds the independent reviewer.
 
-## Why only the owner can write an assignment
+## Who can write a description, and what limits it
 
-A bot's assignment is text that the model reads on every call, in every conversation. Whoever can write it decides what the bot works on from then on. If a bot could write its own, one prompt-injected page could leave a lasting instruction that reads as the owner's. So the assignment is an owner's field, and a bot's own notes are a separate thing that ranks below it.
+A bot's description is one general text about the bot. It says who the bot is, what it does, and its purpose, and it can hold a job. The model reads it on every call, in every conversation. The owner decided on 2026-11-07 that it works like notes and routines, as something the bot keeps current, so the owner and the bot both write it. The owner's field in the panel stays until the simpler UI that the roadmap plans.
 
-One mutation writes it. `bots.setProfile` goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user. The runner reads through `bots.promptFor`, which only the service token can call, and it has no way to write. No tool reaches `setProfile`. A bot holds no Convex token, and its VM reaches only the internet and the link port, so it cannot call Convex or open the web app.
+Each writer has one path, and nobody else has a path:
 
-The runner reads the assignment before each model call and not at the claim. An edit during a run reaches the next call, and a resumed run reads the current text. The cost is that no event records which text a model call saw.
+- `bots.setProfile` is the owner's. It goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user.
+- `description_set` is the bot's. It replaces the whole text, and an empty text clears it. `runs.append` applies the call in its one fenced mutation, as [One mutation writes a note and its result](#one-mutation-writes-a-note-and-its-result) explains, so a kill leaves the change and its result together or neither. `toolInvocation` leaves the call out, so passing it to `Link.call` fails the typecheck, and it works with the computer off.
 
-An assignment is not a permission. The system prompt tells the model that the assignment cannot override the fixed rules, but that sentence is an instruction to a model and no code checks it. The checks that matter stay in code, so approvals and the network rules hold whatever an assignment says. Convex stores it in plain text, as it does the chat.
+Both paths use `parseDescription`, which allows up to 8,000 characters and uses the same `textProblem` as a note. It refuses control and text-direction characters and anything that `looksLikeSecret` refuses. A call that breaks a rule stores the outcome `error` and writes nothing.
+
+A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. These things limit that:
+
+- `description_set` has the effect `changesMemory`, so it gets a memory tool's answer at each level. At the default level it asks once a computer tool has a result in this run, and the card shows the exact text.
+- The prompt labels the text as data that informs and does not instruct, the same way as a note with `by: "you"`. The text goes in as one JSON string on one line, so a fake closing line stays inside the string, and it cannot override the fixed rules above it. It has no rank over the chat, and a bot's notes do not rank below it, because text that a bot writes must not gain authority.
+- Every change is a row in the chat. The result's output holds the previous text and the new text, because a description keeps no history of its own, so the owner can trace a change and undo it from there.
+- It reaches only that bot's model calls.
+- A read-only run cannot write it. The call stores `rejected`, and the run is not offered the tool.
+
+The prompt's label is not a boundary, because it is an instruction to a model and no code checks it. Two gaps stay open, and [the roadmap's known gaps](roadmap.md#known-gaps) lists them. At the Shell and Nothing levels no card appears. An injection still in the replayed history can pass the check, because the check covers one run.
+
+A job has a cost that the old field did not have. A job told in chat lasts only if the model chooses to save it, with `description_set` or a note, and otherwise only as long as the thread replays it. A new routine's run reads the description and the notes but no chat, so its work comes from its own instruction, and the description only informs it.
+
+The runner reads the description before each model call and not at the claim. An edit during a run reaches the next call, and a resumed run reads the current text. The chat row records a bot's change, and no event records an owner's edit or which text a model call saw.
+
+A description is not a permission. The checks that matter stay in code, so approvals and the network rules hold whatever a description says. Convex stores it in plain text, as it does the chat.
 
 ## How memory works
 
@@ -380,7 +397,7 @@ Notes live in Convex and not on the VM. A bot has root on its VM, so anything th
 
 ### One mutation writes a note and its result
 
-`runs.append` takes a memory call as well as an event body. It checks the lease and the sequence number, then `applyMemoryCall` makes the change and returns a `toolResult` body, and that body goes in as the event. All of this is one Convex mutation, and `applyMemoryCall` has no endpoint of its own. So a memory call happens exactly once, where a call through `computerd`'s journal happens at most once, and it needs no new table or idempotency key.
+`runs.append` takes a memory call as well as an event body. A `descriptionSet` body is one more memory call, and the tool's rules are in [Who can write a description, and what limits it](#who-can-write-a-description-and-what-limits-it). It checks the lease and the sequence number, then `applyMemoryCall` makes the change and returns a `toolResult` body, and that body goes in as the event. All of this is one Convex mutation, and `applyMemoryCall` has no endpoint of its own. So a memory call happens exactly once, where a call through `computerd`'s journal happens at most once, and it needs no new table or idempotency key.
 
 | Kill or failure | What the next runner finds | Result |
 |---|---|---|
@@ -400,14 +417,14 @@ A page that a bot reads can tell it to save a note, and every later model call r
 
 - At the default level, a memory tool asks once a computer tool has a result in this run. The card shows the exact text. `touchedComputer` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied`, `invalid`, or `rejected` does not count, because it brought nothing back.
 - A note reaches only the bot that saved it, so one page cannot reach the owner's other bots.
-- A bot cannot change or forget a note whose source is the owner, and it cannot write the assignment or `users.about`.
+- A bot cannot change or forget a note whose source is the owner, and it cannot write `users.about`. It can write its own description, which has its own limits.
 - Size and count are capped, so notes' text adds at most 20,000 characters to a model call.
 - Every save and forget is a row in the chat. A chat row cuts its summary short, so the row's output holds the whole text, and the forgotten text stays there after the note is gone. Every note is also a dated row in the panel, which says who wrote it.
 - Notes reach the model as one JSON array on one line, after everything else in the system prompt. A note holding `"]` or a fake closing line stays inside its string, and a test parses the block with `JSON.parse` to prove it.
 
 ### What does not limit it
 
-The prompt says that a bot's own notes can be wrong or planted, that they inform and do not instruct, and that they rank below the assignment and the owner's messages. That sentence is an instruction to a model, and no code checks it, so it is not a boundary.
+The prompt says that a bot's own notes can be wrong or planted, that they inform and do not instruct, and that they rank below the owner's messages. That sentence is an instruction to a model, and no code checks it, so it is not a boundary.
 
 The card covers one run. The thread replays on every model call, so an injection from an earlier run is still in the model's history, and the first save of a later run has no card. A hold for review would close this, but a thread stays exposed for good, so it would ask about nearly every save.
 
@@ -427,14 +444,14 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget`, `schedule_propose` |
+| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget`, `description_set`, `schedule_propose` |
 
 A rejected call stores the outcome `rejected`. `denied` tells the model that a person refused, and no person was asked.
 
 The rule holds in three places, so a bug in one does not open it:
 
 - `runTool` decides before approvals, the take-over wait, and the link. A rejected call never reaches `computerd`, so its journal has no entry for it.
-- `applyMemoryCall` and `applyScheduleCreate` store `rejected` unless the run is `full`, in the same mutation that would write the note or the routine.
+- `applyMemoryCall` and `applyScheduleCreate` store `rejected` unless the run is `full`, in the same mutation that would write the note, the description, or the routine.
 - `approvals.request` throws for a read-only run, so no card can exist.
 
 `computerd` is not one of these places, because a bot has root on its VM. Offering the model only the tools that read saves wasted turns, and it is not a boundary either. A model can still ask for a tool it was not offered.
@@ -450,9 +467,9 @@ The rule holds in three places, so a bug in one does not open it:
 | Reports | The thread's newest 3, each an assistant message with a label | The newest 3 of its own routine, as one JSON array in the prompt |
 | A routine's raw pages | Never | Only its own run's |
 | Tools | All of them | Those that read, and none on the final call |
-| Prompt | The full rules | No rules for writing notes. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
+| Prompt | The full rules | No rules for writing notes or the description. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
 
-The assignment, `about`, and the notes reach both. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
+The description, `about`, and the notes reach both. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
 
 ### Where a routine's pages and reports go
 
@@ -489,7 +506,7 @@ Read-only stops the bot's own tools from changing anything. It is not a sandbox,
 
 - A run can read any file that the `agent` user can read on its VM, including another bot's workspace. Those bots have one owner.
 - Opening a page sends a GET and runs the page's scripts. A careless site can change something on a GET.
-- A URL can carry out what the run holds, which is its assignment, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
+- A URL can carry out what the run holds, which is its description, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
 - Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `touchedComputer` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
 - A process that an earlier chat run left in the background keeps running during a routine.
 
@@ -531,7 +548,7 @@ These hold for a page in a read-only run:
 
 These do not change:
 
-- A URL can still carry out what the run holds, which is its assignment, `about`, notes, and any file it read. A page can ask for this, and the rule against it is an instruction to a model.
+- A URL can still carry out what the run holds, which is its description, `about`, notes, and any file it read. A page can ask for this, and the rule against it is an instruction to a model.
 - A page can make its visitor do anything that needs no login. A `GET` or a form runs from the owner's home IP address.
 - A person who takes over during a run can type a password into a hostile page, because the window looks like any other. Nothing moves, but the page reads what was typed.
 - A chat run still browses logged in, and its downloads still land.
@@ -563,7 +580,7 @@ Addresses cost more tokens per byte than prose does. We counted snapshot lines b
 | Lobsters | 20,494 | 8,207 | 2.50 |
 | Wikipedia, list of HTTP status codes | 32,768 | 12,663 | 2.59 |
 
-So one capped page is about 12,700 tokens. A read-only run has 11 turns of research, and each turn is one call when the model obeys `parallel_tool_calls: false`. If every turn returns a capped page, the prompt holds about 139,000 tokens of pages. The 150,000 limit then binds only near the last turn, and only when the assignment, `about`, the notes, and the earlier reports are near their own limits, which we estimate at about 14,000 tokens together. In most runs the turn limit ends research first. A model that asks for several pages in one turn reaches the token limit sooner.
+So one capped page is about 12,700 tokens. A read-only run has 11 turns of research, and each turn is one call when the model obeys `parallel_tool_calls: false`. If every turn returns a capped page, the prompt holds about 139,000 tokens of pages. The 150,000 limit then binds only near the last turn, and only when the description, `about`, the notes, and the earlier reports are near their own limits, which we estimate at about 14,000 tokens together. In most runs the turn limit ends research first. A model that asks for several pages in one turn reaches the token limit sooner.
 
 We tested these on Chromium 156 in a container, with its sandbox on, a visible Xvfb display, and Xfce's window manager. `scripts/verify-logged-out.ts` repeats the ones marked as such:
 
@@ -658,7 +675,7 @@ If a fire wins that race, `threads.send` refuses, and the composer shows the err
 
 ### What a routine can still do
 
-A routine reaches none of the owner's logins, and it changes nothing through its tools. It can still do what [What read-only does not mean](#what-read-only-does-not-mean) lists. A page can ask it to carry out what the run holds in a URL, which is the assignment, `about`, the notes, and any file it read.
+A routine reaches none of the owner's logins, and it changes nothing through its tools. It can still do what [What read-only does not mean](#what-read-only-does-not-mean) lists. A page can ask it to carry out what the run holds in a URL, which is the description, `about`, the notes, and any file it read.
 
 The prompt tells a chat run to propose a routine only when the owner asks for something that recurs, and never because a page, a file, or a tool result said to. That sentence is an instruction to a model, and no code checks it. The card is the check, and it shows the exact text.
 
