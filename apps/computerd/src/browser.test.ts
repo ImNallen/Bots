@@ -660,8 +660,7 @@ describe("browser", () => {
     });
 
     it("does not close a page under a person who takes the screen during the probe", async () => {
-      let asked = 0;
-      const browser = quick({ personHasScreen: () => (asked += 1) > 1 });
+      const browser = quick({ personHasScreen: () => chromium.sent.some((entry) => entry.method === "Page.stopLoading") });
       await look(browser, "a");
       chromium.freezePage();
       const result = await look(browser, "a");
