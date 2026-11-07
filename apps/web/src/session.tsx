@@ -4,6 +4,7 @@ import { ConvexError } from "convex/values";
 import { useConvexAuth, useMutation } from "convex/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAuthFailure } from "./auth.tsx";
+import { browserTimeZone } from "./routines.ts";
 
 export function errorMessage(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") {
@@ -46,7 +47,7 @@ function EnsuredUser({ children }: { children: (args: { email: string }) => Reac
 
   useEffect(() => {
     let cancelled = false;
-    ensureCurrent({}).then(
+    ensureCurrent({ browserTimeZone: browserTimeZone() }).then(
       (user) => {
         if (!cancelled) {
           setSession({ kind: "ready", email: user.email });

@@ -3,6 +3,7 @@ import { AboutSection } from "./AboutSection.tsx";
 import { DialogFrame } from "./Dialog.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
 import { MistralKeySection } from "./MistralKeySection.tsx";
+import { TimeZoneSection } from "./TimeZoneSection.tsx";
 
 const SECTIONS = {
   general: { label: "General", icon: "gear" },
@@ -48,6 +49,8 @@ export function SettingsDialog({ email, onClose }: { email: string; onClose: () 
             </div>
             <h3 className="label">About you</h3>
             <AboutSection />
+            <h3 className="label">Time zone</h3>
+            <TimeZoneSection />
           </Pane>
           <Pane id="mistralKey" open={open}>
             <MistralKeySection />
