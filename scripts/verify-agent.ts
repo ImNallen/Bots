@@ -1786,8 +1786,17 @@ try {
         }
         assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
       });
+      await check("the real backend refuses a key after a URL, and a secret's name with a prefix", async () => {
+        const key = "aB3".repeat(11);
+        const hex = "0123456789abcdef".repeat(3).slice(0, 40);
+        const before = await textsOf(characters);
+        for (const text of [`{"baseUrl":"https://api.mistral.ai","apiKey":"${key}"}`, `https://x.com,${key}`, `MISTRAL_API_KEY=${hex}`, `Authorization: Bearer ${hex}`, `session=${hex}`]) {
+          await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text }), /looks like a password/);
+        }
+        assert.deepEqual(await textsOf(characters), before);
+      });
       await check("the real backend refuses a zero-width space, a BOM, a soft hyphen, a tag character, a variation selector, a Hangul filler, and a braille blank from each owner's writer", async () => {
-        for (const text of ["a\u200Bb", "a\uFEFFb", "a\u00ADb", "a\u{E0041}b", "a\u{E0100}b", "a\u3164b", "a\u2800b"]) {
+        for (const text of ["a\u200Bb", "a\u200Cb", "a\u200Db", "a\uFEFFb", "a\u00ADb", "a\u{E0041}b", "a\u{E0100}b", "a\u3164b", "a\u2800b"]) {
           await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text }), /A note cannot hold invisible or control characters/);
         }
         await assertRejected(first.mutation(api.users.setAbout, { about: "a\u200Bb" }), /About you cannot hold invisible or control characters/);

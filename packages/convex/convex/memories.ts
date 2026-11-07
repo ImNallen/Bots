@@ -11,7 +11,7 @@ const MAX_DESCRIPTION_LENGTH = 8000;
 
 const found = (pattern: RegExp) => (text: string) => pattern.test(text);
 
-const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)/;
+const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|account[ _-]?key|private[ _-]?key)/;
 
 const CARD_IN_GROUPS_OF_FOUR = /\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}/;
 const CARD_OF_THIRTEEN_DIGITS = /\d{4}[ -]\d{4}[ -]\d{5}/;
@@ -33,7 +33,7 @@ function holdsCardNumber(text: string): boolean {
 
 const SHORTEST_MIXED_CASE_KEY = 32;
 const LONGEST_URL_SCHEME = SHORTEST_MIXED_CASE_KEY - 1;
-const URL_UP_TO_ITS_QUERY = new RegExp(String.raw`\b[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/[^\s?#]*`, "gi");
+const URL_UP_TO_ITS_QUERY = new RegExp(String.raw`\b[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/[^\s?#"'<>()\[\]{},;|\x60]*`, "gi");
 const LONG_RUN_OF_LETTERS_AND_DIGITS = new RegExp(`[A-Za-z0-9]{${SHORTEST_MIXED_CASE_KEY},}`, "g");
 
 function holdsMixedCaseKey(text: string): boolean {
@@ -56,8 +56,10 @@ export const SECRET_SHAPES = {
   awsAccessKey: found(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/),
   googleApiKey: found(/\bAIza[0-9A-Za-z_-]{30,}/),
   jwt: found(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/),
-  pairWithEquals: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*=\s*\S+`, "i")),
-  pairWithColon: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*:\s*\S+[ \t]*$`, "im")),
+  pairWithEquals: found(new RegExp(String.raw`(?<![A-Za-z0-9])${SECRET_NAME.source}["']?\s*=\s*\S+`, "i")),
+  pairWithColon: found(new RegExp(String.raw`(?<![A-Za-z0-9])${SECRET_NAME.source}["']?\s*:\s*\S+[ \t]*$`, "im")),
+  bearerToken: found(/\bbearer\s+[A-Za-z0-9._~+\/=-]{16,}/i),
+  cookieValue: found(/\b(?:cookie:\s*[^\s=]+=|session(?:[ _-]?id)?=|sid=)[^\s;&]{16,}/i),
   urlPassword: found(/\/\/[^\s/:@]+:[^\s/@]+@/),
   urlQuerySecret: found(/[?&#](?:token|key|api_key|apikey|secret|password|access_token|auth|sig|signature)=[^\s&#]{16,}/i),
   slackWebhook: found(/\bhooks\.slack\.com\/services\/[A-Za-z0-9]/i),
@@ -73,10 +75,11 @@ export function looksLikeSecret(text: string): boolean {
 const EMOJI_JOINER = /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/u;
 const EMOJI_STYLE = /(?<=\p{Extended_Pictographic})\uFE0F/u;
 const KEYCAP_STYLE = /(?<=[0-9#*])\uFE0F(?=\u20E3)/u;
-const LETTER_JOINER = /(?<=\p{L})[\u200C\u200D]|[\u200C\u200D](?=\p{L})/u;
-const JOINER_AFTER_A_MARK = /(?<=\p{M})[\u200C\u200D]/u;
+const SCRIPTS_THAT_USE_JOINERS = ["Arabic", "Syriac", "Mongolian", "Nko", "Mandaic", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala", "Khmer", "Myanmar"];
+const CHARACTER_OF_A_JOINING_SCRIPT = `[${SCRIPTS_THAT_USE_JOINERS.map((script) => String.raw`\p{Script=${script}}`).join("")}]`;
+const LETTER_JOINER = new RegExp(String.raw`(?<=${CHARACTER_OF_A_JOINING_SCRIPT})[\u200C\u200D]|[\u200C\u200D](?=${CHARACTER_OF_A_JOINING_SCRIPT})`, "u");
 
-const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER, JOINER_AFTER_A_MARK].map((pattern) => pattern.source).join("|"), "gu");
+const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER].map((pattern) => pattern.source).join("|"), "gu");
 
 const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800]/u];
 

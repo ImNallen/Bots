@@ -51,6 +51,10 @@ describe("parseNote", () => {
 describe("textProblem's characters", () => {
   it.each([
     ["a zero-width space between Latin letters", "a\u200Bb"],
+    ["a zero-width non-joiner between Latin letters", "a\u200Cb"],
+    ["a zero-width joiner between Latin letters", "a\u200Db"],
+    ["a joiner after a Latin letter and a combining mark", "a\u0301\u200Db"],
+    ["a joiner between Cyrillic letters", "\u0430\u200D\u0431"],
     ["a BOM", "a\uFEFFb"],
     ["a BOM at the start", "\uFEFFab"],
     ["a soft hyphen", "a\u00ADb"],
@@ -100,7 +104,6 @@ describe("textProblem's characters", () => {
     ["Malayalam with a joiner that ends a word", "\u0D05\u0D35\u0D28\u0D4D\u200D \u0D35\u0D28\u0D4D\u0D28\u0D41"],
     ["a tab and a line break", "a\tb\nc"],
     ["accented and right-to-left letters", "Malm\u00F6, \u05E9\u05DC\u05D5\u05DD"],
-    ["a Latin word with a zero-width non-joiner, a gap the docs record", "a\u200Cb"],
   ])("allows %s", (_label, text) => {
     expect(textProblem(text, 100)).toBeNull();
   });
@@ -136,6 +139,7 @@ describe("NOTE_PROBLEMS", () => {
 
 // Keys are built at run time, because GitHub's secret scanner flags a full key shape in this public repository, even a fake one.
 const MIXED_KEY = "aB3".repeat(11);
+const HEX_TOKEN = "0123456789abcdef".repeat(3).slice(0, 40);
 const LOWER_KEY = "a1b2".repeat(8);
 const DOCUMENT_ID = "1Bx9".repeat(11);
 const value = (length: number) => "v".repeat(length);
@@ -195,6 +199,26 @@ describe("SECRET_SHAPES", () => {
     ["mixedCaseKey", "a mixed-case key in a URL's fragment", `https://x/page#${MIXED_KEY}`],
     ["mixedCaseKey", "a mixed-case key right before ://", `${MIXED_KEY}://x`],
     ["mixedCaseKey", "a mixed-case key of exactly 32 characters right before ://", `${MIXED_KEY.slice(0, 32)}://x`],
+    ["mixedCaseKey", "a key in JSON after a URL", `{"baseUrl":"https://api.mistral.ai","apiKey":"${MIXED_KEY}"}`],
+    ["mixedCaseKey", "a key after a URL and a comma", `https://x.com,${MIXED_KEY}`],
+    ["mixedCaseKey", "a key in a CSV line with a URL", `name,https://api.mistral.ai,${MIXED_KEY}`],
+    ["mixedCaseKey", "a key after a markdown link", `[docs](https://x.com):${MIXED_KEY}`],
+    ["mixedCaseKey", "a key after a URL and a semicolon", `Endpoint=https://x.example.com/;Key=${MIXED_KEY}`],
+    ["mixedCaseKey", "a key after a URL and a backtick", `\`https://x.com\`${MIXED_KEY}`],
+    ["pairWithEquals", "an exported name with a prefix", `export FOO_TOKEN=${HEX_TOKEN}`],
+    ["pairWithEquals", "a provider's API key name", `MISTRAL_API_KEY=${HEX_TOKEN}`],
+    ["pairWithEquals", "a session secret's name", `SESSION_SECRET=${HEX_TOKEN}`],
+    ["pairWithEquals", "a database password's name", `DB_PASSWORD=${HEX_TOKEN}`],
+    ["pairWithEquals", "a client secret in a URL's query", `https://x.example/cb?client_secret=${HEX_TOKEN}`],
+    ["pairWithEquals", "a refresh token in a URL's query", `https://x.example/cb?refresh_token=${HEX_TOKEN}`],
+    ["pairWithEquals", "an account key in a connection string", `AccountEndpoint=https://x.example:443/;AccountKey=${HEX_TOKEN};`],
+    ["pairWithColon", "a provider's API key name in YAML", `mistral_api_key: ${HEX_TOKEN}`],
+    ["pairWithColon", "a password in JSON", `"password": "hunter2"`],
+    ["bearerToken", "an authorization header with a hex token", `Authorization: Bearer ${HEX_TOKEN}`],
+    ["bearerToken", "a bearer token with dots and dashes", `bearer ${"ab.cd-".repeat(4)}`],
+    ["cookieValue", "a cookie header", `Cookie: sessionid=${HEX_TOKEN}`],
+    ["cookieValue", "a session value", `session=${HEX_TOKEN}`],
+    ["cookieValue", "a session id with a dash", `session-id=${HEX_TOKEN}`],
   ];
 
   it("has a refused example for every shape", () => {
@@ -212,6 +236,14 @@ describe("looksLikeSecret on ordinary text", () => {
   it.each([
     ["an ordinary sentence", "Ada prefers short answers, and she is out every Friday."],
     ["a short id", "The order is abc123, ticket BOT-42."],
+    ["a document id in a markdown link", `[Spec](https://docs.google.com/document/d/${MIXED_KEY}/edit)`],
+    ["a document id in a URL in quotes", `"https://docs.google.com/document/d/${MIXED_KEY}/edit"`],
+    ["two URLs with a comma", `https://a.example/${MIXED_KEY}, https://b.example/${MIXED_KEY}`],
+    ["a URL at the end of a sentence in brackets", "See the notes (https://docs.example.com/guides/how-to-configure-release-notes-for-teams)."],
+    ["a sentence about a bearer token", "Send the bearer token in a header."],
+    ["a sentence about a session", "The session was short, and the cookie: banner stayed."],
+    ["a word that ends in a secret's name with text after it", "Tokens: many, and the budget: small."],
+    ["a name with a suffix", "MY_TOKEN_URL=https://x.example/a"],
     ["a 7 character git hash", "It broke in 039d8d6."],
     ["a URL with a long path", "Release notes live at https://github.com/ImNallen/Bots/releases/tag/v1.2.3"],
     ["a URL with a kebab-case path", "https://docs.example.com/guides/how-to-configure-release-notes-for-teams"],

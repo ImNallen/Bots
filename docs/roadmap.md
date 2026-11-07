@@ -284,14 +284,16 @@ These are open on purpose. Fix each one when the work reaches it.
 - At the Shell and Nothing levels, a save shows no card, so a page can plant a note there. The chat row and the panel still show it.
 - A forget's card shows only an id, so the owner approves it without seeing the text unless they open Memory. The row's output shows the text afterward.
 - `looksLikeSecret` is best effort. "My password is hunter2" passes, and so does "My password: hunter2 today", because a pair with a colon counts only when one token follows and then the line ends. A refused call's arguments stay in `runEvents` and in later model calls, until the bot is deleted.
-- A run of only lowercase letters and digits passes, including a hex API token, because it looks the same as a git hash. This is on purpose. A run of 32 or more with no digit or no lowercase letter passes too. Only a named query parameter, a pair, or a known prefix catches such a value.
+- A run of only lowercase letters and digits passes, including a hex API token, because it looks the same as a git hash. This is on purpose. A run of 32 or more with no digit or no lowercase letter passes too. Only a named query parameter, a pair with a secret's name, a bearer or cookie value, or a known prefix catches such a value.
 - A key with a separator at least every 31 characters, such as a base64url token, passes, because the mixed-case rule reads only unbroken runs of letters and digits.
-- A key in a URL's path passes, because document ids look the same. So does a key right after any `scheme://`.
+- A key in a URL's path passes, because document ids look the same. So does a key right after any `scheme://`. A URL ends at whitespace or at punctuation such as a comma, quote, or bracket, so a long mixed-case id after a comma in a URL is refused.
 - A long mixed-case value in a URL's query is refused even when it is no secret, such as a YouTube playlist id. So is a document id in a URL with no scheme. Each costs a bot one retry.
-- A URL query parameter counts only under its exact name, so `X-Amz-Signature`, `client_secret`, and `refresh_token` pass unless another shape catches the value.
+- A URL query parameter counts only under a listed name or a name that ends in a secret's name, so `X-Amz-Signature` passes unless another shape catches the value.
+- A heading such as `Password: required` or `Secret: Santa`, or code such as `my_password = compute()`, is refused, because one token after a secret's name looks like a value. Each costs one retry.
 - About one in ten numbers in a card's layout pass Luhn, so a 13 digit timestamp or a 19 digit id in a URL can be refused. A card typed in another layout, such as two groups of 8, passes.
 - A long kebab-case phrase that starts with a known key prefix, such as a package name that starts with `sk-`, is refused.
-- U+200C and U+200D pass beside any letter or after any mark, because the rule does not list scripts. So a Latin word can hold one, and one inside a word or a key hides it from `SECRET_SHAPES`.
+- U+200C and U+200D pass beside a character of a script that uses them, so text in Persian, Hindi, or a similar script can still hide data in them. A script missing from the list has its joiners refused, and the message says to type the text again.
+- Private-use and unassigned code points, and format characters outside `Default_Ignorable_Code_Point`, pass, so a model can read some text that a page shows as a box or as nothing. Long runs of blank lines or of tabs and spaces also pass.
 - Some real text is refused because it holds a default-ignorable character: a subdivision flag such as England's, which uses tag characters, a text-style emoji such as a footnote's return arrow, Mongolian variation selectors, and a soft hyphen in pasted text. The owner's message says to type the text again.
 - Format characters outside `Default_Ignorable_Code_Point` pass, such as the interlinear annotation characters U+FFF9 to U+FFFB.
 - A bot's name and title have a length limit and no character or secret check, and every model call reads them. Only the owner writes them.
