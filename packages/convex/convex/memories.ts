@@ -13,8 +13,11 @@ const found = (pattern: RegExp) => (text: string) => pattern.test(text);
 
 const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)/;
 
-// These are the layouts of real cards. A date range or a list of numbers also holds 13 to 19 digits, and one in ten of those would pass Luhn.
-const CARD_DIGITS = /\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}\b|\b\d{4}[ -]\d{4}[ -]\d{5}\b|\b\d{4}[ -]\d{6}[ -]\d{4,5}\b|\b\d{13,19}\b/g;
+const CARD_IN_GROUPS_OF_FOUR = /\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}/;
+const CARD_OF_THIRTEEN_DIGITS = /\d{4}[ -]\d{4}[ -]\d{5}/;
+const CARD_LIKE_AMERICAN_EXPRESS = /\d{4}[ -]\d{6}[ -]\d{4,5}/;
+const UNBROKEN_DIGITS = /\d{13,19}/;
+const CARD_DIGITS = new RegExp(String.raw`\b(?:${[CARD_IN_GROUPS_OF_FOUR, CARD_OF_THIRTEEN_DIGITS, CARD_LIKE_AMERICAN_EXPRESS, UNBROKEN_DIGITS].map((layout) => layout.source).join("|")})\b`, "g");
 
 function passesLuhn(digits: string): boolean {
   const sum = [...digits].reverse().reduce((total, character, index) => {
@@ -28,11 +31,13 @@ function holdsCardNumber(text: string): boolean {
   return (text.match(CARD_DIGITS) ?? []).some((digits) => passesLuhn(digits.replace(/[ -]/g, "")));
 }
 
-// A scheme stops at 31 characters, so a key of 32 or more stays in the text even with `://` right after it.
-const URL_UP_TO_ITS_QUERY = /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s?#]*/gi;
+const SHORTEST_MIXED_CASE_KEY = 32;
+const LONGEST_URL_SCHEME = SHORTEST_MIXED_CASE_KEY - 1;
+const URL_UP_TO_ITS_QUERY = new RegExp(String.raw`\b[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/[^\s?#]*`, "gi");
+const LONG_RUN_OF_LETTERS_AND_DIGITS = new RegExp(`[A-Za-z0-9]{${SHORTEST_MIXED_CASE_KEY},}`, "g");
 
 function holdsMixedCaseKey(text: string): boolean {
-  const runs = text.replace(URL_UP_TO_ITS_QUERY, " ").match(/[A-Za-z0-9]{32,}/g) ?? [];
+  const runs = text.replace(URL_UP_TO_ITS_QUERY, " ").match(LONG_RUN_OF_LETTERS_AND_DIGITS) ?? [];
   return runs.some((run) => /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run));
 }
 
@@ -68,10 +73,10 @@ export function looksLikeSecret(text: string): boolean {
 const EMOJI_JOINER = /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/u;
 const EMOJI_STYLE = /(?<=\p{Extended_Pictographic})\uFE0F/u;
 const KEYCAP_STYLE = /(?<=[0-9#*])\uFE0F(?=\u20E3)/u;
-// A virama is a mark, and in Malayalam and Sinhala it can sit before a joiner that ends a word.
-const LETTER_JOINER = /(?<=[\p{L}\p{M}])[\u200C\u200D]|[\u200C\u200D](?=[\p{L}\p{M}])/u;
+const LETTER_JOINER = /(?<=\p{L})[\u200C\u200D]|[\u200C\u200D](?=\p{L})/u;
+const JOINER_AFTER_A_MARK = /(?<=\p{M})[\u200C\u200D]/u;
 
-const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER].map((pattern) => pattern.source).join("|"), "gu");
+const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER, JOINER_AFTER_A_MARK].map((pattern) => pattern.source).join("|"), "gu");
 
 const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800]/u];
 

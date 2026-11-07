@@ -194,6 +194,7 @@ describe("SECRET_SHAPES", () => {
     ["mixedCaseKey", "a mixed-case key in a URL's query", `https://x/page?q=${MIXED_KEY}`],
     ["mixedCaseKey", "a mixed-case key in a URL's fragment", `https://x/page#${MIXED_KEY}`],
     ["mixedCaseKey", "a mixed-case key right before ://", `${MIXED_KEY}://x`],
+    ["mixedCaseKey", "a mixed-case key of exactly 32 characters right before ://", `${MIXED_KEY.slice(0, 32)}://x`],
   ];
 
   it("has a refused example for every shape", () => {
@@ -244,6 +245,7 @@ describe("looksLikeSecret on ordinary text", () => {
     ["a phone number with spaces", "Call +46 70 123 45 67 if it breaks."],
     ["a 13 digit timestamp that fails Luhn", "1794067200000"],
     ["a card-shaped number that fails Luhn", "4242 4242 4242 4241"],
+    ["a mixed-case run of 31 characters right before ://", `${MIXED_KEY.slice(0, 31)}://x`],
     ["the word password with no value", "Never ask for my password."],
     ["the word token in a sentence", "The token count matters to me."],
     ["a colon after the word secret, with more words", "The secret: be brief."],
