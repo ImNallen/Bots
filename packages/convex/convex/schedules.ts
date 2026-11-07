@@ -293,6 +293,14 @@ export async function routinesOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<D
     .collect();
 }
 
+export function promptRoutines(routines: readonly Doc<"schedules">[], timeZone: string | undefined) {
+  return routines.map((routine) => ({
+    when: describeCadence(routine.cadence, timeZone ?? FALLBACK_ZONE),
+    next: routine.nextFireAt === undefined ? "paused" : new Date(routine.nextFireAt).toISOString(),
+    instruction: routine.instruction,
+  }));
+}
+
 export const listForBot = query({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {

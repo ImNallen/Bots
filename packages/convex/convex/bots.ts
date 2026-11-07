@@ -6,7 +6,7 @@ import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
-import { routinesOfBot } from "./schedules.js";
+import { promptRoutines, routinesOfBot } from "./schedules.js";
 import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
@@ -226,6 +226,8 @@ export const promptFor = query({
       assignment: bot?.assignment,
       about: owner?.about,
       notes: promptNotes(await notesOf(ctx, botId)),
+      timeZone: owner?.timeZone,
+      routines: promptRoutines(await routinesOfBot(ctx, botId), owner?.timeZone),
     };
   },
 });

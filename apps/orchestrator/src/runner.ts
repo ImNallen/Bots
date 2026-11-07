@@ -180,6 +180,8 @@ async function callModel(args: {
         assignment: profile.assignment,
         about: profile.about,
         notes: profile.notes,
+        timeZone: profile.timeZone,
+        routines: profile.routines,
       },
       events: events.map((event) => event.body),
     }),
