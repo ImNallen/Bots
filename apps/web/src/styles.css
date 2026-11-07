@@ -1743,6 +1743,23 @@ button.card-row:hover {
   padding: 10px;
 }
 
+/* Routines */
+.routine-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.routine-runs [data-tone="bad"] {
+  color: var(--danger);
+}
+
 /* Character picker */
 .picker {
   display: flex;
