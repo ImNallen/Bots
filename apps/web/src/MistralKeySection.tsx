@@ -1,6 +1,7 @@
 import { api } from "@bots/convex";
 import { useQuery } from "convex/react";
 import { useState, type FormEvent } from "react";
+import { Icon } from "./Icon.tsx";
 
 type Submission =
   | { kind: "idle" }
@@ -57,29 +58,17 @@ export function MistralKeySection() {
 
   return (
     <>
-      <div className="card">
-        <div className="card-row">
-          <span>
-            {status.configured ? (
-              <>
-                Key ending in <code>{status.last4}</code>
-                <small>Bots use this to answer.</small>
-              </>
-            ) : (
-              "No key is set. Bots need one before they can answer."
-            )}
-          </span>
-          {status.configured && (
-            <button type="button" className="btn" disabled={busy} onClick={() => void change({ method: "DELETE" })}>
-              {submission.kind === "removing" ? "Removing" : "Remove key"}
-            </button>
-          )}
-        </div>
+      <p className="set-intro">One key for all of your bots. You stay in control.</p>
+      <div className="card key-status">
+        <div className="key-status-head"><Icon name="key" /><strong>Mistral API key</strong><span>{status.configured ? "Configured" : "Not configured"}</span></div>
+        {status.configured ? <p className="key-masked">••••  ••••  ••••  {status.last4}</p> : <p>No key is set. Add one so your bots can answer.</p>}
+        <small>Used by all of your bots.</small>
       </div>
       <form className="key-form" onSubmit={handleSubmit}>
         <label className="label" htmlFor="mistral-key">
-          {status.configured ? "Replace the key" : "Add a key"}
+          {status.configured ? "Replace your key" : "Add a key"}
         </label>
+        <p className="panel-note">We’ll check the key before saving it.</p>
         <div className="key-form-row">
           <input
             id="mistral-key"
@@ -101,6 +90,8 @@ export function MistralKeySection() {
           </p>
         )}
       </form>
+      <p className="key-privacy"><Icon name="shield" /><span>Your saved key is never shown here.<br />You can replace or remove it at any time.</span></p>
+      {status.configured && <div className="card key-remove"><div><strong>Remove key</strong><small>Bots need a key to answer.</small></div><button type="button" className="btn" disabled={busy} onClick={() => void change({ method: "DELETE" })}>{submission.kind === "removing" ? "Removing" : "Remove"}</button></div>}
     </>
   );
 }

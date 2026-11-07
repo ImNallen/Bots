@@ -10,6 +10,9 @@
 
 import type * as activity from "../activity.js";
 import type * as approvals from "../approvals.js";
+import type * as attachmentChecks from "../attachmentChecks.js";
+import type * as attachmentFiles from "../attachmentFiles.js";
+import type * as attachments from "../attachments.js";
 import type * as bots from "../bots.js";
 import type * as computers from "../computers.js";
 import type * as credentials from "../credentials.js";
@@ -35,6 +38,9 @@ import type {
 declare const fullApi: ApiFromModules<{
   activity: typeof activity;
   approvals: typeof approvals;
+  attachmentChecks: typeof attachmentChecks;
+  attachmentFiles: typeof attachmentFiles;
+  attachments: typeof attachments;
   bots: typeof bots;
   computers: typeof computers;
   credentials: typeof credentials;

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import {
   approvalLevel,
   approvalState,
+  attachmentContentType,
   botColor,
   botShape,
   cadence,
@@ -16,12 +17,26 @@ import {
 } from "./validators.js";
 
 export default defineSchema({
+  attachments: defineTable({
+    ownerId: v.id("users"),
+    botId: v.id("bots"),
+    name: v.string(),
+    contentType: attachmentContentType,
+    size: v.number(),
+    state: v.union(
+      v.object({ kind: v.literal("uploading") }),
+      v.object({ kind: v.literal("ready"), storageId: v.id("_storage") }),
+      v.object({ kind: v.literal("sent"), storageId: v.id("_storage"), runId: v.id("runs") }),
+    ),
+  }).index("by_bot_state", ["botId", "state.kind"]),
+
   users: defineTable({
     authSubject: v.string(),
     email: v.string(),
     displayName: v.string(),
     about: v.optional(v.string()),
     timeZone: v.optional(v.string()),
+    highlightedBotIds: v.optional(v.array(v.id("bots"))),
   }).index("by_auth_subject", ["authSubject"]),
 
   bots: defineTable({

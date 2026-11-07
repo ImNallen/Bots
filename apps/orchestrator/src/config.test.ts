@@ -31,6 +31,7 @@ describe("parseConfig", () => {
     expect(config.link).toEqual({ host: "127.0.0.1", port: 8788 });
     expect(config.computerWaitMs).toBe(300_000);
     expect(config.mistral).toEqual({ baseUrl: "https://api.mistral.ai", model: "mistral-large-4" });
+    expect(config.transcriptionModel).toBe("voxtral-mini-transcribe-3-0");
     expect(config.masterKey).toEqual(Buffer.alloc(32, 7));
     expect(config.issuer).toBe("https://orchestrator.bots.localhost");
     expect(config.signingKey.kid).toBe("test-kid");
@@ -51,9 +52,11 @@ describe("parseConfig", () => {
       LINK_PORT: "9001",
       MISTRAL_BASE_URL: "http://127.0.0.1:9/",
       MISTRAL_MODEL: "other-model",
+      MISTRAL_TRANSCRIPTION_MODEL: "other-transcription-model",
     });
     expect(config.link).toEqual({ host: "10.0.0.1", port: 9001 });
     expect(config.mistral).toEqual({ baseUrl: "http://127.0.0.1:9", model: "other-model" });
+    expect(config.transcriptionModel).toBe("other-transcription-model");
   });
 
   it("parses tailscale mode, ignores DEV_LOGIN, and needs no computer token", () => {

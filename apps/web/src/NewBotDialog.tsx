@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { useState, type FormEvent } from "react";
 import { BotFace } from "./BotFace.tsx";
-import { characterOf } from "./character.ts";
+import type { Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { errorMessage } from "./session.tsx";
@@ -16,8 +16,7 @@ export function NewBotDialog({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const isPhone = useIsPhone();
   const [name, setName] = useState("");
-  // A new bot has no id yet, so a random one gives it a look that is never black or grey.
-  const [character, setCharacter] = useState(() => characterOf({ _id: crypto.randomUUID() }));
+  const [character, setCharacter] = useState<Character>({ shape: "ball", color: "green" });
   const [submission, setSubmission] = useState<
     { kind: "idle" } | { kind: "pending" } | { kind: "failed"; message: string }
   >({ kind: "idle" });

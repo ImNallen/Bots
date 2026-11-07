@@ -1,4 +1,32 @@
+import shieldUrl from "./assets/ui/shield.svg";
+import dotsUrl from "./assets/ui/dots.svg";
+import checkUrl from "./assets/ui/check.svg";
+import chevronUrl from "./assets/ui/chevron.svg";
+import userUrl from "./assets/ui/user.svg";
+import keyUrl from "./assets/ui/key.svg";
+import clockUrl from "./assets/ui/clock.svg";
+import backUrl from "./assets/ui/back.svg";
+import pointerUrl from "./assets/ui/pointer.svg";
+import eyeUrl from "./assets/ui/eye.svg";
+import addBotUrl from "./assets/ui/add-bot.svg";
+import accountDotsUrl from "./assets/ui/account-dots.svg";
+import forwardUrl from "./assets/ui/forward.svg";
+import routineCheckUrl from "./assets/ui/routine-check.svg";
+import attachmentUrl from "./assets/ui/attachment.svg";
+import micUrl from "./assets/ui/mic.svg";
+
 const PATHS = {
+  addBot: "",
+  accountDots: "",
+  forward: "",
+  routineCheck: "",
+  attachment: "",
+  mic: "",
+  dots: "",
+  check: "",
+  clock: "",
+  user: "",
+  menu: "M4 6h16M4 12h16M4 18h16",
   up: "M12 19V6M6 12l6-6 6 6",
   stop: "M9 7h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z",
   terminal: "M4 6.500l6 5.500-6 5.500M12 18h8",
@@ -22,7 +50,19 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
+const ASSETS: Partial<Record<IconName, string>> = {
+  addBot: addBotUrl, accountDots: accountDotsUrl, forward: forwardUrl, routineCheck: routineCheckUrl,
+  attachment: attachmentUrl,
+  mic: micUrl,
+  shield: shieldUrl, dots: dotsUrl, check: checkUrl, chevron: chevronUrl, user: userUrl, key: keyUrl,
+  clock: clockUrl, back: backUrl, pointer: pointerUrl, eye: eyeUrl,
+};
+
 export function Icon({ name }: { name: IconName }) {
+  const asset = ASSETS[name];
+  if (asset !== undefined) {
+    return <span className="icon icon-asset" style={{ maskImage: `url("${asset}")` }} aria-hidden="true" />;
+  }
   return (
     <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d={PATHS[name]} />

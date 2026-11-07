@@ -1,0 +1,7 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="32" height="16" viewBox="0 0 32 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Processing indicator">
+<circle id="Ellipse" cx="2.5" cy="8" r="2.5" fill="#737373"/>
+<circle id="Ellipse_2" opacity="0.6" cx="11.5" cy="8" r="2.5" fill="#737373"/>
+<circle id="Ellipse_3" opacity="0.3" cx="20.5" cy="8" r="2.5" fill="#737373"/>
+</g>
+</svg>

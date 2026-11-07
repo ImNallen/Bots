@@ -20,7 +20,7 @@ export type CallArgument = { label: string | null; value: string };
 
 export type DisplayItem = { key: string } & (
   | { kind: "time"; label: string }
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; attachments?: Extract<EventBody, { kind: "userMessage" }>["attachments"] }
   | { kind: "assistant"; text: string; streaming: boolean }
   | { kind: "report"; text: string }
   | { kind: "reasoning"; text: string }
@@ -232,7 +232,7 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
   for (const { _id, body } of run.events) {
     switch (body.kind) {
       case "userMessage":
-        items.push({ key: _id, kind: "user", text: body.text });
+        items.push({ key: _id, kind: "user", text: body.text, ...(body.attachments?.length ? { attachments: body.attachments } : {}) });
         break;
       case "routineReport":
         items.push({ key: _id, kind: "report", text: body.text });

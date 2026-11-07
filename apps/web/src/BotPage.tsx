@@ -12,10 +12,16 @@ import { conversationItems } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
+import { RoutinesSection } from "./RoutinesSection.tsx";
 import { browserTimeZone } from "./routines.ts";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
+import { ATTACHMENT_ACCEPT, MAX_ATTACHMENTS } from "@bots/convex/attachmentFiles";
+import { AttachmentDrafts, useDraftAttachments } from "./Attachments.tsx";
+import { useVoiceInput } from "./useVoiceInput.ts";
+import { appendTranscript } from "./voiceAudio.ts";
+import { VoiceInput } from "./VoiceInput.tsx";
 
 const STICK_TO_BOTTOM_PX = 80;
 const NO_ROW = { activity: { kind: "idle" }, takeoverUntil: null } as const;
@@ -37,9 +43,20 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
   const [held, setHeld] = useState<HeldSend>(null);
   const [error, setError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const attachments = useDraftAttachments(botId);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const view = composerView({ activeRun, held, botName });
+  const search = useSearch({ from: "/app/bots/$botId" });
+  const isPhone = useIsPhone();
+  const key = useQuery(api.credentials.status);
+  const voice = useVoiceInput({ botId, onTranscript: (transcript) => setText((current) => appendTranscript(current, transcript)), visible: search.routines !== true && search.screen !== true && (!isPhone || search.info !== true) });
+  const locked = view.fieldDisabled || sending || held !== null;
+  const canSend = (text.trim() !== "" || attachments.ids.length > 0) && attachments.ready && !voice.pending;
+  const voiceActive = voice.state.kind !== "idle" && voice.state.kind !== "review";
+  const voiceHint = !voice.supported ? "Voice input needs HTTPS and a browser with microphone support." : !key?.configured ? "Add a Mistral key in Settings to use voice input." : "Record a message";
 
-  useLayoutEffect(() => fitToContent(field.current), [text]);
+  useLayoutEffect(() => fitToContent(field.current), [text, voice.state.kind]);
   useEffect(() => {
     const refit = () => fitToContent(field.current);
     window.addEventListener("resize", refit);
@@ -50,8 +67,10 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
     setSending(true);
     setError(null);
     try {
-      await send({ threadId, text });
+      await send({ threadId, text, ...(attachments.ids.length === 0 ? {} : { attachmentIds: attachments.ids }) });
       setText("");
+      voice.cancel();
+      attachments.sent();
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -79,7 +98,7 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
   }
 
   async function submit() {
-    if (text.trim() === "" || sending || !view.sendOffered) {
+    if (!canSend || sending || !view.sendOffered) {
       return;
     }
     await (activeRun === null ? deliver() : stopThenSend(activeRun._id));
@@ -107,11 +126,22 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
   }
 
   return (
-    <form className="composer" onSubmit={handleSubmit}>
+    <form className="composer" onSubmit={handleSubmit} data-file-drag={draggingFiles} data-voice={voiceActive ? "active" : voice.state.kind === "review" ? "review" : undefined}
+      onDragOver={(event) => {
+        if (!locked && !voice.pending && event.dataTransfer.types.includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDraggingFiles(true); }
+      }}
+      onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDraggingFiles(false); }}
+      onDrop={(event) => {
+        if (event.dataTransfer.files.length === 0) return;
+        event.preventDefault(); setDraggingFiles(false);
+        if (!locked && !voice.pending) attachments.add(event.dataTransfer.files);
+      }}
+    >
       <label htmlFor="message" className="visually-hidden">
         Message
       </label>
       <div className="composer-row">
+        <AttachmentDrafts items={attachments.items} disabled={locked || voice.pending} onRemove={attachments.remove} onRetry={(item) => void attachments.retry(item)} />
         <textarea
           id="message"
           ref={field}
@@ -120,9 +150,24 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
           disabled={view.fieldDisabled}
           readOnly={sending || held !== null}
           placeholder={view.placeholder}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => { setText(event.target.value); if (voice.state.kind === "review") voice.cancel(); }}
           onKeyDown={handleKeyDown}
+          onPaste={(event) => {
+            if (!locked && !voice.pending && event.clipboardData.files.length > 0) { event.preventDefault(); attachments.add(event.clipboardData.files); }
+          }}
         />
+        {voice.state.kind !== "idle" && voice.state.kind !== "review" && <VoiceInput state={voice.state} onCancel={voice.cancel} onFinish={voice.finish} onRetry={voice.retry} retryDisabled={locked || !key?.configured} />}
+        {!voiceActive && <div className="composer-toolbar">
+          <input ref={fileInput} className="visually-hidden" type="file" accept={ATTACHMENT_ACCEPT} multiple tabIndex={-1} aria-label="Choose attachments" disabled={locked || voice.pending}
+            onChange={(event) => { if (event.target.files !== null) attachments.add(event.target.files); event.target.value = ""; }} />
+          <button type="button" className="round composer-attach" aria-label="Attach files" title="Attach images, PDFs, or text/code files" disabled={locked || voice.pending || attachments.items.length >= MAX_ATTACHMENTS} onClick={() => fileInput.current?.click()}>
+            <Icon name="attachment" />
+          </button>
+          <button type="button" className="round composer-mic" aria-label="Start voice input" title={voiceHint} disabled={locked || voice.pending || !voice.supported || !key?.configured} onClick={() => void voice.start()}>
+            <Icon name="mic" />
+          </button>
+          {voice.state.kind === "review" && <span className="voice-added" role="status"><span aria-hidden="true">✓</span><span>Added to draft</span></span>}
+          <div className="composer-send">
         {view.stop === "stopping" && (
           <button type="button" className="send send-stopping" disabled>
             Stopping
@@ -134,11 +179,14 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
           </button>
         )}
         {view.sendOffered && (
-          <button type="submit" className="send" aria-label={sending ? "Sending" : "Send"} disabled={sending || text.trim() === ""}>
-            <Icon name="up" />
+          <button type="submit" className={voice.state.kind === "review" ? "send voice-action voice-primary" : "send"} aria-label={sending ? "Sending" : "Send"} disabled={sending || !canSend}>
+            {voice.state.kind === "review" ? "Send" : <Icon name="up" />}
           </button>
         )}
+          </div>
+        </div>}
       </div>
+      {attachments.problem !== null && <p className="error composer-note" role="alert">{attachments.problem}</p>}
       {view.note !== null && (
         <p className="composer-note" role="status">
           {view.note}
@@ -221,12 +269,13 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
             </div>
           )}
           {items.map((item) => (
-            <ChatItem key={item.key} item={item} character={character} />
+            <ChatItem key={item.key} item={item} character={character} botName={botName} />
           ))}
         </section>
       </div>
       <div className="dock">
         <Composer botId={botId} threadId={threadId} botName={botName} />
+        <p className="composer-disclaimer">{botName} can make mistakes. Review anything important.</p>
       </div>
     </>
   );
@@ -297,12 +346,12 @@ function BotChat({ botId }: { botId: string }) {
   const faceState = activity === "needsApproval" ? "idle" : FACE_STATES[activity];
 
   // On a phone the panel is a page of its own, so it takes a history entry and the back gesture leaves it.
-  const openInfo = () => void navigate({ to: "/bots/$botId", params, search: { info: true }, replace: !isPhone });
+  const openInfo = () => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, info: true }), replace: !isPhone });
   const closeInfo = () => {
     if (isPhone && router.history.canGoBack()) {
       router.history.back();
     } else {
-      void navigate({ to: "/bots/$botId", params, search: {}, replace: true });
+      void navigate({ to: "/bots/$botId", params, search: routines === true ? { routines: true } : {}, replace: true });
     }
   };
 
@@ -321,7 +370,7 @@ function BotChat({ botId }: { botId: string }) {
       <div className="chat" inert={isPhone && info === true}>
         <header className="chat-head">
           <Link to="/" className="round chat-back" aria-label="Your bots">
-            <Icon name="back" />
+            <Icon name="menu" />
           </Link>
           <button
             type="button"
@@ -330,36 +379,36 @@ function BotChat({ botId }: { botId: string }) {
             aria-label={`About ${bot.name}`}
             onClick={info === true ? closeInfo : openInfo}
           >
-            <BotFace character={character} size={isPhone ? 26 : 20} state={faceState} />
+            <BotFace character={character} size={32} state={faceState} />
             <span className="pill-who">
               <span>{bot.name}</span>
-              {bot.title !== undefined && <small>{bot.title}</small>}
             </span>
           </button>
-          {isPhone ? (
-            <button type="button" className="round chat-screen" aria-label={`${bot.name}'s screen`} onClick={openScreen}>
-              <Icon name="screen" />
-            </button>
-          ) : (
-            <button type="button" className="pill pill-plain chat-screen" onClick={openScreen}>
-              Screen
-            </button>
-          )}
         </header>
-        <BotThread botId={bot._id} botName={bot.name} character={character} />
+        <div className="chat-body" hidden={routines === true}>
+          <BotThread botId={bot._id} botName={bot.name} character={character} />
+        </div>
+        {routines === true && <RoutinesSection botId={bot._id} botName={bot.name} onShowChat={() => {
+          void navigate({ to: "/bots/$botId", params, search: !isPhone && info === true ? { info: true } : {}, replace: true });
+        }} onNewRoutine={() => {
+          void navigate({ to: "/bots/$botId", params, search: isPhone ? {} : { info: true } });
+          requestAnimationFrame(() => document.getElementById("message")?.focus());
+        }} />}
       </div>
       {info === true && (
         <InfoPanel
           bot={bot}
           faceState={faceState}
-          revealRoutines={routines === true}
+          showRoutines={routines === true}
           profileEdits={profileEdits}
           onProfileEditsChange={setProfileEdits}
           onClose={closeInfo}
           onOpenScreen={openScreen}
+          onShowChat={() => void navigate({ to: "/bots/$botId", params, search: isPhone ? {} : { info: true }, replace: true })}
+          onShowRoutines={() => void navigate({ to: "/bots/$botId", params, search: isPhone ? { routines: true } : { info: true, routines: true }, replace: true })}
         />
       )}
-      {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} onClose={closeScreen} />}
+      {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} character={character} onClose={closeScreen} />}
     </div>
   );
 }

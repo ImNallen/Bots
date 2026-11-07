@@ -12,6 +12,7 @@ export type Config = {
   masterKey: Buffer;
   convexUrl: string;
   mistral: { baseUrl: string; model: string };
+  transcriptionModel: string;
   webDistDir: string;
   proxmox: ProxmoxConfig | null;
 };
@@ -165,6 +166,7 @@ export function parseConfig(env: Env): Config {
       baseUrl: parseUrl({ value: env.MISTRAL_BASE_URL || DEFAULT_MISTRAL_BASE_URL, name: "MISTRAL_BASE_URL" }),
       model: env.MISTRAL_MODEL || DEFAULT_MISTRAL_MODEL,
     },
+    transcriptionModel: env.MISTRAL_TRANSCRIPTION_MODEL || "voxtral-mini-transcribe-3-0",
     webDistDir: WEB_DIST_DIR,
     proxmox: parseProxmox(env),
   };

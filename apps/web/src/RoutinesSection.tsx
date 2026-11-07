@@ -2,10 +2,11 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { describeCadence } from "@bots/convex/scheduleTime";
 import { useMutation, useQuery } from "convex/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { timeLabel } from "./conversation.ts";
 import { browserTimeZone, routineStatus, runStateWords, type Routine } from "./routines.ts";
 import { errorMessage } from "./session.tsx";
+import { Icon } from "./Icon.tsx";
 
 function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; timeZone: string; now: number; locale: string }) {
   const pause = useMutation(api.schedules.pause);
@@ -38,7 +39,9 @@ function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; time
 
   const paused = routine.nextFireAt === undefined;
   return (
-    <li className="note">
+    <li className="note routine-row">
+      <span className="routine-icon"><Icon name="clock" /></span>
+      <div className="routine-content">
       <p className="note-text">{routine.instruction}</p>
       <p className="note-meta">{describeCadence(routine.cadence, timeZone)}</p>
       <p className="note-meta">{routineStatus(routine, { now, timeZone, locale })}</p>
@@ -89,50 +92,54 @@ function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; time
           </button>
         </div>
       )}
+      </div>
+      <span className="routine-badge">{paused ? "Paused" : "Active"}</span>
     </li>
   );
 }
 
-export function RoutinesSection({ botId, botName, reveal }: { botId: Id<"bots">; botName: string; reveal: boolean }) {
-  const list = useQuery(api.schedules.listForBot, { botId }) ?? null;
+export function RoutinesSection({ botId, botName, onNewRoutine, onShowChat }: { botId: Id<"bots">; botName: string; onNewRoutine: () => void; onShowChat: () => void }) {
+  const list = useQuery(api.schedules.listForBot, { botId });
+  const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const now = Date.now();
   const locale = navigator.language;
-  const notesAbove = useQuery(api.memories.list, { botId });
-  const head = useRef<HTMLDivElement>(null);
-  const settled = list !== null && notesAbove !== undefined;
-  useEffect(() => {
-    if (reveal && settled) {
-      head.current?.scrollIntoView({ block: "start" });
-    }
-  }, [reveal, settled]);
+  const routines = list?.routines ?? [];
+  const active = routines.filter((r) => r.nextFireAt !== undefined).length;
+  const shown = routines.filter((r) => filter === "all" || (filter === "active" ? r.nextFireAt !== undefined : r.nextFireAt === undefined));
+  const latest = routines.flatMap((routine) => routine.recentRuns.map((run) => ({ run, instruction: routine.instruction })))
+    .sort((a, b) => b.run.createdAt - a.run.createdAt)[0];
+  const lastStatus = latest === undefined ? undefined : runStateWords(latest.run.state);
   return (
-    <>
-      <div className="note-head" ref={head}>
-        <h3 className="label">Routines</h3>
-        {list !== null && (
-          <span className="note-count">
-            {list.routines.length} of {list.limit}
-          </span>
-        )}
+    <section className="routines-page" aria-label={`${botName}'s routines`}>
+      <div className="routines-heading">
+        <div><h2>A little less to remember.</h2><p>Give {botName} a rhythm. Your routines run quietly in the background.</p></div>
+        <button type="button" className="btn btn-go" onClick={onNewRoutine}><Icon name="plus" /> New routine</button>
       </div>
-      {list === null ? (
-        <p className="panel-note" role="status">
-          Loading the routines.
-        </p>
+      <nav className="routine-filters" aria-label="Filter routines">
+        <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All routines <span>{routines.length}</span></button>
+        <button type="button" aria-pressed={filter === "active"} onClick={() => setFilter("active")}>Active <span>{active}</span></button>
+        <button type="button" aria-pressed={filter === "paused"} onClick={() => setFilter("paused")}>Paused <span>{routines.length - active}</span></button>
+      </nav>
+      {list === undefined ? <p role="status">Loading routines.</p> : shown.length === 0 ? (
+        <div className="card routine-empty"><Icon name="clock" /><h3>{routines.length === 0 ? "A little help, on repeat." : "No routines here."}</h3><p>Ask {botName} in chat to repeat a task, then approve its routine card.</p></div>
       ) : (
-        <>
-          {list.routines.length > 0 && (
-            <ul className="card notes">
-              {list.routines.map((routine) => (
-                <RoutineRow key={routine._id} routine={routine} timeZone={list.timeZone ?? browserTimeZone()} now={now} locale={locale} />
-              ))}
-            </ul>
-          )}
-          <p className="panel-note">
-            Ask {botName} in the chat for something that recurs, and approve its card. A routine reads the web logged out, changes nothing, and reports in the chat.
-          </p>
-        </>
+        <ul className="card notes routine-list">
+          {shown.map((routine) => <RoutineRow key={routine._id} routine={routine} timeZone={list?.timeZone ?? browserTimeZone()} now={now} locale={locale} />)}
+        </ul>
       )}
-    </>
+      {latest !== undefined && lastStatus !== undefined && <section className="routine-last-run" aria-label="Last run">
+        <h3>Last run</h3>
+        <button type="button" className="routine-result" onClick={onShowChat}>
+          <Icon name={latest.run.state.kind === "done" ? "routineCheck" : "clock"} />
+          <span className="routine-result-text">
+            <strong>{latest.instruction}</strong>
+            <span data-tone={lastStatus.tone}>{lastStatus.words}{latest.run.state.kind === "done" ? ". Reports arrive in your conversation." : "."}</span>
+            <small>{timeLabel({ at: latest.run.createdAt, now, locale })}</small>
+          </span>
+          <span className="routine-result-arrow"><Icon name="forward" /></span>
+        </button>
+      </section>}
+      <p className="panel-note">Routine reports arrive in your conversation. To add a routine, ask {botName} in chat.</p>
+    </section>
   );
 }

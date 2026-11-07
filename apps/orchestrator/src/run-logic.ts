@@ -10,7 +10,7 @@ import {
   type ToolInvocation,
   type ToolName,
 } from "@bots/protocol";
-import type { MistralMessage } from "./mistral.ts";
+import type { MistralMessage, MistralUserChunk } from "./mistral.ts";
 
 export type RunEventBody = Doc<"runEvents">["body"];
 export type RunCapability = Doc<"runs">["capability"];
@@ -149,12 +149,19 @@ function endUnansweredTurn(messages: MistralMessage[]): void {
 export function toMistralMessages(args: {
   system: string;
   events: readonly RunEventBody[];
+  attachments?: ReadonlyMap<string, MistralUserChunk[]>;
 }): MistralMessage[] {
   const messages: MistralMessage[] = [{ role: "system", content: args.system }];
   let reportsToSkip = args.events.filter((event) => event.kind === "routineReport").length - REPORTS_A_MODEL_READS;
   for (const event of args.events) {
     switch (event.kind) {
       case "userMessage":
+        endUnansweredTurn(messages);
+        messages.push({ role: "user", content: event.attachments?.length ? [
+          ...(event.text === "" ? [] : [{ type: "text" as const, text: event.text }]),
+          ...event.attachments.flatMap((file) => args.attachments?.get(file.id) ?? [{ type: "text" as const, text: `Attachment unavailable: ${file.name}` }]),
+        ] : event.text });
+        break;
       case "scheduleFired":
         endUnansweredTurn(messages);
         messages.push({ role: "user", content: event.text });
@@ -326,9 +333,9 @@ function offeredTools(run: PromptRun): readonly OfferedTool[] {
   }
 }
 
-export function modelRequest(args: { prompt: PromptArgs; events: readonly RunEventBody[] }) {
+export function modelRequest(args: { prompt: PromptArgs; events: readonly RunEventBody[]; attachments?: ReadonlyMap<string, MistralUserChunk[]> }) {
   return {
-    messages: toMistralMessages({ system: systemPrompt(args.prompt), events: args.events }),
+    messages: toMistralMessages({ system: systemPrompt(args.prompt), events: args.events, attachments: args.attachments }),
     tools: offeredTools(args.prompt.run),
   };
 }
