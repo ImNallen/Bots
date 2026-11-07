@@ -3,12 +3,13 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
-import { memoryCall, runEventBody, terminalRunState } from "./validators.js";
+import { memoryCall, runEventBody, terminalRunState, type TerminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
 const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
 const NO_PROGRESS_REASON = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress. Send another message to try again.`;
+const DEADLINE_REASON = "The routine ran past its 30 minute limit";
 
 const UNANSWERED_CALL_OUTPUT =
   "The run stopped before this call reported a result, so the outcome is unknown. It may have run, and it may still be running.";
@@ -34,6 +35,22 @@ async function deleteStream(ctx: MutationCtx, runId: Id<"runs">): Promise<void> 
   if (stream !== null) {
     await ctx.db.delete(stream._id);
   }
+}
+
+function pastDeadline(run: Pick<Doc<"runs">, "deadlineAt">, now: number): boolean {
+  return run.deadlineAt !== undefined && now > run.deadlineAt;
+}
+
+// The one writer of a terminal state and an end time, so no run can end without one.
+async function endRun(ctx: MutationCtx, run: Doc<"runs">, state: TerminalRunState): Promise<void> {
+  await ctx.db.patch(run._id, { state, endedAt: Date.now() });
+  await deleteStream(ctx, run._id);
+}
+
+// run.cancelRequested means only that the owner pressed Stop, so a stop without it came from the deadline.
+export function finishedState(args: { run: Pick<Doc<"runs">, "cancelRequested" | "deadlineAt">; state: TerminalRunState; now: number }): TerminalRunState {
+  const { run, state, now } = args;
+  return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? { kind: "failed", reason: DEADLINE_REASON } : state;
 }
 
 // Every later model request replays this history, and a tool call with no result would make it malformed.
@@ -117,6 +134,11 @@ export const claim = mutation({
     if (!claimable) {
       return { kind: "unavailable" as const };
     }
+    if (pastDeadline(run, now)) {
+      await closeUnansweredCalls(ctx, run);
+      await endRun(ctx, run, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: DEADLINE_REASON });
+      return { kind: "unavailable" as const };
+    }
     // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
     const computer = await ctx.db
       .query("computers")
@@ -129,10 +151,7 @@ export const claim = mutation({
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
       await closeUnansweredCalls(ctx, run);
-      await ctx.db.patch(runId, {
-        state: run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON },
-      });
-      await deleteStream(ctx, runId);
+      await endRun(ctx, run, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON });
       return { kind: "unavailable" as const };
     }
     const leaseToken = crypto.randomUUID();
@@ -162,8 +181,10 @@ export const heartbeat = mutation({
     if (run === null || run.state.kind !== "running" || run.state.leaseToken !== leaseToken) {
       return { kind: "lost" as const };
     }
-    await ctx.db.patch(runId, { state: { ...run.state, leaseUntil: Date.now() + LEASE_MS } });
-    return { kind: "renewed" as const, cancelRequested: run.cancelRequested };
+    const now = Date.now();
+    await ctx.db.patch(runId, { state: { ...run.state, leaseUntil: now + LEASE_MS } });
+    // Not stored, so run.cancelRequested still says only that the owner pressed Stop.
+    return { kind: "renewed" as const, cancelRequested: run.cancelRequested || pastDeadline(run, now) };
   },
 });
 
@@ -204,9 +225,8 @@ export const finish = mutation({
   args: { ...fence, state: terminalRunState },
   handler: async (ctx, { runId, leaseToken, state }) => {
     await requireService(ctx);
-    await requireLease(ctx, { runId, leaseToken });
-    await ctx.db.patch(runId, { state });
-    await deleteStream(ctx, runId);
+    const run = await requireLease(ctx, { runId, leaseToken });
+    await endRun(ctx, run, finishedState({ run, state, now: Date.now() }));
   },
 });
 
@@ -221,7 +241,8 @@ export const requestCancel = mutation({
     switch (run.state.kind) {
       // No runner holds a queued run, so nothing else would ever act on the request.
       case "queued":
-        await ctx.db.patch(runId, { state: { kind: "cancelled" }, cancelRequested: true });
+        await ctx.db.patch(runId, { cancelRequested: true });
+        await endRun(ctx, run, { kind: "cancelled" });
         return;
       case "running":
         await ctx.db.patch(runId, { cancelRequested: true });
