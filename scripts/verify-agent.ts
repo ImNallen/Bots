@@ -1771,29 +1771,132 @@ try {
       });
 
       const characters = await chatAt("memory-characters", "nothing");
+      const mixedKey = "aB3".repeat(11);
+      const hexToken = "0123456789abcdef".repeat(3).slice(0, 40);
+      const uuid = ["550e8400", "e29b", "41d4", "a716", "446655440000"].join("-");
+      const documentId = "1Bx9".repeat(11);
+      const jobDescription = `You are the release scout. Each morning read https://github.com/ImNallen/Bots/releases/tag/v1.2.3 and the plan at https://docs.google.com/document/d/${documentId}/edit. Name the commit, such as ${hexToken}, and link https://github.com/ImNallen/Bots/pull/34. Use the model mistral-large-2411.`;
       const storable = [
         "https://docs.example.com/guides/how-to-configure-release-notes-for-teams",
-        `https://docs.google.com/document/d/${"1Bx9".repeat(11)}/edit`,
+        `https://docs.google.com/document/d/${documentId}/edit`,
+        uuid,
+        hexToken,
+        jobDescription,
         "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}",
         "\u2764\uFE0F",
         "1\uFE0F\u20E3",
         "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645",
         "\u0915\u094D\u200D\u0937",
+        "\u0643\u064E\u200C \u0628",
+        "\u0643\u0651\u200C",
+        "\u0915\u0951\u200D \u0916",
+        "\u0710\u0712\u0713\u0715",
+        "\u{1FAE9}\u{1FADC}\u{1FAC8}",
       ];
-      await check("the real backend stores a long URL, a document id in a URL, a family emoji, a keycap, and Persian and Hindi with their joiners", async () => {
+      await check("the real backend stores a long URL, a document id in a URL, a UUID, a 40 hex hash, a job description with URLs, emoji, and Persian, Hindi, Arabic, and Syriac text", async () => {
         for (const text of storable) {
           await first.mutation(api.memories.write, { botId: characters.botId, text });
         }
         assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
       });
-      await check("the real backend refuses a key after a URL, and a secret's name with a prefix", async () => {
-        const key = "aB3".repeat(11);
-        const hex = "0123456789abcdef".repeat(3).slice(0, 40);
+      await check("the real backend stores a job description with URLs as a description", async () => {
+        await first.mutation(api.bots.setProfile, { botId: characters.botId, name: "memory-characters", title: "", description: jobDescription });
+        assert.equal((await first.query(api.bots.get, { botId: characters.botId }))?.description, jobDescription);
+      });
+      await check("the real backend refuses a long token under any name, a scheme word, and a key after a URL", async () => {
         const before = await textsOf(characters);
-        for (const text of [`{"baseUrl":"https://api.mistral.ai","apiKey":"${key}"}`, `https://x.com,${key}`, `MISTRAL_API_KEY=${hex}`, `Authorization: Bearer ${hex}`, `session=${hex}`]) {
+        for (const text of [
+          `SECRET_KEY=${hexToken}`,
+          `"accessToken":"${hexToken}"`,
+          `JSESSIONID=${hexToken}`,
+          `Authorization: Token ${hexToken}`,
+          `Authorization: Bearer ${hexToken}`,
+          `MISTRAL_API_KEY=${hexToken}`,
+          `session=${hexToken}`,
+          `deploy --token ${hexToken}`,
+          `{"baseUrl":"https://api.mistral.ai","apiKey":"${mixedKey}"}`,
+          `https://x.com,${mixedKey}`,
+          `https://x.com/ ${mixedKey}`,
+          `https://x.com:${hexToken}`,
+          `https://${hexToken}@github.com/o/r`,
+          "0f1e2d3c".repeat(4),
+          mixedKey,
+        ]) {
           await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text }), /looks like a password/);
         }
+        await assertRejected(first.mutation(api.users.setAbout, { about: `SECRET_KEY=${hexToken}` }), /looks like a password/);
+        await assertRejected(first.mutation(api.bots.setProfile, { botId: characters.botId, name: "memory-characters", title: "", description: `"accessToken":"${hexToken}"` }), /looks like a password/);
         assert.deepEqual(await textsOf(characters), before);
+      });
+      await check("the real backend refuses format characters, private use, unassigned code points, and a joiner that follows a Latin letter and a mark", async () => {
+        const before = await textsOf(characters);
+        for (const text of ["1\u0600 2", "\u06DD1", "\u0710\u070F\u0712", "a\u{1D159}b", "a\u2D7Fb", "a\uE000b", "a\u{F0000}b", "a\u0378b", "a\u0301\u200Db", "a\u064E\u200Cb"]) {
+          await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text }), /A note cannot hold invisible or control characters/);
+        }
+        assert.deepEqual(await textsOf(characters), before);
+      });
+      const textInEachScript: [string, string][] = [
+        ["Arabic", "\u0627\u0644\u0639\u0631\u0628\u064A\u0629 \u0644\u063A\u0629 \u062C\u0645\u064A\u0644\u0629"],
+        ["Arabic with marks", "\u0643\u064E\u062A\u064E\u0628\u064E"],
+        ["Quran with a verse number and no end of ayah", "\u0628\u0650\u0633\u0652\u0645\u0650 \u0661"],
+        ["Persian", "\u06A9\u062A\u0627\u0628\u200C\u0647\u0627"],
+        ["Urdu", "\u0627\u0631\u062F\u0648\u200C\u0632\u0628\u0627\u0646"],
+        ["Syriac", "\u0710\u200D\u0712\u0713\u0715"],
+        ["Nko", "\u07CA\u200D\u07CB"],
+        ["Mandaic", "\u0840\u200D\u0841"],
+        ["Mongolian", "\u1820\u200D\u1821"],
+        ["Hindi", "\u0928\u092E\u0938\u094D\u0924\u0947 \u0926\u0941\u0928\u093F\u092F\u093E"],
+        ["Marathi with an eyelash ra", "\u0931\u094D\u200D\u092F"],
+        ["Bengali", "\u09AC\u09BE\u0982\u09B2\u09BE \u0995\u09CD\u200C\u09B7"],
+        ["Gujarati", "\u0A95\u0ACD\u200D\u0AB7"],
+        ["Gurmukhi", "\u0A15\u0A4D\u200D\u0A38"],
+        ["Oriya", "\u0B15\u0B4D\u200C\u0B37"],
+        ["Tamil", "\u0BB8\u0BCD\u200D\u0BB0\u0BC0"],
+        ["Telugu", "\u0C15\u0C4D\u200C\u0C15"],
+        ["Kannada", "\u0CB0\u0CCD\u200D\u0C95"],
+        ["Malayalam", "\u0D05\u0D35\u0D28\u0D4D\u200D \u0D35\u0D28\u0D4D\u0D28\u0D41"],
+        ["Sinhala", "\u0DC1\u0DCA\u200D\u0DBB\u0DD3"],
+        ["Khmer", "\u1781\u17D2\u1798\u17C2\u179A"],
+        ["Burmese", "\u1019\u103C\u1014\u103A\u1019\u102C"],
+        ["Hebrew", "\u05E9\u05DC\u05D5\u05DD \u05D0\u05D1"],
+        ["Thai", "\u0E2A\u0E27\u0E31\u0E2A\u0E14\u0E35"],
+        ["Lao", "\u0EAA\u0EB0\u0E9A\u0EB2\u0E8D\u0E94\u0EB5"],
+        ["Tibetan", "\u0F56\u0F7C\u0F51\u0F0B\u0F61\u0F72\u0F42"],
+        ["Han", "\u6F22\u5B57\u3001\u4E2D\u6587"],
+        ["Japanese", "\u3053\u3093\u306B\u3061\u306F\u30AB\u30BF\u30AB\u30CA"],
+        ["Korean", "\uD55C\uAE00 \uC548\uB155"],
+        ["Cyrillic", "\u041F\u0440\u0438\u0432\u0435\u0442"],
+        ["Greek", "\u039A\u03B1\u03BB\u03B7\u03BC\u03AD\u03C1\u03B1"],
+        ["Armenian", "\u0532\u0561\u0580\u0565\u0582"],
+        ["Georgian", "\u10D2\u10D0\u10DB\u10D0\u10E0\u10EF\u10DD\u10D1\u10D0"],
+        ["Ethiopic", "\u1230\u120B\u121D"],
+        ["Cherokee", "\u13A0\u13A1\u13A2"],
+        ["Javanese", "\uA98F\uA9C0\uA98F"],
+        ["Balinese", "\u1B13\u1B44\u1B13"],
+        ["Tifinagh", "\u2D30\u2D4E\u2D30\u2D63\u2D49\u2D56"],
+        ["Egyptian hieroglyphs", "\u{13000}\u{13001}\u{13002}"],
+        ["mathematical letters", "\u{1D400}\u{1D401}\u{1D7D8}"],
+        ["a flag", "\u{1F1F8}\u{1F1EA}"],
+        ["the replacement character and a box", "\uFFFD\u25A1"],
+        ["a skin tone and an emoji newer than most tables", "\u{1F44D}\u{1F3FD} \u{1FAE9} \u{1FAC8}"],
+      ];
+      await check("the real backend stores real text in each script, with its joiners and marks, and leaves it unchanged", async () => {
+        for (const [script, text] of textInEachScript) {
+          const noteId = await first.mutation(api.memories.write, { botId: characters.botId, text });
+          const stored = (await notesOf(characters)).find((note) => note._id === noteId)?.text;
+          assert.equal(stored, text, script);
+          await first.mutation(api.memories.remove, { noteId });
+        }
+      });
+      const longestDescription = `${"token:".repeat(1332)}tok x`;
+      const checkStarted = performance.now();
+      await first.mutation(api.bots.setProfile, { botId: characters.botId, name: "memory-characters", title: "", description: longestDescription });
+      const longestDescriptionMs = Math.round(performance.now() - checkStarted);
+      const quickWriteStarted = performance.now();
+      await first.mutation(api.bots.setProfile, { botId: characters.botId, name: "memory-characters", title: "", description: "short" });
+      const quickWriteMs = Math.round(performance.now() - quickWriteStarted);
+      await check(`the slowest text of the longest length costs a real mutation less than 100 ms over a short one (${longestDescription.length} characters took ${longestDescriptionMs} ms, a short text ${quickWriteMs} ms)`, () => {
+        assert.ok(longestDescriptionMs - quickWriteMs < 100);
       });
       await check("the real backend refuses a zero-width space, a BOM, a soft hyphen, a tag character, a variation selector, a Hangul filler, and a braille blank from each owner's writer", async () => {
         for (const text of ["a\u200Bb", "a\u200Cb", "a\u200Db", "a\uFEFFb", "a\u00ADb", "a\u{E0041}b", "a\u{E0100}b", "a\u3164b", "a\u2800b"]) {
@@ -1805,11 +1908,6 @@ try {
           /Description cannot hold invisible or control characters/,
         );
         assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
-      });
-      await check("the real backend refuses a bare mixed-case key, and a key after a URL", async () => {
-        const key = "aB3".repeat(11);
-        await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text: key }), /looks like/);
-        await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text: `https://x/ ${key}` }), /looks like/);
       });
       const hiddenText = `memory zero width ${nonce}`;
       scripted(hiddenText, [tools(saveCall("a\u200Bb"))]);
