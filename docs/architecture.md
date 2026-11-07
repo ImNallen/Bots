@@ -313,7 +313,7 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Shell | Shell commands |
 | Nothing | No tool |
 
-At the default level, a short list of tools runs without asking, and every other tool asks. So a tool added later asks until someone decides otherwise.
+Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A new effect fails the typecheck until `needsApproval` gives its answer.
 
 A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
 
