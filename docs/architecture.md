@@ -185,6 +185,8 @@ A bot that comes back gets any free slot, the same profile, and a blank page. A 
 
 Each browser belongs to one bot, so every page in it is that bot's. `computerd` keeps one CDP socket per bot and asks Chromium for its targets on every look. The newest page is the current one, so a popup is current until it closes. This takes no events, no window moves, and no state file. After a `computerd` restart, the list rebuilds with pages that have an opener last, so a popup stays current.
 
+A look reads the pages of one browser context, which `PageHome` names. A chat call looks in the default context, and a read-only run's call looks in its own, so neither can land on the other's page. [How a read-only run browses](#how-a-read-only-run-browses) explains the second one.
+
 ### What a page can do to a browser tool
 
 A page cannot hold a browser tool, a desktop, or a bot's queue. The tool always returns, and its hold is released, so the idle stop can run and a ninth bot can take the slot.
@@ -208,7 +210,7 @@ A person who has the screen answers dialogs for themselves, or a take-over could
 
 The rule that the browser holds the truth still applies. None of this keeps state on disk. After a kill, the journal answers `interrupted`, and a new `computerd` finds a frozen page at its next call, through the same deadline and the same close. A dialog that opened with no socket attached sends no event, even after `Page.enable`, so its page takes the same path. A repeat of a frozen call replays its stored result, and it does not touch the page.
 
-A page can still waste up to 60 seconds of a run for each call, and it can use a CPU core until its desktop stops. Same-site pages share a process in Chromium, so a popup that freezes also freezes its opener. The opener stays open behind the new page, and it stays frozen.
+A page can still waste up to 60 seconds of a run for each call. In a chat run it can also use a CPU core until its desktop stops. Same-site pages share a process in Chromium, so a popup that freezes also freezes its opener. The opener stays open behind the new page, and it stays frozen. A logged-out page does not get this far, because a freeze ends its whole context.
 
 We tested these on Chromium 156 in a container, with its sandbox on, using a visible Xvfb display:
 
@@ -247,7 +249,7 @@ A login that a bot passed on stays with the other bots and in the jar, because i
 
 The owner logs in once during a take-over, and every bot on that computer can use the login, whether it is running, stopped, or not created yet. Each browser keeps its own profile, because a profile admits one process, and one process across displays is the shared browser we rejected. So a login moves as cookies, through CDP.
 
-Only what a take-over changed moves. Copying all of a bot's cookies would let an old session in one bot overwrite a newer one in another. `computerd` records a bot's cookies when a take-over opens, compares them when it ends, and merges the difference into a jar. A logout is an entry with a past expiry and no value, so one code path sets and deletes. Only a control stream takes part, so a bot's own browsing never moves anything.
+Only what a take-over changed moves. Copying all of a bot's cookies would let an old session in one bot overwrite a newer one in another. `computerd` records a bot's cookies when a take-over opens, compares them when it ends, and merges the difference into a jar. A logout is an entry with a past expiry and no value, so one code path sets and deletes. Only a control stream takes part, so a bot's own browsing never moves anything. Its `Storage` calls name no context, so they read and write only the default context, and a logged-out page's cookies never reach the jar.
 
 `apps/computerd/src/logins.ts` owns all of this, and nothing else reads its files. They are mode 0600 in `/var/lib/computerd`, which the `browser` user cannot read.
 
@@ -335,7 +337,7 @@ x11vnc reports nothing back to the page, so the typing box decides what it can s
 
 The display has a US keyboard. x11vnc adds any other character to a free key, and a real VM ran out after 17 or 18 different ones in one session, whatever the typing speed. `x11vnc` frees those keys when it exits.
 
-A VM updates after its orchestrator, and an older `computerd` closes its link on a field it does not know. So a watch stream's link message has no mode, and only control carries one. A take-over against an older `computerd` costs a 260 ms link reconnect and fails after 10 seconds, and a watch stream never notices.
+A VM updates after its orchestrator, and an older `computerd` closes its link on a field it does not know. So a watch stream's link message has no mode, and only control carries one. A take-over against an older `computerd` costs a 260 ms link reconnect and fails after 10 seconds, and a watch stream never notices. A read-only run's call has the same problem, and [How a read-only run browses](#how-a-read-only-run-browses) has its answer.
 
 Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
 
@@ -488,7 +490,82 @@ Read-only stops the bot's own tools from changing anything. It is not a sandbox,
 - A URL can carry out what the run holds, which is its assignment, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
 - Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `touchedComputer` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
 - A process that an earlier chat run left in the background keeps running during a routine.
-- Until step 5's logged-out browsing, a read-only run would use the bot's logged-in browser, and a download would land on its computer. Nothing starts a read-only run before then.
+
+### How a read-only run browses
+
+A routine may open any site, and nobody is watching it, so a page it reads must not reach the owner's logins. The owner decided on 2026-11-07 that a routine browses logged out. So a read-only run's browser calls use a Chromium browser context of their own, which starts with no cookies and no storage.
+
+`browsingForCall` in `apps/orchestrator/src/run-logic.ts` is the one place that decides this, and `Link.call` requires its answer. A read-only run's `browser_*` call carries `browsing: { kind: "loggedOut", key: runId }`. Its `read_file` and every chat call carry nothing, so their messages stay byte for byte what they were.
+
+In `computerd`, a `Connection` holds the bot's own `PageHome` and at most one `LoggedOut` record. A `PageHome` holds a context's id, its pages, and the exact parameters for a new page there. Every page lookup and every new page goes through a home, including the page that replaces a frozen one. So a logged-out call has no code path to a page of the bot's own. If its context cannot be made or its downloads cannot be denied, the tool fails.
+
+| What ends the window | Why it holds |
+|---|---|
+| `browsingEnd` from the runner | `finish` sends it before `runs.finish`, so a crash between the two sends it again from the resumed run. A run that never reached the browser sends nothing |
+| A browser call for another key, or a chat call | A bot has one active run, so such a call means that the window's run is over |
+| A page that freezes | The whole context ends, along with any frozen opener, and it opens no replacement. The next call of the run makes a new context with a blank page. If a person has the screen, the window stays, as a page of the bot's own does |
+| 10 minutes with no call | This covers a lost `browsingEnd`, as when `claim` fails a late run and no runner is left to send one. A live run gets here only if a model call or a take-over lasts that long, and its next call then gets a blank page |
+| `computerd` dies, or its socket closes | The context is made with `disposeOnDetach`, so Chromium ends it with the socket. So a restart leaves no window and has no old context to find. The resumed run's next call makes a new one with the same key |
+| The desktop stops | The browser and everything in it stop. Nothing about a window holds a desktop, so the idle stop runs as usual |
+
+The journal keys a call by its call id, not by this key. So a repeat of a call replays its stored result and makes no context, even after the window ended, and a call that `computerd` died during answers `interrupted`.
+
+Chromium exits when its last page closes, in any context, and a real browser did this at a dispose when the bot had no page of its own. So `computerd` makes sure of a page in the default context before it makes or ends a logged-out one.
+
+The window is on the bot's display, on top, so the owner can watch. It looks like any other Chromium window, with no mark that it is logged out. A take-over can start during a run, and the run then waits before its next tool. What a person types in that window stays in that window. A login made there does not move and goes when the window ends.
+
+#### An older `computerd`
+
+A VM updates after its orchestrator, and an older `computerd` closes its link on a field it does not know. On its own, that does not end the call. A real build of the commit before this field closed its link 79 times in 20 seconds, because the link retried the same call at each reconnect, and the call never returned. So a logged-out call whose link closes with the code for an invalid message ends as `unavailable` at once. The same build then closed its link once and journaled nothing, and a chat call on it worked. A chat call that shares the link retries as it does at any drop.
+
+#### What limits a page, and what does not
+
+These hold for a page in a read-only run:
+
+- It reaches none of the owner's logins, so a form that posts to a site the owner uses arrives with no cookie.
+- It cannot put a login in the jar. What it sets, and what a person types there, stays in its context and goes with it.
+- It cannot download. `Browser.setDownloadBehavior` denies this for the context, including from a script and on an endless stream. A chat run's downloads are unchanged.
+- It cannot move the bot's own page, which a chat run finds where it was left.
+
+These do not change:
+
+- A URL can still carry out what the run holds, which is its assignment, `about`, notes, and any file it read. A page can ask for this, and the rule against it is an instruction to a model.
+- A page can make its visitor do anything that needs no login. A `GET` or a form runs from the owner's home IP address.
+- A person who takes over during a run can type a password into a hostile page, because the window looks like any other. Nothing moves, but the page reads what was typed.
+- A chat run still browses logged in, and its downloads still land.
+- This is a rule in the orchestrator and in `computerd`, and a bot has root on its VM. A process that a chat run left behind can reach CDP on loopback, and it can drive any context.
+
+#### Link addresses
+
+A read-only run has no click, so it follows a link by opening its address. A logged-out snapshot shows `[3] a "Top story" to: https://...`, for `http` and `https` only, cut at 200 characters with `...` on the end. A `javascript:`, `mailto:`, or `data:` link shows no address, because `browser_navigate` could not open one.
+
+A chat run's snapshot shows no addresses. A logged-in page's links can hold reset tokens and signed URLs, which the model and `runEvents` would then hold, and the URL line shows only the page that the bot already opened. A chat run can click a link instead. A logged-out page has none of the owner's logins, so its links hold none of the owner's secrets.
+
+Addresses make a snapshot larger. On real pages, on 2026-11-07, with a snapshot's output capped at 32 KiB:
+
+| Page | Links | Bytes without | Bytes with |
+|---|---|---|---|
+| Hacker News | 225 | 6,227 | 18,939 |
+| Lobsters | 250 | 6,274 | 19,181 |
+| GitHub trending | 174 | 5,401 | 12,545 |
+| BBC News | 109 | 7,313 | 12,765 |
+| Wikipedia, list of HTTP status codes | 254 | 45,542 | 91,536 |
+
+The Wikipedia page passed the cap in both cases, so the model reads the same 32 KiB of a page that is twice as long, and sees less of its text.
+
+We tested these on Chromium 156 in a container, with its sandbox on, a visible Xvfb display, and Xfce's window manager. `scripts/verify-logged-out.ts` repeats the ones marked as such:
+
+| Test | Result |
+|---|---|
+| `Target.getBrowserContexts` | Names `defaultBrowserContextId`, and every target has a `browserContextId` |
+| `Target.setAutoAttach` on the browser's socket | Covers pages in new contexts. A dialog in such a page's first script and in a popup's first script is answered, and the script carries on (repeated) |
+| `window.open` from a logged-out page after a click | The popup stays in the context and is the current page (repeated) |
+| `Target.disposeBrowserContext` on a healthy page, a page in `while(true){}`, and a page with `beforeunload` | Ended within 5 ms, and the browser stayed |
+| A context whose last page closed | The context stays, and it takes a new page |
+| SIGKILL of the real `computerd` during a call on a frozen window | The window was gone when we looked, 1.5 s later. The call answers `interrupted`, and the same key gets a blank page (repeated, with a closed socket) |
+| A context made with `disposeOnDetach: false` | It outlives the socket, which is why this one is not |
+| A dispose when the default context has no page, without the page that `computerd` now opens | The browser exited |
+| A page that burns a core | 0.96 of a core while its window is open, and 0.00 after `browsingEnd` |
 
 ## Where secrets live
 
