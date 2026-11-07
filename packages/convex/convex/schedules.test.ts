@@ -95,7 +95,7 @@ describe("actOnDue", () => {
 describe("runToPurge", () => {
   const NOW = 10 * 24 * 60 * 60 * 1000;
   const OLD = 0;
-  const runs = (...states: RunState[]) => states.map((state, index) => ({ state, index, _creationTime: OLD }));
+  const runs = (...states: RunState[]) => states.map((state, index) => ({ state, index, endedAt: OLD }));
   const many = (count: number, state: RunState) => Array.from({ length: count }, () => state);
 
   it("keeps the newest 20 runs", () => {
@@ -114,10 +114,15 @@ describe("runToPurge", () => {
     expect(runToPurge(runs(DONE, DONE, DONE, ...many(17, FAILED), DONE), NOW)?.index).toBe(20);
   });
 
-  it("keeps every run from the last 24 hours, because the daily limit counts them", () => {
-    const today = many(49, DONE).map((state, index) => ({ state, index, _creationTime: NOW - 1000 }));
+  it("keeps every run until a day after it ended, because the daily limit counts them", () => {
+    const today = many(49, DONE).map((state, index) => ({ state, index, endedAt: NOW - 1000 }));
     expect(runToPurge(today, NOW)).toBeNull();
     expect(runToPurge(today, NOW + 24 * 60 * 60 * 1000)?.index).toBe(20);
+  });
+
+  it("keeps a run that has not ended", () => {
+    const active = many(25, DONE).map((state, index) => ({ state, index }));
+    expect(runToPurge(active, NOW)).toBeNull();
   });
 
   it("purges a failed run past the 20 even when finished runs are older", () => {
