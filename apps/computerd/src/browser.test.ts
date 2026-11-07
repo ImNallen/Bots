@@ -659,6 +659,17 @@ describe("browser", () => {
       expect(chromium.sent.some((entry) => entry.method === "Page.stopLoading")).toBe(false);
     });
 
+    it("does not close a page under a person who takes the screen during the probe", async () => {
+      let asked = 0;
+      const browser = quick({ personHasScreen: () => (asked += 1) > 1 });
+      await look(browser, "a");
+      chromium.freezePage();
+      const result = await look(browser, "a");
+      expect(result.output).toContain("owner has the screen");
+      expect(closed()).toEqual([]);
+      expect(chromium.sent.some((entry) => entry.method === "Page.stopLoading")).toBe(true);
+    });
+
     it("counts a page that is already gone as closed", async () => {
       const browser = quick();
       await look(browser, "a");
