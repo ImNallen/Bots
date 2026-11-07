@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actOnDue, decideFire, instructionProblem, runToPurge, type FireDecision } from "./schedules.js";
+import { actOnDue, decideFire, INSTRUCTION_PROBLEMS, instructionProblem, runToPurge, type FireDecision } from "./schedules.js";
 import type { RunState } from "./validators.js";
 
 const NOW = 1_000_000_000;
@@ -140,6 +140,8 @@ describe("instructionProblem", () => {
     expect(instructionProblem("")).toBe("empty");
     expect(instructionProblem("z ".repeat(1001))).toBe("tooLong");
     expect(instructionProblem("a‮b")).toBe("characters");
+    expect(instructionProblem("a\u200Bb")).toBe("characters");
     expect(instructionProblem("my password=hunter2")).toBe("secret");
+    expect(INSTRUCTION_PROBLEMS.characters).toMatch(/invisible or control characters/);
   });
 });

@@ -9,29 +9,76 @@ const MAX_NOTE_LENGTH = 500;
 const MAX_ABOUT_LENGTH = 2000;
 const MAX_DESCRIPTION_LENGTH = 8000;
 
-const TOKEN_RUN_WITHOUT_SLASH_OR_DOT = /[A-Za-z0-9_+=-]{32,}/;
+const found = (pattern: RegExp) => (text: string) => pattern.test(text);
 
-const SECRET_SHAPES: readonly RegExp[] = [
-  /-----BEGIN [A-Z0-9 ]+-----/,
-  /\b(?:sk|rk|ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|hf|npm|tskey|dop_v1|shpat)[-_][A-Za-z0-9_-]{16,}/,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
-  /\bAIza[0-9A-Za-z_-]{30,}/,
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-  /\b(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)\s*[:=]\s*\S+/i,
-  /\/\/[^\s/:@]+:[^\s/@]+@/,
-  /\b\d{13,19}\b|\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}\b|\b\d{4}[ -]\d{6}[ -]\d{4,5}\b/,
-  TOKEN_RUN_WITHOUT_SLASH_OR_DOT,
-];
+const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)/;
 
-export function looksLikeSecret(text: string): boolean {
-  return SECRET_SHAPES.some((shape) => shape.test(text));
+const CARD_IN_GROUPS_OF_FOUR = /\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}/;
+const CARD_OF_THIRTEEN_DIGITS = /\d{4}[ -]\d{4}[ -]\d{5}/;
+const CARD_LIKE_AMERICAN_EXPRESS = /\d{4}[ -]\d{6}[ -]\d{4,5}/;
+const UNBROKEN_DIGITS = /\d{13,19}/;
+const CARD_DIGITS = new RegExp(String.raw`\b(?:${[CARD_IN_GROUPS_OF_FOUR, CARD_OF_THIRTEEN_DIGITS, CARD_LIKE_AMERICAN_EXPRESS, UNBROKEN_DIGITS].map((layout) => layout.source).join("|")})\b`, "g");
+
+function passesLuhn(digits: string): boolean {
+  const sum = [...digits].reverse().reduce((total, character, index) => {
+    const digit = Number(character);
+    return total + (index % 2 === 0 ? digit : digit > 4 ? digit * 2 - 9 : digit * 2);
+  }, 0);
+  return sum % 10 === 0;
 }
 
-const REFUSED_CHARACTERS: readonly RegExp[] = [
-  /[^\P{Cc}\n\t]/u,
-  /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/,
-  /[\u2028\u2029]/,
-];
+function holdsCardNumber(text: string): boolean {
+  return (text.match(CARD_DIGITS) ?? []).some((digits) => passesLuhn(digits.replace(/[ -]/g, "")));
+}
+
+const SHORTEST_MIXED_CASE_KEY = 32;
+const LONGEST_URL_SCHEME = SHORTEST_MIXED_CASE_KEY - 1;
+const URL_UP_TO_ITS_QUERY = new RegExp(String.raw`\b[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/[^\s?#]*`, "gi");
+const LONG_RUN_OF_LETTERS_AND_DIGITS = new RegExp(`[A-Za-z0-9]{${SHORTEST_MIXED_CASE_KEY},}`, "g");
+
+function holdsMixedCaseKey(text: string): boolean {
+  const runs = text.replace(URL_UP_TO_ITS_QUERY, " ").match(LONG_RUN_OF_LETTERS_AND_DIGITS) ?? [];
+  return runs.some((run) => /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run));
+}
+
+export const SECRET_SHAPES = {
+  pemHeader: found(/-----BEGIN [A-Z0-9 ]+-----/),
+  openAiStyleKey: found(/\b[sr]k-[A-Za-z0-9_-]{16,}/),
+  stripeKey: found(/\b[sr]k_[A-Za-z0-9_-]{16,}/),
+  githubToken: found(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_-]{16,}/),
+  gitlabToken: found(/\bglpat-[A-Za-z0-9_-]{16,}/),
+  slackToken: found(/\bxox[abprs]-[A-Za-z0-9_-]{16,}/),
+  huggingFaceToken: found(/\bhf_[A-Za-z0-9_-]{16,}/),
+  npmToken: found(/\bnpm_[A-Za-z0-9_-]{16,}/),
+  tailscaleKey: found(/\btskey-[A-Za-z0-9_-]{16,}/),
+  digitalOceanToken: found(/\bdop_v1_[A-Za-z0-9_-]{16,}/),
+  shopifyToken: found(/\bshpat_[A-Za-z0-9_-]{16,}/),
+  awsAccessKey: found(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/),
+  googleApiKey: found(/\bAIza[0-9A-Za-z_-]{30,}/),
+  jwt: found(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/),
+  pairWithEquals: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*=\s*\S+`, "i")),
+  pairWithColon: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*:\s*\S+[ \t]*$`, "im")),
+  urlPassword: found(/\/\/[^\s/:@]+:[^\s/@]+@/),
+  urlQuerySecret: found(/[?&#](?:token|key|api_key|apikey|secret|password|access_token|auth|sig|signature)=[^\s&#]{16,}/i),
+  slackWebhook: found(/\bhooks\.slack\.com\/services\/[A-Za-z0-9]/i),
+  discordWebhook: found(/\bdiscord(?:app)?\.com\/api\/webhooks\/[0-9]/i),
+  cardNumber: holdsCardNumber,
+  mixedCaseKey: holdsMixedCaseKey,
+} satisfies Record<string, (text: string) => boolean>;
+
+export function looksLikeSecret(text: string): boolean {
+  return Object.values(SECRET_SHAPES).some((holds) => holds(text));
+}
+
+const EMOJI_JOINER = /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/u;
+const EMOJI_STYLE = /(?<=\p{Extended_Pictographic})\uFE0F/u;
+const KEYCAP_STYLE = /(?<=[0-9#*])\uFE0F(?=\u20E3)/u;
+const LETTER_JOINER = /(?<=\p{L})[\u200C\u200D]|[\u200C\u200D](?=\p{L})/u;
+const JOINER_AFTER_A_MARK = /(?<=\p{M})[\u200C\u200D]/u;
+
+const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER, JOINER_AFTER_A_MARK].map((pattern) => pattern.source).join("|"), "gu");
+
+const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800]/u];
 
 export type TextProblem = "tooLong" | "characters" | "secret";
 
@@ -39,7 +86,8 @@ export function textProblem(text: string, max: number): TextProblem | null {
   if (text.length > max) {
     return "tooLong";
   }
-  if (REFUSED_CHARACTERS.some((characters) => characters.test(text))) {
+  const refusable = text.replace(INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS, "");
+  if (REFUSED_CHARACTERS.some((characters) => characters.test(refusable))) {
     return "characters";
   }
   return looksLikeSecret(text) ? "secret" : null;
@@ -54,8 +102,8 @@ export const NOTE_PROBLEMS: Record<NoteProblem, { owner: string; bot: string }> 
     bot: `A note cannot be longer than ${MAX_NOTE_LENGTH} characters, so nothing was saved. Save a shorter note.`,
   },
   characters: {
-    owner: "A note cannot hold control characters or characters that change the text's direction",
-    bot: "A note cannot hold control characters or characters that change the text's direction, so nothing was saved. Save it without them.",
+    owner: "A note cannot hold invisible or control characters. Pasted text can carry them, so type it again",
+    bot: "A note cannot hold invisible or control characters, so nothing was saved. Save it without them.",
   },
   secret: {
     owner: "This looks like a password, key, token, or card number, so it was not saved. For a login, take over the bot's screen",
@@ -78,7 +126,7 @@ export function parseNote(args: {
 
 const ABOUT_PROBLEMS: Record<TextProblem, string> = {
   tooLong: `About you cannot be longer than ${MAX_ABOUT_LENGTH.toLocaleString("en-US")} characters`,
-  characters: "About you cannot hold control characters or characters that change the text's direction",
+  characters: "About you cannot hold invisible or control characters. Pasted text can carry them, so type it again",
   secret: "This looks like a password, key, token, or card number, so it was not saved. All of your bots read this text",
 };
 
@@ -97,8 +145,8 @@ export const DESCRIPTION_PROBLEMS: Record<TextProblem, { owner: string; bot: str
     bot: `Your description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters, so nothing changed. Write a shorter one.`,
   },
   characters: {
-    owner: "Description cannot hold control characters or characters that change the text's direction",
-    bot: "Your description cannot hold control characters or characters that change the text's direction, so nothing changed. Write it without them.",
+    owner: "Description cannot hold invisible or control characters. Pasted text can carry them, so type it again",
+    bot: "Your description cannot hold invisible or control characters, so nothing changed. Write it without them.",
   },
   secret: {
     owner: "This looks like a password, key, token, or card number, so the description was not saved. For a login, take over the bot's screen",

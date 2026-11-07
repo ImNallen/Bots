@@ -1770,6 +1770,47 @@ try {
         assert.deepEqual(await notesOf(secrets), []);
       });
 
+      const characters = await chatAt("memory-characters", "nothing");
+      const storable = [
+        "https://docs.example.com/guides/how-to-configure-release-notes-for-teams",
+        `https://docs.google.com/document/d/${"1Bx9".repeat(11)}/edit`,
+        "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}",
+        "\u2764\uFE0F",
+        "1\uFE0F\u20E3",
+        "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645",
+        "\u0915\u094D\u200D\u0937",
+      ];
+      await check("the real backend stores a long URL, a document id in a URL, a family emoji, a keycap, and Persian and Hindi with their joiners", async () => {
+        for (const text of storable) {
+          await first.mutation(api.memories.write, { botId: characters.botId, text });
+        }
+        assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
+      });
+      await check("the real backend refuses a zero-width space, a BOM, a soft hyphen, a tag character, a variation selector, a Hangul filler, and a braille blank from each owner's writer", async () => {
+        for (const text of ["a\u200Bb", "a\uFEFFb", "a\u00ADb", "a\u{E0041}b", "a\u{E0100}b", "a\u3164b", "a\u2800b"]) {
+          await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text }), /A note cannot hold invisible or control characters/);
+        }
+        await assertRejected(first.mutation(api.users.setAbout, { about: "a\u200Bb" }), /About you cannot hold invisible or control characters/);
+        await assertRejected(
+          first.mutation(api.bots.setProfile, { botId: characters.botId, name: "memory-characters", title: "", description: "a\u200Bb" }),
+          /Description cannot hold invisible or control characters/,
+        );
+        assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
+      });
+      await check("the real backend refuses a bare mixed-case key, and a key after a URL", async () => {
+        const key = "aB3".repeat(11);
+        await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text: key }), /looks like/);
+        await assertRejected(first.mutation(api.memories.write, { botId: characters.botId, text: `https://x/ ${key}` }), /looks like/);
+      });
+      const hiddenText = `memory zero width ${nonce}`;
+      scripted(hiddenText, [tools(saveCall("a\u200Bb"))]);
+      const hiddenDone = await characters.settled(await characters.send(hiddenText));
+      await check("a bot's save with a zero-width space stores error, says why, and writes nothing", async () => {
+        assert.deepEqual(outcomes(hiddenDone), ["error"]);
+        assert.match(resultsOf(hiddenDone)[0]?.output ?? "", /invisible or control characters/);
+        assert.deepEqual((await textsOf(characters)).toSorted(), storable.toSorted());
+      });
+
       const full = await chatAt("memory-full", "nothing");
       for (let count = 0; count < 40; count += 1) {
         await first.mutation(api.memories.write, { botId: full.botId, text: `note ${count} ${nonce}` });
@@ -2896,6 +2937,7 @@ try {
           ["rule2", "z ".repeat(1001), HOURLY, /2,000 characters/],
           ["rule3", "read a‮b", HOURLY, /control characters/],
           ["rule4", "   ", HOURLY, /needs an instruction/],
+          ["rule6", "read a\u200Bb", HOURLY, /invisible or control characters/],
           ["rule5", "half an hour", { kind: "everyHours", hours: 0.5 }, /not one a routine can have/],
         ];
         for (const [callId, instruction, cadence, expected] of refused) {
