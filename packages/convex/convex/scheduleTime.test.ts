@@ -80,7 +80,7 @@ describe("nextFireAfter", () => {
     expect(nextFireAfter(weekly([6], 9, 0), zone, at)).toBe(Date.UTC(2026, 10, 14, 9));
   });
 
-  it("fires a skipped local time once, on its day, at the instant the clock moved past it", () => {
+  it("fires a skipped local time once, on its day, later by the size of the jump", () => {
     const at = nextFireAfter(weekly([0], 2, 30), "America/New_York", Date.UTC(2027, 2, 13));
     expect(local(at, "America/New_York")).toBe("2027-03-14 03:30");
     expect(local(nextFireAfter(weekly([0], 2, 30), "America/New_York", at + 45_000), "America/New_York")).toBe("2027-03-21 02:30");

@@ -9,8 +9,7 @@ const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frid
 const WEEKDAY_NUMBER: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 const MONDAY_FIRST = [1, 2, 3, 4, 5, 6, 0];
 const WORK_WEEK = [1, 2, 3, 4, 5];
-// Longer than a week, because a local date can repeat or vanish when a zone changes its date line.
-const DAYS_TO_SEARCH = 8;
+const WEEK_PLUS_A_REPEATED_DATE = 8;
 
 function isWhole(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
@@ -62,7 +61,6 @@ function daysInWords(weekdays: readonly number[]): string {
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
-// The card, the panel, and the prompt all read this, so what a person approves and what a bot says cannot differ.
 export function describeCadence(cadence: Cadence, timeZone: string): string {
   switch (cadence.kind) {
     case "weekly":
@@ -110,7 +108,7 @@ function offsetAt(at: number, timeZone: string): number {
   return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second) - Math.floor(at / 1000) * 1000;
 }
 
-// A repeated local time gives its earlier instant, so it fires once. A skipped one gives the instant the clock jumped past it by.
+// A repeated local time gives its earlier instant, so it fires once. A skipped one moves later by the size of the jump.
 function instantOf(args: { year: number; month: number; day: number; hour: number; minute: number; timeZone: string }): number {
   const { year, month, day, hour, minute, timeZone } = args;
   const wall = Date.UTC(year, month - 1, day, hour, minute);
@@ -130,7 +128,7 @@ export function nextFireAfter(cadence: Cadence, timeZone: string, after: number)
       return after + cadence.hours * HOUR_MS;
     case "weekly": {
       const today = wallClock(after, timeZone);
-      for (let ahead = 0; ahead <= DAYS_TO_SEARCH; ahead += 1) {
+      for (let ahead = 0; ahead <= WEEK_PLUS_A_REPEATED_DATE; ahead += 1) {
         const date = new Date(Date.UTC(today.year, today.month - 1, today.day + ahead));
         if (cadence.weekdays.includes(date.getUTCDay())) {
           const at = instantOf({
