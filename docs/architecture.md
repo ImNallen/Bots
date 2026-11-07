@@ -367,7 +367,7 @@ Each writer has one path, and nobody else has a path:
 - `bots.setProfile` is the owner's. It goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user.
 - `description_set` is the bot's. It replaces the whole text, and an empty text clears it. `runs.append` applies the call in its one fenced mutation, as [One mutation writes a note and its result](#one-mutation-writes-a-note-and-its-result) explains, so a kill leaves the change and its result together or neither. `toolInvocation` leaves the call out, so passing it to `Link.call` fails the typecheck, and it works with the computer off.
 
-Both paths use `parseDescription`, which allows up to 8,000 characters and uses the same `textProblem` as a note. It refuses control and text-direction characters and anything that `looksLikeSecret` refuses. A call that breaks a rule stores the outcome `error` and writes nothing.
+Both paths use `parseDescription`, which allows up to 8,000 characters and uses the same `textProblem` as a note. It refuses invisible and control characters and anything that `looksLikeSecret` refuses. A call that breaks a rule stores the outcome `error` and writes nothing.
 
 A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. These things limit that:
 
@@ -409,7 +409,7 @@ Notes live in Convex and not on the VM. A bot has root on its VM, so anything th
 | The owner stops the run just before the call | A result with outcome `cancelled`, because the mutation reads the owner's request itself | No change to any note, even though the runner hears of the stop only at its next heartbeat |
 | `claim` gives up after 5 attempts | `closeUnansweredCalls` recorded `unavailable` | No note, and the next run's prompt holds the true list |
 
-A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no control or text-direction characters, and nothing that `looksLikeSecret` refuses.
+A note that breaks a rule is a tool result with outcome `error`, not a failed mutation, because a model caused it. The result tells the bot what to do next. For something that looks like a secret, it says to ask the owner to take over and log in. One function, `parseNote`, holds the rules for both writers: at most 500 characters, at most 40 notes for a bot, no invisible or control characters, and nothing that `looksLikeSecret` refuses.
 
 ### What limits an injected save
 
@@ -430,7 +430,36 @@ The card covers one run. The thread replays on every model call, so an injection
 
 At the Shell and Nothing levels, no save shows a card. The owner chose those levels, and the chat row and the panel are the only signs.
 
-`looksLikeSecret` catches careless saves and nothing more. It refuses PEM headers, known key prefixes, JWTs, `password=` pairs, card numbers, and any unbroken run of 32 or more token characters. "My password is hunter2" passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
+`looksLikeSecret` catches careless saves and nothing more. `SECRET_SHAPES` in `memories.ts` is one table, with one named row for each shape it refuses:
+
+- PEM headers, known key prefixes, and JWTs.
+- `longToken`, which is a run of 32 or more characters from `A-Za-z0-9_+=/.~-` that no row of `ORDINARY_LONG_TOKENS` calls ordinary.
+- `longValueAfterEqualsOrColon`, which is a value after `=` or `:`, under any name. The value has 16 or more of those characters, holds a digit and a letter, and does not read as words.
+- `longValueAfterFlag`, which is the same value after a flag whose name ends in a secret word, such as `--token` or `--client-secret`.
+- `longValueAfterSecretWord`, which is the same value after `Bearer`, `Basic`, `key`, or a secret's name, with an optional `is`, such as `Token <value>` or `my api key is <value>`.
+- `pairWithEquals`, which is a short value after a secret's name and `=`. After an underscore, as in `FOO_PASSWORD=hunter2`, the value must hold a digit and a letter, so `max_token=100` and `FOO_TOKEN=changeme` pass.
+- `pairWithColon`, which is a short value after a secret's name and `:`, when one token follows and then the line ends. So "Rotate the API key: ask the owner first." passes. A quote after the name is no pair for a short value, so `"token": null` passes.
+- A URL with a password, and Slack and Discord webhook URLs.
+- A URL query parameter with a secret's name and a value of 16 or more characters, which catches a percent-encoded value and a value with no digit.
+- A number in a card's layout that passes the Luhn check. A date range also holds 13 to 19 digits, so other layouts do not count.
+
+A long token is refused by default, and a short named list says what passes. An earlier version listed what counts as a secret and passed everything else. It failed review twice, because the names cannot be listed. All 96 of its regressions held a long token value, under names such as `SECRET_KEY`, `JSESSIONID`, and `fooToken`. So the check reads the value and needs no list of names for a long one.
+
+`ORDINARY_LONG_TOKENS` has these rows:
+
+- `onlySeparators`, such as a line of dashes.
+- `words`. Every character that is not a letter or a digit separates segments. Each segment is digits, or letters in one case or camelCase with up to 4 digits at the end, and it is under 32 letters. At least 2 segments hold letters. So `state-of-the-art-end-to-end-release-note-summarizer`, `packages/convex/convex/memories.test.ts`, and `/usr/local/lib/python3.11/site-packages` pass. Without the case rule, 0.30% of 32 character base64url tokens pass, and with it 0.0105% do.
+- `uuid`, in its 8-4-4-4-12 form.
+- `gitHash`, which is exactly 40 or 64 lowercase hex characters. 32 hex characters stay refused, because that is a common token length.
+- `digits`, which the card row then judges.
+
+A value after `=` or `:` that is exactly a 40 or 64 hex hash or a UUID passes under `commit`, `hash`, `sha`, `sha1`, `sha256`, `digest`, `rev`, `revision`, `etag`, `id`, or `uuid`. Any other name refuses it.
+
+The token rows skip each URL's scheme, host, numeric port, and path, because document ids look like tokens. A URL's path holds only `A-Za-z0-9._~/-`, so any other character ends the URL and the check reads what follows, including a query and a fragment. A URL with a user, or with a run of 32 or more characters where its host belongs, is read as text, because a key can sit there, as in `https://<key>@github.com`. A URL inside a query is still a URL, so its path is skipped too.
+
+"My password is hunter2" passes, so the tool description and the prompt carry the rule as well. A refused call's arguments are still in `runEvents`, because the assistant turn is stored before anything can refuse it. So a refused secret stays in the thread and reaches the model on each later call, until the bot is deleted.
+
+`textProblem` also refuses invisible characters, because every later model call reads text that a person cannot check by eye. It refuses Unicode's `Default_Ignorable_Code_Point` property, every format character (`Cf`), private-use characters (`Co`), unassigned code points (`Cn`), the braille blank, U+2D7F, and U+1D159, along with control characters and the line and paragraph separators. U+2D7F and U+1D159 draw as nothing in most fonts, and a real mutation stored hidden text in each of them. An unassigned code point that Unicode reserves for emoji stays allowed, because an emoji newer than the backend's tables looks unassigned. Three uses of invisible characters stay allowed, because real text needs them. A zero-width joiner can sit between two emoji, as in a family emoji. U+FE0F can follow an emoji or sit inside a keycap. U+200C and U+200D can sit beside a character of a script that uses them, such as Persian or Hindi, or after that character's combining marks, and not in Latin text. The check runs only at a write, so a stored row keeps what it holds.
 
 ## How a read-only run works
 
