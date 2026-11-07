@@ -177,7 +177,7 @@ async function callModel(args: {
         botName: profile.name,
         botId: claim.botId,
         title: profile.title,
-        assignment: profile.assignment,
+        description: profile.description,
         about: profile.about,
         notes: profile.notes,
         timeZone: profile.timeZone,
@@ -245,9 +245,14 @@ async function runTool(args: {
     }
   }
   if (isMemoryInvocation(invocation)) {
-    return invocation.name === "memory_save"
-      ? { kind: "memorySave", toolCallId: call.id, text: invocation.args.text }
-      : { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
+    switch (invocation.name) {
+      case "memory_save":
+        return { kind: "memorySave", toolCallId: call.id, text: invocation.args.text };
+      case "memory_forget":
+        return { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
+      case "description_set":
+        return { kind: "descriptionSet", toolCallId: call.id, text: invocation.args.text };
+    }
   }
   if (isScheduleInvocation(invocation)) {
     return { kind: "scheduleCreate", toolCallId: call.id, ...invocation.args };

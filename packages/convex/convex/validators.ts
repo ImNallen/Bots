@@ -66,6 +66,7 @@ export const noteSource = v.union(
 export const memoryCall = v.union(
   v.object({ kind: v.literal("memorySave"), toolCallId: v.string(), text: v.string() }),
   v.object({ kind: v.literal("memoryForget"), toolCallId: v.string(), noteId: v.string() }),
+  v.object({ kind: v.literal("descriptionSet"), toolCallId: v.string(), text: v.string() }),
 );
 
 export type MemoryCall = Infer<typeof memoryCall>;

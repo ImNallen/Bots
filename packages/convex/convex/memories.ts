@@ -7,6 +7,7 @@ import type { MemoryCall, RunEventBody } from "./validators.js";
 const MAX_NOTES = 40;
 const MAX_NOTE_LENGTH = 500;
 const MAX_ABOUT_LENGTH = 2000;
+const MAX_DESCRIPTION_LENGTH = 8000;
 
 const TOKEN_RUN_WITHOUT_SLASH_OR_DOT = /[A-Za-z0-9_+=-]{32,}/;
 
@@ -90,6 +91,34 @@ export function parseAbout(about: string): string | undefined {
   return text === "" ? undefined : text;
 }
 
+export const DESCRIPTION_PROBLEMS: Record<TextProblem, { owner: string; bot: string }> = {
+  tooLong: {
+    owner: `Description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters`,
+    bot: `Your description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters, so nothing changed. Write a shorter one.`,
+  },
+  characters: {
+    owner: "Description cannot hold control characters or characters that change the text's direction",
+    bot: "Your description cannot hold control characters or characters that change the text's direction, so nothing changed. Write it without them.",
+  },
+  secret: {
+    owner: "This looks like a password, key, token, or card number, so the description was not saved. For a login, take over the bot's screen",
+    bot: "This looks like a password, key, token, or card number, so nothing changed. Do not try again. For a login, ask your owner to take over and log in.",
+  },
+};
+
+export function parseDescription(description: string): { kind: "ok"; text: string | undefined } | { kind: "refused"; problem: TextProblem } {
+  const text = description.trim();
+  const problem = textProblem(text, MAX_DESCRIPTION_LENGTH);
+  if (problem !== null) {
+    return { kind: "refused", problem };
+  }
+  return { kind: "ok", text: text === "" ? undefined : text };
+}
+
+function descriptionChangeRecord(previous: string | undefined, next: string | undefined): string {
+  return ["Updated your description.", "[Previous description]", previous ?? "", "[End of previous description]", "[New description]", next ?? "", "[End of new description]"].join("\n");
+}
+
 export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"memories">[]> {
   return await ctx.db
     .query("memories")
@@ -97,27 +126,32 @@ export async function notesOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"me
     .collect();
 }
 
-const TOOL_OF_CALL: Record<MemoryCall["kind"], string> = { memorySave: "memory_save", memoryForget: "memory_forget" };
+const WHAT_A_CALL_CHANGES: Record<MemoryCall["kind"], { tool: string; subject: string }> = {
+  memorySave: { tool: "memory_save", subject: "your notes" },
+  memoryForget: { tool: "memory_forget", subject: "your notes" },
+  descriptionSet: { tool: "description_set", subject: "your description" },
+};
 
 export async function applyMemoryCall(
   ctx: MutationCtx,
   run: Doc<"runs">,
   call: MemoryCall,
 ): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
+  const { tool, subject } = WHAT_A_CALL_CHANGES[call.kind];
   const result = (outcome: "ok" | "error" | "cancelled" | "rejected", output: string) => ({
     kind: "toolResult" as const,
     toolCallId: call.toolCallId,
-    name: TOOL_OF_CALL[call.kind],
+    name: tool,
     outcome,
     output,
     truncated: false,
   });
   if (run.capability !== "full") {
-    return result("rejected", "This run is read-only, so it cannot change your notes, and this call did not run.");
+    return result("rejected", `This run is read-only, so it cannot change ${subject}, and this call did not run.`);
   }
   // The runner hears of a stop only at its next heartbeat, so only this transaction can honor one made just now.
   if (run.cancelRequested) {
-    return result("cancelled", "The run was cancelled before this call changed your notes, so it did not run.");
+    return result("cancelled", `The run was cancelled before this call changed ${subject}, so it did not run.`);
   }
   switch (call.kind) {
     case "memorySave": {
@@ -143,6 +177,15 @@ export async function applyMemoryCall(
       }
       await ctx.db.delete(note._id);
       return result("ok", `Forgot note ${note._id}. Its text was: ${note.text}`);
+    }
+    case "descriptionSet": {
+      const parsed = parseDescription(call.text);
+      if (parsed.kind === "refused") {
+        return result("error", DESCRIPTION_PROBLEMS[parsed.problem].bot);
+      }
+      const previous = (await ctx.db.get(run.botId))?.description;
+      await ctx.db.patch(run.botId, { description: parsed.text });
+      return result("ok", descriptionChangeRecord(previous, parsed.text));
     }
   }
 }

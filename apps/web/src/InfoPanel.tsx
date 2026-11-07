@@ -70,14 +70,14 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
           />
         </label>
         <label className="profile-field">
-          <span>Assignment</span>
+          <span>Description</span>
           <textarea
-            className="field profile-assignment"
+            className="field profile-textarea"
             rows={6}
-            placeholder="What it should do in every conversation"
+            placeholder="Who this bot is and what it does, in a few sentences"
             readOnly={saving}
-            value={shown.assignment}
-            onChange={(event) => edit("assignment", event.target.value)}
+            value={shown.description}
+            onChange={(event) => edit("description", event.target.value)}
           />
         </label>
         <div className="confirm-actions">
@@ -92,7 +92,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
         </p>
       ) : (
         <p className="panel-note" role="status">
-          {save.kind === "saved" ? "Saved. " : ""}Only you can change this. A change reaches the bot at its next step.
+          {save.kind === "saved" ? "Saved. " : ""}Only you can change the name and title. You and the bot can change the description. A change reaches the bot at its next step.
         </p>
       )}
     </>

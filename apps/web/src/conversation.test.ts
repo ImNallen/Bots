@@ -143,12 +143,17 @@ describe("conversationItems", () => {
       ["browser_press", "Pressed a key"],
       ["memory_save", "Saved a note"],
       ["memory_forget", "Forgot a note"],
+      ["description_set", "Updated its description"],
     ])("words %s in plain language", (name, words) => {
       expect(row(name, {}).name).toBe(words);
     });
 
     it("shows a saved note's text in its row, so every save is visible in the chat", () => {
       expect(row("memory_save", { text: "Out on Fridays." }).summary).toBe("Out on Fridays.");
+    });
+
+    it("shows a description's new text in its row, so every change is visible in the chat", () => {
+      expect(row("description_set", { text: "A scout for release notes." }).summary).toBe("A scout for release notes.");
     });
 
     it("shows a save that the rules refused as failed, with the reason in its output", () => {
@@ -227,6 +232,10 @@ describe("conversationItems", () => {
         title: "Forget this note?",
         arguments: [{ label: null, value: "note1" }],
       });
+      expect(askOf("description_set", { text: "A scout.\nIt reads notes." })).toMatchObject({
+        title: "Update this description?",
+        arguments: [{ label: null, value: "A scout.\nIt reads notes." }],
+      });
     });
 
     it("keeps each argument apart and keeps a string's line breaks", () => {
@@ -291,6 +300,7 @@ describe("conversationItems", () => {
         only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [{ id: "c1", name, arguments: "{}" }])] })]), "status").text;
       expect(running("memory_save")).toBe("Saving a note");
       expect(running("memory_forget")).toBe("Forgetting a note");
+      expect(running("description_set")).toBe("Updating its description");
     });
 
     it("names the first call of the newest turn with no result", () => {

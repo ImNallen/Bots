@@ -182,7 +182,7 @@ describe("the Activity page's rows", () => {
     });
 
     it("carries the bot's look, the times, and blocked, and nothing else of the bot", () => {
-      const shown = row({ bot: { ...bot, assignment: "private" } as typeof bot, blocked: true });
+      const shown = row({ bot: { ...bot, description: "private" } as typeof bot, blocked: true });
       expect(shown).toMatchObject({ bot, createdAt: NOW, endedAt: NOW + 5, blocked: true });
       expect(JSON.stringify(shown)).not.toContain("private");
     });

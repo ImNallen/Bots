@@ -84,6 +84,7 @@ async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody
   switch (body.kind) {
     case "memorySave":
     case "memoryForget":
+    case "descriptionSet":
       return await applyMemoryCall(ctx, run, body);
     case "scheduleCreate":
       return await applyScheduleCreate(ctx, run, body);

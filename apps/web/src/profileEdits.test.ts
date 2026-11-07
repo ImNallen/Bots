@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { hasChanges, savedProfile, shownProfile, withEdit } from "./profileEdits.ts";
 
-const saved = savedProfile({ name: "Ada", title: "Scout", assignment: "Watch the news." });
+const saved = savedProfile({ name: "Ada", title: "Scout", description: "Watch the news." });
 
 describe("savedProfile", () => {
-  it("shows an absent title and assignment as empty fields", () => {
-    expect(savedProfile({ name: "Ada" })).toEqual({ name: "Ada", title: "", assignment: "" });
+  it("shows an absent title and description as empty fields", () => {
+    expect(savedProfile({ name: "Ada" })).toEqual({ name: "Ada", title: "", description: "" });
   });
 });
 
@@ -16,15 +16,15 @@ describe("edits against a live profile", () => {
   });
 
   it("keeps what the person typed when a live update changes the same field", () => {
-    const edits = withEdit({ saved, edits: {}, field: "assignment", value: "Mine, unsaved." });
-    const live = { ...saved, assignment: "Written in another tab." };
-    expect(shownProfile(live, edits).assignment).toBe("Mine, unsaved.");
+    const edits = withEdit({ saved, edits: {}, field: "description", value: "Mine, unsaved." });
+    const live = { ...saved, description: "Written in another tab." };
+    expect(shownProfile(live, edits).description).toBe("Mine, unsaved.");
   });
 
   it("lets a live update reach a field the person did not touch", () => {
-    const edits = withEdit({ saved, edits: {}, field: "assignment", value: "Mine, unsaved." });
+    const edits = withEdit({ saved, edits: {}, field: "description", value: "Mine, unsaved." });
     const live = { ...saved, title: "Lead" };
-    expect(shownProfile(live, edits)).toEqual({ name: "Ada", title: "Lead", assignment: "Mine, unsaved." });
+    expect(shownProfile(live, edits)).toEqual({ name: "Ada", title: "Lead", description: "Mine, unsaved." });
   });
 
   it("has no changes once the person types the saved value back, so that field follows live updates again", () => {

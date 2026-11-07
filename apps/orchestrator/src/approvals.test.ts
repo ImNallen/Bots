@@ -16,10 +16,11 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
   browser_press: { everything: true, outside: true, shell: false, nothing: false },
   memory_save: { everything: true, outside: false, shell: false, nothing: false },
   memory_forget: { everything: true, outside: false, shell: false, nothing: false },
+  description_set: { everything: true, outside: false, shell: false, nothing: false },
   schedule_propose: { everything: true, outside: true, shell: true, nothing: true },
 };
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
-const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget"];
+const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set"];
 
 const READS: ToolName[] = ["read_file", "browser_navigate", "browser_snapshot"];
 
@@ -31,9 +32,9 @@ describe("decideTool for a read-only run", () => {
     },
   );
 
-  it("forbids exactly the 8 tools that change something", () => {
+  it("forbids exactly the 9 tools that change something", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, touchedComputer: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "schedule_propose"]);
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 });
 
@@ -81,7 +82,7 @@ describe("decideTool for a full run", () => {
   });
 
   it("also asks for the memory tools at outside after a computer tool", () => {
-    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "schedule_propose"]);
+    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 
   it("asks only for shell and a routine at shell", () => {

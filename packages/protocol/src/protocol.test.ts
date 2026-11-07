@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, expectTypeOf } from "vitest";
 import {
   OUTPUT_CAP_BYTES,
   callIdToFileStem,
@@ -15,6 +15,7 @@ import {
   toolEffect,
   toolInvocation,
   type ToolEffect,
+  type ToolInvocation,
   type ToolName,
 } from "./index.ts";
 
@@ -228,6 +229,7 @@ describe("parseToolCall", () => {
       "browser_press",
       "memory_save",
       "memory_forget",
+      "description_set",
       "schedule_propose",
     ]);
     for (const tool of toolDefinitions) {
@@ -259,6 +261,7 @@ describe("toolEffect", () => {
       browser_press: "changesOutside",
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
+      description_set: "changesMemory",
       schedule_propose: "changesSchedule",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
@@ -291,6 +294,22 @@ describe("memory tools", () => {
     expect(isMemoryInvocation({ name: "memory_save", args: { text: "a" } })).toBe(true);
     expect(isMemoryInvocation({ name: "memory_forget", args: { id: "a" } })).toBe(true);
     expect(isMemoryInvocation({ name: "read_file", args: { path: "a" } })).toBe(false);
+  });
+
+  it("parses a description call, and an empty text is a valid call that clears it", () => {
+    expect(parseToolCall({ name: "description_set", arguments: '{"text":""}' })).toEqual({
+      kind: "ok",
+      invocation: { name: "description_set", args: { text: "" } },
+    });
+    expect(parseToolCall({ name: "description_set", arguments: "{}" }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "description_set", arguments: '{"text":"a","id":"b"}' }).kind).toBe("invalid");
+    expect(isMemoryInvocation({ name: "description_set", args: { text: "a" } })).toBe(true);
+  });
+
+  it("keeps a description call off the link, in the wire type and in the static type", () => {
+    expectTypeOf<Extract<ToolInvocation, { name: "description_set" }>>().toBeNever();
+    expect(toolInvocation.safeParse({ name: "description_set", args: { text: "a" } }).success).toBe(false);
+    expect(isComputerTool("description_set")).toBe(false);
   });
 
   it("stays off the link's wire type, so a computerd closes the link on a routine call", () => {

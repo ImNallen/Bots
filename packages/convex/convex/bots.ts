@@ -171,7 +171,7 @@ export const setCharacter = mutation({
 });
 
 export const setProfile = mutation({
-  args: { botId: v.id("bots"), name: v.string(), title: v.string(), assignment: v.string() },
+  args: { botId: v.id("bots"), name: v.string(), title: v.string(), description: v.string() },
   handler: async (ctx, { botId, ...fields }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, parseBotProfile(fields));
@@ -187,7 +187,7 @@ export const promptFor = query({
     return {
       name: bot?.name ?? "Bot",
       title: bot?.title,
-      assignment: bot?.assignment,
+      description: bot?.description,
       about: owner?.about,
       notes: promptNotes(await notesOf(ctx, botId)),
       timeZone: owner?.timeZone,

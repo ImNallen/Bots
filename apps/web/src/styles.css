@@ -1691,7 +1691,7 @@ button.card-row:hover {
   font-size: 12px;
 }
 
-.profile-assignment {
+.profile-textarea {
   padding-block: 7px;
   line-height: 1.4;
   resize: vertical;
