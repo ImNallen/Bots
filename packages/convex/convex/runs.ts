@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx } from "./_generated/server.js";
@@ -227,6 +228,17 @@ export const finish = mutation({
     await requireService(ctx);
     const run = await requireLease(ctx, { runId, leaseToken });
     await endRun(ctx, run, finishedState({ run, state, now: Date.now() }));
+  },
+});
+
+export const eventsPage = query({
+  args: { runId: v.id("runs"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { runId, paginationOpts }) => {
+    await requireService(ctx);
+    return await ctx.db
+      .query("runEvents")
+      .withIndex("by_run_seq", (q) => q.eq("runId", runId))
+      .paginate(paginationOpts);
   },
 });
 

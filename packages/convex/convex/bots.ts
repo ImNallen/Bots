@@ -6,7 +6,7 @@ import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
-import { isActive } from "./threads.js";
+import { activeRunOfBot, chatThreadOf } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
 const DEFAULT_APPROVAL_LEVEL = "outside";
@@ -98,11 +98,8 @@ export const overview = query({
     const budget = { bytes: OVERVIEW_EVENT_BYTES };
     const rows = [];
     for (const bot of bots) {
-      const thread = await ctx.db
-        .query("threads")
-        .withIndex("by_bot", (q) => q.eq("botId", bot._id))
-        .first();
-      const run =
+      const thread = await chatThreadOf(ctx, bot._id);
+      const chatRun =
         thread === null
           ? null
           : await ctx.db
@@ -110,7 +107,10 @@ export const overview = query({
               .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
               .order("desc")
               .first();
-      const newestEvents = run === null ? [] : await newestEventsOfRun(ctx, run._id, budget);
+      // A routine's run is what the bot is doing now, but only the chat holds what the bot last said to its owner.
+      const run = (await activeRunOfBot(ctx, bot._id)) ?? chatRun;
+      const chatEvents = chatRun === null ? [] : await newestEventsOfRun(ctx, chatRun._id, budget);
+      const newestEvents = run === null || run._id === chatRun?._id ? chatEvents : await newestEventsOfRun(ctx, run._id, budget);
       rows.push({
         lastRunAt: run?._creationTime ?? 0,
         row: {
@@ -125,7 +125,7 @@ export const overview = query({
             runState: run?.state ?? null,
             newestEvents,
           }),
-          lastMessage: lastMessageOf(newestEvents),
+          lastMessage: lastMessageOf(chatEvents),
         },
       });
     }
@@ -249,18 +249,14 @@ export const remove = mutation({
     if ((bot.takeoverUntil ?? 0) > Date.now()) {
       throw new ConvexError("Give back this bot's screen before you delete it");
     }
-    for await (const thread of ctx.db.query("threads").withIndex("by_bot", (q) => q.eq("botId", botId))) {
-      const latest = await ctx.db
-        .query("runs")
-        .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
-        .order("desc")
-        .first();
-      if (latest !== null && isActive(latest.state)) {
-        throw new ConvexError("This bot has an active run. Stop it before you delete it");
-      }
+    if ((await activeRunOfBot(ctx, botId)) !== null) {
+      throw new ConvexError("This bot has an active run. Stop it before you delete it");
     }
     for (const note of await notesOf(ctx, botId)) {
       await ctx.db.delete(note._id);
+    }
+    for await (const schedule of ctx.db.query("schedules").withIndex("by_bot", (q) => q.eq("botId", botId))) {
+      await ctx.db.delete(schedule._id);
     }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });
@@ -275,7 +271,8 @@ export const remove = mutation({
   },
 });
 
-// Each step takes one batch and schedules the next. A thread goes last, so a thread that is gone means its whole history is.
+// Each step takes one batch and schedules the next, walking every thread of the bot. A thread goes last, so a thread that is gone
+// means its whole history is.
 export const purge = internalMutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }): Promise<void> => {

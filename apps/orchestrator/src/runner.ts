@@ -112,14 +112,17 @@ function holdLease(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Claim }):
   return { lost: lost.signal, cancel: cancel.signal, stop: () => clearInterval(interval) };
 }
 
-async function loadThreadEvents(service: Service, threadId: Id<"threads">): Promise<RunEvent[]> {
+// A chat run replays its thread. A read-only run reads only its own events, so it holds neither its routine's earlier pages nor the chat.
+async function loadEvents(args: { service: Service; runId: Id<"runs">; claim: Claim }): Promise<RunEvent[]> {
+  const { service, runId, claim } = args;
   const events: RunEvent[] = [];
   let cursor: string | null = null;
   for (;;) {
-    const page: FunctionReturnType<typeof api.threads.eventsPage> = await service.query(api.threads.eventsPage, {
-      threadId,
-      paginationOpts: { numItems: EVENTS_PAGE_ITEMS, cursor, maximumBytesRead: EVENTS_PAGE_BYTES },
-    });
+    const paginationOpts = { numItems: EVENTS_PAGE_ITEMS, cursor, maximumBytesRead: EVENTS_PAGE_BYTES };
+    const page: FunctionReturnType<typeof api.threads.eventsPage> =
+      claim.capability === "full"
+        ? await service.query(api.threads.eventsPage, { threadId: claim.threadId, paginationOpts })
+        : await service.query(api.runs.eventsPage, { runId, paginationOpts });
     events.push(...page.page);
     if (page.isDone) {
       return events;
@@ -271,7 +274,7 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   const { deps, runId, claim, lease } = args;
   const { service, log } = deps;
   const { leaseToken } = claim;
-  const events = await loadThreadEvents(service, claim.threadId);
+  const events = await loadEvents({ service, runId, claim });
   let nextSeq = claim.nextSeq;
 
   async function append(body: AppendBody): Promise<void> {

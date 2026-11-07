@@ -1,7 +1,7 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
 import type { RunState } from "./validators.js";
 
@@ -24,6 +24,31 @@ export function isActive(state: RunState): boolean {
   return state.kind === "queued" || state.kind === "running";
 }
 
+export async function chatThreadOf(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"threads"> | null> {
+  return await ctx.db
+    .query("threads")
+    .withIndex("by_bot", (q) => q.eq("botId", botId).eq("kind", undefined))
+    .first();
+}
+
+export async function ensureChatThread(ctx: MutationCtx, bot: { botId: Id<"bots">; ownerId: Id<"users"> }): Promise<Id<"threads">> {
+  return (await chatThreadOf(ctx, bot.botId))?._id ?? (await ctx.db.insert("threads", { botId: bot.botId, ownerId: bot.ownerId }));
+}
+
+// A bot has one browser, so it has one active run across all of its threads.
+export async function activeRunOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"runs"> | null> {
+  for (const kind of ["running", "queued"] as const) {
+    const run = await ctx.db
+      .query("runs")
+      .withIndex("by_bot_state", (q) => q.eq("botId", botId).eq("state.kind", kind))
+      .first();
+    if (run !== null) {
+      return run;
+    }
+  }
+  return null;
+}
+
 export const ensureForBot = mutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {
@@ -32,11 +57,7 @@ export const ensureForBot = mutation({
     if (user === null || bot === null || bot.ownerId !== user._id) {
       throw new ConvexError("Bot not found");
     }
-    const existing = await ctx.db
-      .query("threads")
-      .withIndex("by_bot", (q) => q.eq("botId", botId))
-      .first();
-    return existing?._id ?? (await ctx.db.insert("threads", { botId, ownerId: user._id }));
+    return await ensureChatThread(ctx, { botId, ownerId: user._id });
   },
 });
 
@@ -58,13 +79,8 @@ export const send = mutation({
     if (trimmed.length > MAX_MESSAGE_LENGTH) {
       throw new ConvexError(`Message cannot be longer than ${MAX_MESSAGE_LENGTH} characters`);
     }
-    const latest = await ctx.db
-      .query("runs")
-      .withIndex("by_thread", (q) => q.eq("threadId", threadId))
-      .order("desc")
-      .first();
-    if (latest !== null && isActive(latest.state)) {
-      throw new ConvexError("This thread already has an active run");
+    if ((await activeRunOfBot(ctx, thread.botId)) !== null) {
+      throw new ConvexError("This bot already has an active run");
     }
     const runId = await ctx.db.insert("runs", {
       threadId,
