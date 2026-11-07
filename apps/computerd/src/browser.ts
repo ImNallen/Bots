@@ -52,10 +52,12 @@ export type Cdp = {
 
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
-// This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
-const SNAPSHOT_SCRIPT = `(() => {
+// This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field. Only a logged-out page
+// shows link addresses. A logged-in page's links can hold reset tokens and signed URLs, and a chat run can click a link instead.
+const SNAPSHOT_SCRIPT = (showLinks: boolean) => `(() => {
   const MAX_TEXT = 120;
   const MAX_URL = 300;
+  const MAX_LINK = 200;
   const INTERACTIVE = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=menuitem],[role=tab],[contenteditable=true],[onclick]';
   const visible = (e) => {
     const r = e.getBoundingClientRect();
@@ -64,6 +66,12 @@ const SNAPSHOT_SCRIPT = `(() => {
     return s.visibility !== 'hidden' && s.display !== 'none';
   };
   const clean = (t) => (t ?? '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT);
+  const address = (e) => {
+    if (!${showLinks} || !e.matches('a[href]')) return '';
+    const href = String(e.href);
+    if (!/^https?:/i.test(href)) return '';
+    return ' to: ' + (href.length > MAX_LINK ? href.slice(0, MAX_LINK) + '...' : href);
+  };
   const label = (e) => clean(e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt') || e.innerText || e.getAttribute('name') || '');
   document.querySelectorAll('[data-bots-ref]').forEach((e) => e.removeAttribute('data-bots-ref'));
   let next = 1;
@@ -86,7 +94,7 @@ const SNAPSHOT_SCRIPT = `(() => {
       else if (e.tagName === 'TEXTAREA' || (e.tagName === 'INPUT' && !['password', 'checkbox', 'radio', 'submit', 'button', 'file'].includes((e.getAttribute('type') || 'text').toLowerCase()))) value = e.value ? ' value: ' + clean(e.value) : '';
       else if (e.tagName === 'INPUT' && (e.getAttribute('type') || '').toLowerCase() === 'password' && e.value) value = ' value: hidden';
       else if (e.checked !== undefined && ['checkbox', 'radio'].includes((e.getAttribute('type') || '').toLowerCase())) value = e.checked ? ' checked' : ' not checked';
-      lines.push('[' + ref + '] ' + kind + ' "' + label(e) + '"' + value);
+      lines.push('[' + ref + '] ' + kind + ' "' + label(e) + '"' + value + address(e));
       if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName)) return;
       if (e.matches('a[href]')) return;
     }
@@ -449,7 +457,7 @@ export function createBrowser(args: {
       }
       after = latest;
     }
-    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT));
+    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT(home === connection.loggedOut)));
   }
 
   async function closeIfFrozen(botId: string, connection: Connection, home: PageHome | null): Promise<PageFate> {
