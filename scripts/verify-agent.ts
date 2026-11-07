@@ -16,7 +16,7 @@ import { OUTPUT_CAP_BYTES,
   type OrchestratorMessage,
   type ToolResult, toolDefinitions } from "@bots/protocol";
 import { ConvexHttpClient } from "convex/browser";
-import type { FunctionArgs, FunctionReturnType } from "convex/server";
+import { makeFunctionReference, type FunctionArgs, type FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
 import { WebSocket, WebSocketServer } from "ws";
 import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
@@ -112,14 +112,14 @@ type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string 
 type FakeRequest = {
   at: number;
   authorization: string;
-  body: { messages: FakeMessage[]; tools: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean };
+  body: { messages: FakeMessage[]; tools?: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean };
 };
 
 type FakeToolCall = { id?: string; name: string; arguments: string };
 
 type Reply =
   | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string }
-  | { kind: "tools"; calls: FakeToolCall[]; delivery: "pieces" | "whole" }
+  | { kind: "tools"; calls: FakeToolCall[]; delivery: "pieces" | "whole"; text?: string; promptTokens?: number }
   | { kind: "stall"; partial: string }
   | { kind: "status"; status: number; retryAfter?: string };
 
@@ -141,6 +141,18 @@ function unansweredToolCall(messages: FakeMessage[]): string | null {
     }
   }
   return null;
+}
+
+// Mistral's own validator refuses these orders, and a serving request must end on a user or tool message.
+function refusedOrder(messages: FakeMessage[]): string | null {
+  for (const [index, message] of messages.entries()) {
+    const previous = messages[index - 1]?.role;
+    if ((previous === "user" && message.role !== "assistant") || (previous === "tool" && message.role !== "assistant" && message.role !== "tool")) {
+      return `${previous} then ${message.role}`;
+    }
+  }
+  const last = messages.at(-1)?.role;
+  return last === "user" || last === "tool" ? null : `ends on ${last}`;
 }
 
 function latestUserText(messages: FakeMessage[]): string {
@@ -170,11 +182,11 @@ function chunk(delta: unknown, finishReason: string | null = null): unknown {
   };
 }
 
-async function finishSse(response: ServerResponse, finishReason: string, model = "fake-model"): Promise<void> {
+async function finishSse(response: ServerResponse, finishReason: string, model = "fake-model", promptTokens = 11): Promise<void> {
   await writeSse(response, {
     ...(chunk({ content: "" }, finishReason) as object),
     model,
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    usage: { prompt_tokens: promptTokens, completion_tokens: 7, total_tokens: promptTokens + 7 },
   });
   await writeSse(response, "[DONE]");
   response.end();
@@ -205,6 +217,9 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
       return;
     }
     case "tools": {
+      if (reply.text !== undefined) {
+        await writeSse(response, chunk({ role: "assistant", content: reply.text }));
+      }
       for (const [index, call] of reply.calls.entries()) {
         const id = call.id ?? `f${randomBytes(4).toString("hex")}`;
         if (reply.delivery === "whole") {
@@ -220,7 +235,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
           await writeSse(response, chunk({ tool_calls: [{ id: "null", index, function: { arguments: piece } }] }));
         }
       }
-      await finishSse(response, "tool_calls");
+      await finishSse(response, "tool_calls", undefined, reply.promptTokens);
       return;
     }
     case "stall":
@@ -250,7 +265,7 @@ function startFakeMistral() {
       requests.set(text, seen);
       const script = scripts.get(text);
       const reply: Reply =
-        script === undefined || unansweredToolCall(body.messages) !== null
+        script === undefined || unansweredToolCall(body.messages) !== null || refusedOrder(body.messages) !== null
           ? { kind: "status", status: 400 }
           : script({ attempt: seen.length, toolResults: toolMessagesAfterLatestUser(body.messages) });
       streamReply(response, reply).catch(() => response.destroy());
@@ -844,11 +859,11 @@ try {
       assert.equal(body?.parallel_tool_calls, false);
       assert.equal(body?.stream, true);
       assert.deepEqual(
-        body?.tools.map((tool) => tool.function.name),
+        body?.tools?.map((tool) => tool.function.name),
         toolDefinitions.map((tool) => tool.function.name),
       );
-      assert.ok(body?.tools.some((tool) => tool.function.name === "shell"));
-      assert.ok(body?.tools.some((tool) => tool.function.name === "browser_navigate"));
+      assert.ok(body?.tools?.some((tool) => tool.function.name === "shell"));
+      assert.ok(body?.tools?.some((tool) => tool.function.name === "browser_navigate"));
     });
     await check("the model call carries the decrypted key", () => {
       assert.equal(requests[0]?.authorization, `Bearer ${MISTRAL_KEY}`);
@@ -1575,6 +1590,593 @@ try {
       }
       for (const chat of chats) {
         await first.mutation(api.bots.remove, { botId: chat.botId }).catch(() => {});
+      }
+    }
+  });
+
+  await scenario("readonly. a read-only run reads, rejects the rest, and reports in the chat", async () => {
+    await putKey(MISTRAL_KEY);
+    await second.mutation(api.users.ensureCurrent, {});
+    const DEADLINE_REASON = "The routine ran past its 30 minute limit";
+    const NO_REPORT_REASON = "The routine ended without a report";
+    const READ_TOOLS = ["browser_navigate", "browser_snapshot", "read_file"];
+    const FORBIDDEN = ["browser_click", "browser_press", "browser_type", "memory_forget", "memory_save", "shell", "write_file"];
+    const USAGE = { promptTokens: 1, completionTokens: 1 };
+    const chats: Chat[] = [];
+    const chatFor = async (client: ConvexHttpClient, name: string, level?: "everything" | "outside" | "shell" | "nothing") => {
+      const chat = await newChat({ client, name, level });
+      chats.push(chat);
+      return chat;
+    };
+    type Routine = { scheduleId: Id<"schedules">; threadId: Id<"threads"> };
+    const adminRun = <T>(fn: string, args: object): T => {
+      const result = runConvex(["run", fn, JSON.stringify(args)]);
+      assert.ok(result.kind === "ok", `convex run ${fn} failed`);
+      return JSON.parse(result.stdout) as T;
+    };
+    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<Routine>("schedules:createForCheck", { botId, instruction });
+    const fire = (routine: Routine, deadlineAt?: number) =>
+      adminRun<Id<"runs">>("schedules:fireForCheck", { scheduleId: routine.scheduleId, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
+    const call = (name: string, args: object): FakeToolCall => ({ name, arguments: JSON.stringify(args) });
+    const readCall = (path: string) => call("read_file", { path });
+    const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
+    const runOf = async (chat: Chat, routine: Routine, runId: Id<"runs">) =>
+      (await chat.client.query(api.threads.timeline, { threadId: routine.threadId })).runs.find((run) => run._id === runId);
+    const ended = (chat: Chat, routine: Routine, runId: Id<"runs">, timeoutMs = 90_000) =>
+      waitFor({
+        description: `read-only run ${runId} to end`,
+        timeoutMs,
+        intervalMs: 100,
+        probe: async () => {
+          const run = await runOf(chat, routine, runId);
+          return run !== undefined && TERMINAL.includes(run.state.kind) ? run : null;
+        },
+      });
+    const reportsIn = async (client: ConvexHttpClient, threadId: Id<"threads">) => {
+      const { runs } = await client.query(api.threads.timeline, { threadId });
+      return runs.flatMap(bodiesOf).filter((body) => body.kind === "routineReport");
+    };
+    const rowsOf = (table: string) => {
+      const rows = runConvex(["data", table, "--limit", "1000", "--format", "jsonLines"]);
+      assert.ok(rows.kind === "ok", `convex data ${table} failed`);
+      return rows.stdout.split("\n").filter((line) => line !== "");
+    };
+    const runRow = (runId: string) => {
+      const row = rowsOf("runs")
+        .map((line) => JSON.parse(line) as { _id: string; trigger: string; capability: string; endedAt?: number; cancelRequested: boolean })
+        .find((candidate) => candidate._id === runId);
+      assert.ok(row !== undefined, `no row for ${runId}`);
+      return row;
+    };
+    const inJournal = (runId: Id<"runs">, toolCallId: string | undefined) =>
+      shellIn(mainContainer.id, `ls ${JOURNAL_DIR}`).includes(callIdToFileStem(`${runId}:${toolCallId}`));
+    const callIdOf = (run: TimelineRun, name: string) =>
+      turnsOf(run)
+        .flatMap((turn) => turn.toolCalls)
+        .find((entry) => entry.name === name)?.id;
+    const asAgent = (command: string) => shellIn(mainContainer.id, `sudo -n -u agent timeout 20 bash -c '${command}'`);
+    const prepareWorkspace = (chat: Chat, command: string) => asAgent(`mkdir -p /workspace/${chat.botId} && cd /workspace/${chat.botId} && ${command}`);
+    const release = (chat: Chat, name: string) => asAgent(`echo released > /workspace/${chat.botId}/${name}`);
+    const systemOf = (request: FakeRequest | undefined) => String(request?.body.messages[0]?.content);
+    const offeredBy = (request: FakeRequest | undefined) => request?.body.tools?.map((tool) => tool.function.name).toSorted();
+    const claimManually = async (runId: Id<"runs">) => {
+      const claimed = await service.mutation(api.runs.claim, { runId });
+      assert.ok(claimed.kind === "claimed", "the claim was refused");
+      return claimed;
+    };
+    const manualTurn = (text: string): Body => ({ kind: "assistantTurn", text, toolCalls: [], usage: USAGE, model: "manual" });
+    const rowOf = async (botId: Id<"bots">) => (await first.query(api.bots.overview, {})).find((row) => row._id === botId);
+
+    try {
+      await check("neither a user's token nor the service token can reach what makes a read-only run", async () => {
+        for (const client of [first, second, service, anonymous]) {
+          for (const name of ["schedules:createForCheck", "schedules:fireForCheck"]) {
+            await assertRejected(client.mutation(makeFunctionReference<"mutation">(name), {}), /Could not find public function/);
+          }
+        }
+      });
+
+      const rejecting = await chatFor(first, "readonly-reject");
+      const savedText = `note to keep ${nonce}`;
+      const saveText = `readonly save ${nonce}`;
+      fake.script(saveText, ({ toolResults }) =>
+        toolResults.length === 0 ? tools(call("memory_save", { text: savedText })) : { kind: "text", text: "saved" },
+      );
+      const saveRun = await rejecting.settled(await rejecting.send(saveText));
+      await check("a message makes a full run with trigger user", () => {
+        const row = runRow(saveRun._id);
+        assert.equal(row.trigger, "user");
+        assert.equal(row.capability, "full");
+      });
+      const notesBefore = (await first.query(api.memories.list, { botId: rejecting.botId }))?.notes ?? [];
+      const rejectInstruction = `readonly reject ${nonce}`;
+      const rejectReport = `rejected report ${nonce}`;
+      const rejectRoutine = newRoutine(rejecting.botId, rejectInstruction);
+      prepareWorkspace(rejecting, "mkfifo hold.fifo");
+      fake.script(rejectInstruction, ({ toolResults }) =>
+        toolResults.length === 0
+          ? tools(
+              shellCall("echo ran >> shell-ran.txt"),
+              readCall("hold.fifo"),
+              call("write_file", { path: "file-ran.txt", content: "ran" }),
+              call("browser_click", { ref: 1 }),
+              call("browser_type", { ref: 1, text: "ran" }),
+              call("browser_press", { key: "Enter" }),
+              call("memory_save", { text: `planted ${nonce}` }),
+              call("memory_forget", { id: notesBefore[0]?._id ?? "" }),
+            )
+          : { kind: "text", text: rejectReport },
+      );
+      const rejectRun = fire(rejectRoutine);
+      const held = await waitFor({
+        description: "the turn to be stored, with its read held open",
+        probe: async () => {
+          const run = await runOf(rejecting, rejectRoutine, rejectRun);
+          return run !== undefined && resultsOf(run).length === 1 && inJournal(rejectRun, callIdOf(run, "read_file")) ? run : null;
+        },
+      });
+      await killOrchestrator();
+      await check("a SIGKILL lands between the turn and the rest of its results", () => {
+        assert.equal(turnsOf(held).length, 1);
+        assert.deepEqual(resultsOf(held).map((result) => [result.name, result.outcome]), [["shell", "rejected"]]);
+      });
+      release(rejecting, "hold.fifo");
+      await startOrchestrator();
+      const rejected = await ended(rejecting, rejectRoutine, rejectRun, 120_000);
+      const rejectedResults = resultsOf(rejected).filter((result) => result.name !== "read_file");
+      await check("all 7 forbidden tools in one turn each store one rejected result, also after the resume", () => {
+        assert.deepEqual(rejectedResults.map((result) => result.name).toSorted(), FORBIDDEN);
+        assert.deepEqual([...new Set(rejectedResults.map((result) => result.outcome))], ["rejected"]);
+      });
+      await check("the read in that turn ran once and kept its result", () => {
+        const reads = resultsOf(rejected).filter((result) => result.name === "read_file");
+        assert.equal(reads.length, 1);
+        assert.equal(reads[0]?.outcome, "ok");
+        assert.match(reads[0]?.output ?? "", /released/);
+      });
+      await check("computerd's journal has the read and no entry for any forbidden tool", () => {
+        assert.ok(inJournal(rejectRun, callIdOf(rejected, "read_file")));
+        for (const name of FORBIDDEN) {
+          assert.ok(!inJournal(rejectRun, callIdOf(rejected, name)), `${name} reached the journal`);
+        }
+        assert.deepEqual(linesOf({ container: mainContainer.id, path: workspaceFile(rejecting, "shell-ran.txt") }), []);
+        assert.deepEqual(linesOf({ container: mainContainer.id, path: workspaceFile(rejecting, "file-ran.txt") }), []);
+      });
+      await check("no note changed", async () => {
+        const notesAfter = (await first.query(api.memories.list, { botId: rejecting.botId }))?.notes ?? [];
+        assert.deepEqual(notesAfter, notesBefore);
+      });
+      const rejectRequests = fake.requests(rejectInstruction);
+      await check("the model is offered only the tools that read", () => {
+        assert.deepEqual(offeredBy(rejectRequests[0]), READ_TOOLS);
+      });
+      await check("the read-only prompt leaves out the memory rules and says what the run may do", () => {
+        const system = systemOf(rejectRequests[0]);
+        assert.ok(!system.includes("memory_save") && !system.includes("memory_forget"));
+        assert.match(system, /nobody is watching/i);
+        assert.match(system, /read-only/i);
+        assert.match(system, /any site/i);
+        assert.match(system, /report/i);
+      });
+      await check("after 3 rejected calls the next call offers no tools and asks for the report, and the run ends with it", async () => {
+        assert.equal(rejectRequests.length, 2);
+        assert.equal(rejectRequests[1]?.body.tools, undefined);
+        assert.match(systemOf(rejectRequests[1]), /write your report now/i);
+        assert.equal(rejected.state.kind, "done");
+        assert.deepEqual((await reportsIn(first, rejecting.threadId)).map((report) => report.text), [rejectReport]);
+      });
+      await check("a read-only run's model sees none of the owner's chat", () => {
+        assert.ok(!JSON.stringify(rejectRequests).includes(saveText));
+      });
+
+      const reading = await chatFor(first, "readonly-reads", "everything");
+      const pageText = `raw page ${nonce}`;
+      prepareWorkspace(reading, `echo "${pageText}" > page.txt`);
+      const readInstruction = `readonly reads ${nonce}`;
+      const readReport = `read report ${nonce}`;
+      fake.script(readInstruction, ({ toolResults }) => {
+        switch (toolResults.length) {
+          case 0:
+            return tools(readCall("page.txt"));
+          case 1:
+            return tools(call("browser_navigate", { url: "https://example.com/" }));
+          case 2:
+            return tools(call("browser_snapshot", {}));
+          default:
+            return { kind: "text", text: readReport };
+        }
+      });
+      const readRoutine = newRoutine(reading.botId, readInstruction);
+      const readRun = fire(readRoutine);
+      const readDone = await ended(reading, readRoutine, readRun);
+      await check("read_file returns the file at the level that asks about everything", () => {
+        const [read] = resultsOf(readDone);
+        assert.equal(read?.outcome, "ok");
+        assert.match(read?.output ?? "", new RegExp(pageText));
+        assert.equal(readDone.state.kind, "done");
+      });
+      await check("browser_navigate and browser_snapshot reach computerd, and this image has no desktop to answer them", () => {
+        for (const name of ["browser_navigate", "browser_snapshot"]) {
+          const result = resultsOf(readDone).find((entry) => entry.name === name);
+          assert.equal(result?.outcome, "error");
+          assert.match(result?.output ?? "", /browser action failed/);
+          assert.ok(inJournal(readRun, callIdOf(readDone, name)));
+        }
+      });
+
+      for (const level of ["everything", "outside", "shell", "nothing"] as const) {
+        const leveled = await chatFor(first, `readonly-level-${level}`, level);
+        const instruction = `readonly level ${level} ${nonce}`;
+        fake.script(instruction, ({ toolResults }) =>
+          toolResults.length === 0 ? tools(readCall("none"), shellCall("echo ran >> ran.txt"), call("memory_save", { text: `planted ${nonce}` })) : { kind: "text", text: "done" },
+        );
+        const routine = newRoutine(leveled.botId, instruction);
+        const runId = fire(routine);
+        const done = await ended(leveled, routine, runId);
+        await check(`at the level ${level}, a read-only run never asks and rejects what it may not do`, () => {
+          assert.equal(done.state.kind, "done");
+          assert.deepEqual(resultsOf(done).map((result) => result.outcome).slice(1), ["rejected", "rejected"]);
+          assert.ok(!rowsOf("approvals").some((line) => line.includes(runId)), "an approval row exists");
+          assert.deepEqual(linesOf({ container: mainContainer.id, path: workspaceFile(leveled, "ran.txt") }), []);
+        });
+      }
+
+      const manual = await chatFor(second, "readonly-manual");
+      await second.mutation(api.memories.write, { botId: manual.botId, text: `owner note ${nonce}` });
+      const manualNotes = () => second.query(api.memories.list, { botId: manual.botId });
+      const manualNotesBefore = await manualNotes();
+      const manualRoutine = newRoutine(manual.botId, `readonly manual ${nonce}`);
+      const directRun = fire(manualRoutine);
+      const direct = await claimManually(directRun);
+      const fenced = { runId: directRun, leaseToken: direct.leaseToken };
+      await check("approvals.request with the service token throws for a read-only run", async () => {
+        await assertRejected(service.mutation(api.approvals.request, { runId: directRun, toolCallId: "direct", toolName: "shell" }), /read-only/);
+        assert.ok(!rowsOf("approvals").some((line) => line.includes(directRun)), "an approval row exists");
+      });
+      await check("a memorySave sent straight to runs.append stores rejected and saves nothing", async () => {
+        const stored = await service.mutation(api.runs.append, {
+          ...fenced,
+          expectedSeq: direct.nextSeq,
+          body: { kind: "memorySave", toolCallId: "directsave", text: `planted ${nonce}` },
+        });
+        assert.equal(stored.kind === "toolResult" ? stored.outcome : stored.kind, "rejected");
+        assert.deepEqual(await manualNotes(), manualNotesBefore);
+      });
+      await check("a memoryForget sent straight to runs.append stores rejected and forgets nothing", async () => {
+        const stored = await service.mutation(api.runs.append, {
+          ...fenced,
+          expectedSeq: direct.nextSeq + 1,
+          body: { kind: "memoryForget", toolCallId: "directforget", noteId: manualNotesBefore?.notes[0]?._id ?? "" },
+        });
+        assert.equal(stored.kind === "toolResult" ? stored.outcome : stored.kind, "rejected");
+        assert.deepEqual(await manualNotes(), manualNotesBefore);
+      });
+      await service.mutation(api.runs.append, { ...fenced, expectedSeq: direct.nextSeq + 2, body: manualTurn(`manual report ${nonce}`) });
+      await service.mutation(api.runs.finish, { ...fenced, state: { kind: "done" } });
+      await check("a finished run posts one report in the chat, naming its routine and its run", async () => {
+        assert.deepEqual(await reportsIn(second, manual.threadId), [
+          { kind: "routineReport", scheduleId: manualRoutine.scheduleId, runId: directRun, text: `manual report ${nonce}` },
+        ]);
+      });
+      await check("a resend of finish is refused and posts nothing more", async () => {
+        await assertRejected(service.mutation(api.runs.finish, { ...fenced, state: { kind: "done" } }), /Lease lost/);
+        assert.equal((await reportsIn(second, manual.threadId)).length, 1);
+      });
+      await check("a report's run has trigger schedule and an end time, and by_schedule stays with the routine's own runs", async () => {
+        const { runs } = await second.query(api.threads.timeline, { threadId: manual.threadId });
+        const report = runRow(runs.at(-1)?._id ?? "");
+        assert.equal(report.trigger, "schedule");
+        assert.equal(typeof report.endedAt, "number");
+        assert.equal((report as { scheduleId?: string }).scheduleId, undefined);
+      });
+      await check("finish records the end time", () => {
+        assert.equal(typeof runRow(directRun).endedAt, "number");
+      });
+
+      const emptyRun = fire(manualRoutine);
+      const emptyClaim = await claimManually(emptyRun);
+      await service.mutation(api.runs.append, { runId: emptyRun, leaseToken: emptyClaim.leaseToken, expectedSeq: emptyClaim.nextSeq, body: manualTurn("  ") });
+      await service.mutation(api.runs.finish, { runId: emptyRun, leaseToken: emptyClaim.leaseToken, state: { kind: "done" } });
+      await check("a run that ends with no text fails with a reason and posts nothing", async () => {
+        const run = await ended(manual, manualRoutine, emptyRun);
+        assert.deepEqual(run.state, { kind: "failed", reason: NO_REPORT_REASON });
+        assert.equal((await reportsIn(second, manual.threadId)).length, 1);
+      });
+
+      const longRun = fire(manualRoutine);
+      const longClaim = await claimManually(longRun);
+      const longText = `${"a".repeat(7999)}\u{1F600}${"b".repeat(100)}`;
+      await service.mutation(api.runs.append, { runId: longRun, leaseToken: longClaim.leaseToken, expectedSeq: longClaim.nextSeq, body: manualTurn(longText) });
+      await service.mutation(api.runs.finish, { runId: longRun, leaseToken: longClaim.leaseToken, state: { kind: "done" } });
+      await check("a report is capped at 8,000 characters without splitting an emoji", async () => {
+        const reports = await reportsIn(second, manual.threadId);
+        assert.equal(reports.at(-1)?.text, "a".repeat(7999));
+      });
+
+      const failedRun = fire(manualRoutine);
+      const failedClaim = await claimManually(failedRun);
+      await service.mutation(api.runs.finish, { runId: failedRun, leaseToken: failedClaim.leaseToken, state: { kind: "failed", reason: "It broke." } });
+      await check("a failed run posts no report and keeps its reason in its own thread", async () => {
+        assert.deepEqual((await ended(manual, manualRoutine, failedRun)).state, { kind: "failed", reason: "It broke." });
+        assert.equal((await reportsIn(second, manual.threadId)).length, 2);
+      });
+
+      const deadlineRun = fire(manualRoutine, Date.now() + 2000);
+      const deadlineClaim = await claimManually(deadlineRun);
+      const deadlineFence = { runId: deadlineRun, leaseToken: deadlineClaim.leaseToken };
+      await check("a heartbeat before the deadline does not ask the runner to stop", async () => {
+        assert.deepEqual(await service.mutation(api.runs.heartbeat, deadlineFence), { kind: "renewed", cancelRequested: false });
+      });
+      await sleep(2100);
+      await check("a heartbeat past the deadline asks the runner to stop and does not store a stop", async () => {
+        assert.deepEqual(await service.mutation(api.runs.heartbeat, deadlineFence), { kind: "renewed", cancelRequested: true });
+        assert.equal(runRow(deadlineRun).cancelRequested, false);
+      });
+      await service.mutation(api.runs.finish, { ...deadlineFence, state: { kind: "cancelled" } });
+      await check("a run that the deadline stopped shows as failed with its reason, and posts nothing", async () => {
+        const run = await ended(manual, manualRoutine, deadlineRun);
+        assert.deepEqual(run.state, { kind: "failed", reason: DEADLINE_REASON });
+        assert.equal(run.cancelRequested, false);
+        assert.equal((await reportsIn(second, manual.threadId)).length, 2);
+        assert.equal(typeof runRow(deadlineRun).endedAt, "number");
+      });
+
+      const lateRun = fire(manualRoutine, Date.now() - 1);
+      await check("claim fails a run past its deadline with the same reason", async () => {
+        assert.deepEqual(await service.mutation(api.runs.claim, { runId: lateRun }), { kind: "unavailable" });
+        assert.deepEqual((await ended(manual, manualRoutine, lateRun)).state, { kind: "failed", reason: DEADLINE_REASON });
+        assert.equal(typeof runRow(lateRun).endedAt, "number");
+      });
+
+      const stoppedLate = fire(manualRoutine, Date.now() + 1000);
+      const stoppedLateClaim = await claimManually(stoppedLate);
+      await second.mutation(api.runs.requestCancel, { runId: stoppedLate });
+      await sleep(1100);
+      await service.mutation(api.runs.finish, { runId: stoppedLate, leaseToken: stoppedLateClaim.leaseToken, state: { kind: "cancelled" } });
+      await check("an owner's Stop stays cancelled, even when the deadline has also passed", async () => {
+        assert.deepEqual((await ended(manual, manualRoutine, stoppedLate)).state, { kind: "cancelled" });
+        assert.equal((await reportsIn(second, manual.threadId)).length, 2);
+      });
+
+      const stoppedQueued = fire(manualRoutine);
+      await second.mutation(api.runs.requestCancel, { runId: stoppedQueued });
+      await check("a Stop of a queued read-only run ends it with an end time", async () => {
+        assert.deepEqual((await ended(manual, manualRoutine, stoppedQueued)).state, { kind: "cancelled" });
+        assert.equal(typeof runRow(stoppedQueued).endedAt, "number");
+      });
+
+      await check("a report makes the chat's thread when the owner never opened it", async () => {
+        const botId = await second.mutation(api.bots.create, { name: `readonly-no-chat-${nonce}` });
+        const routine = newRoutine(botId, `readonly no chat ${nonce}`);
+        const runId = fire(routine);
+        const claimed = await claimManually(runId);
+        await service.mutation(api.runs.append, { runId, leaseToken: claimed.leaseToken, expectedSeq: claimed.nextSeq, body: manualTurn(`first report ${nonce}`) });
+        await service.mutation(api.runs.finish, { runId, leaseToken: claimed.leaseToken, state: { kind: "done" } });
+        const threadId = await second.mutation(api.threads.ensureForBot, { botId });
+        assert.notEqual(threadId, routine.threadId);
+        assert.deepEqual((await reportsIn(second, threadId)).map((report) => report.text), [`first report ${nonce}`]);
+        await second.mutation(api.bots.remove, { botId });
+      });
+
+      const timed = await chatFor(first, "readonly-deadline");
+      const timedInstruction = `readonly deadline ${nonce}`;
+      fake.script(timedInstruction, () => ({ kind: "stall", partial: "stuck" }));
+      const timedRoutine = newRoutine(timed.botId, timedInstruction);
+      const timedRun = fire(timedRoutine, Date.now() + 2000);
+      const timedDone = await ended(timed, timedRoutine, timedRun, 30_000);
+      await check("a real runner stops at the deadline, and the run shows as failed with its reason", async () => {
+        assert.deepEqual(timedDone.state, { kind: "failed", reason: DEADLINE_REASON });
+        assert.equal(timedDone.cancelRequested, false);
+        assert.deepEqual(await reportsIn(first, timed.threadId), []);
+      });
+      const stopInstruction = `readonly stop ${nonce}`;
+      fake.script(stopInstruction, () => ({ kind: "stall", partial: "stuck" }));
+      const stopRoutine = newRoutine(timed.botId, stopInstruction);
+      const stopRun = fire(stopRoutine);
+      await waitFor({
+        description: "the stalled stream of the routine",
+        probe: async () => ((await runOf(timed, stopRoutine, stopRun))?.stream?.text === "stuck" ? true : null),
+      });
+      await first.mutation(api.runs.requestCancel, { runId: stopRun });
+      const stopDone = await ended(timed, stopRoutine, stopRun, 30_000);
+      await check("an owner's Stop on a real runner ends the run as cancelled", async () => {
+        assert.deepEqual(stopDone.state, { kind: "cancelled" });
+        assert.equal(stopDone.cancelRequested, true);
+        assert.deepEqual(await reportsIn(first, timed.threadId), []);
+      });
+
+      const limited = await chatFor(first, "readonly-limits");
+      const turnInstruction = `readonly turn limit ${nonce}`;
+      const lastWords = `limit report ${nonce}`;
+      fake.script(turnInstruction, ({ attempt }) =>
+        attempt < 12 ? tools(readCall("none")) : { kind: "tools", delivery: "whole", text: lastWords, calls: [call("browser_navigate", { url: "https://example.com/" })] },
+      );
+      const turnRoutine = newRoutine(limited.botId, turnInstruction);
+      const turnRun = fire(turnRoutine);
+      const turnDone = await ended(limited, turnRoutine, turnRun);
+      const turnRequests = fake.requests(turnInstruction);
+      await check("the 12th turn is the final call, which offers no tools, and only 12 model calls happen", () => {
+        assert.equal(turnRequests.length, 12);
+        assert.deepEqual(offeredBy(turnRequests[10]), READ_TOOLS);
+        assert.equal(turnRequests[11]?.body.tools, undefined);
+        assert.match(systemOf(turnRequests[11]), /write your report now/i);
+      });
+      await check("a final call that still asks for a tool records it as rejected, runs nothing, and reports its text", async () => {
+        assert.equal(turnDone.state.kind, "done");
+        const last = resultsOf(turnDone).at(-1);
+        assert.equal(last?.name, "browser_navigate");
+        assert.equal(last?.outcome, "rejected");
+        assert.ok(!inJournal(turnRun, callIdOf(turnDone, "browser_navigate")));
+        assert.deepEqual((await reportsIn(first, limited.threadId)).map((report) => report.text), [lastWords]);
+      });
+      const tokenInstruction = `readonly token limit ${nonce}`;
+      fake.script(tokenInstruction, ({ attempt }) =>
+        attempt === 1 ? { kind: "tools", delivery: "whole", promptTokens: 150_000, calls: [readCall("none")] } : { kind: "text", text: `token report ${nonce}` },
+      );
+      const tokenRoutine = newRoutine(limited.botId, tokenInstruction);
+      const tokenDone = await ended(limited, tokenRoutine, fire(tokenRoutine));
+      await check("a prompt of 150,000 tokens makes the next call the final one, and the run ends with a report", async () => {
+        const requests = fake.requests(tokenInstruction);
+        assert.equal(requests.length, 2);
+        assert.equal(requests[1]?.body.tools, undefined);
+        assert.equal(tokenDone.state.kind, "done");
+        assert.equal((await reportsIn(first, limited.threadId)).at(-1)?.text, `token report ${nonce}`);
+      });
+      const threeInstruction = `readonly three rejected ${nonce}`;
+      fake.script(threeInstruction, ({ attempt }) => (attempt <= 3 ? tools(shellCall("echo ran >> three.txt")) : { kind: "text", text: `three report ${nonce}` }));
+      const threeRoutine = newRoutine(limited.botId, threeInstruction);
+      const threeDone = await ended(limited, threeRoutine, fire(threeRoutine));
+      await check("3 rejected calls across 3 turns make the next call the final one, and the run ends with a report", async () => {
+        const requests = fake.requests(threeInstruction);
+        assert.equal(requests.length, 4);
+        assert.deepEqual(offeredBy(requests[2]), READ_TOOLS);
+        assert.equal(requests[3]?.body.tools, undefined);
+        assert.equal(threeDone.state.kind, "done");
+        assert.equal((await reportsIn(first, limited.threadId)).at(-1)?.text, `three report ${nonce}`);
+      });
+
+      const busy = await chatFor(first, "readonly-reports");
+      const hello = `owner message ${nonce}`;
+      fake.script(hello, () => ({ kind: "text", text: `owner reply ${nonce}` }));
+      await busy.settled(await busy.send(hello));
+      prepareWorkspace(busy, `echo "${pageText}" > page.txt`);
+      const daily = `readonly daily ${nonce}`;
+      const dailyReport = (index: number) => `daily report ${index} ${nonce}`;
+      fake.script(daily, ({ attempt, toolResults }) =>
+        toolResults.length === 0 ? tools(readCall("page.txt")) : { kind: "text", text: dailyReport(attempt / 2) },
+      );
+      const dailyRoutine = newRoutine(busy.botId, daily);
+      const REPORTS = 40;
+      for (let index = 1; index <= REPORTS; index += 1) {
+        await ended(busy, dailyRoutine, fire(dailyRoutine));
+      }
+      await check("the owner's messages stay on the page after 40 reports", async () => {
+        const { runs, omittedOlder } = await first.query(api.threads.timeline, { threadId: busy.threadId });
+        assert.equal(omittedOlder, false);
+        assert.equal(runs.flatMap(bodiesOf).filter((body) => body.kind === "routineReport").length, REPORTS);
+        const texts = runs.flatMap(bodiesOf).map((body) => (body.kind === "userMessage" ? body.text : ""));
+        assert.ok(texts.includes(hello));
+      });
+      await check("a routine's raw pages never enter the chat's thread", async () => {
+        const { runs } = await first.query(api.threads.timeline, { threadId: busy.threadId });
+        assert.ok(!JSON.stringify(runs).includes(pageText));
+        assert.ok(JSON.stringify(await first.query(api.threads.timeline, { threadId: dailyRoutine.threadId })).includes(pageText));
+      });
+      await check("a read-only run reads its routine's newest 3 reports as data in its prompt, and no owner chat", () => {
+        const newest = fake.requests(daily).at(-2);
+        const system = systemOf(newest);
+        for (const index of [REPORTS - 3, REPORTS - 2, REPORTS - 1]) {
+          assert.ok(system.includes(dailyReport(index)), `report ${index} is missing`);
+        }
+        assert.ok(!system.includes(dailyReport(REPORTS - 4)));
+        const messages = JSON.stringify(newest?.body.messages.slice(1));
+        assert.ok(!messages.includes("daily report"));
+        assert.ok(!JSON.stringify(newest?.body.messages).includes(hello));
+      });
+      const otherInstruction = `readonly other routine ${nonce}`;
+      fake.script(otherInstruction, () => ({ kind: "text", text: `other report ${nonce}` }));
+      const otherRoutine = newRoutine(busy.botId, otherInstruction);
+      await ended(busy, otherRoutine, fire(otherRoutine));
+      await check("another routine of the same bot reads none of those reports", () => {
+        assert.ok(!JSON.stringify(fake.requests(otherInstruction)).includes("daily report"));
+      });
+      const afterReports = `after reports ${nonce}`;
+      fake.script(afterReports, () => ({ kind: "text", text: "read them" }));
+      await busy.settled(await busy.send(afterReports));
+      const chatRequest = fake.requests(afterReports)[0];
+      await check("a chat run's model sees the newest 3 reports, each labelled, and no raw page", () => {
+        const reportMessages = (chatRequest?.body.messages ?? []).filter((message) => message.role === "assistant" && /report/.test(String(message.content)) && String(message.content).includes(nonce));
+        const texts = reportMessages.map((message) => String(message.content));
+        assert.equal(texts.length, 3);
+        assert.ok(texts[0]?.includes(dailyReport(REPORTS - 1)));
+        assert.ok(texts[1]?.includes(dailyReport(REPORTS)));
+        assert.ok(texts[2]?.includes(`other report ${nonce}`));
+        assert.ok(texts.every((text) => /earlier routine/i.test(text)));
+        assert.ok(!JSON.stringify(chatRequest?.body.messages).includes(pageText));
+        assert.ok(JSON.stringify(chatRequest?.body.messages).includes(hello));
+      });
+
+      const unanswered = `unanswered ${nonce}`;
+      fake.script(unanswered, () => ({ kind: "status", status: 400 }));
+      await busy.settled(await busy.send(unanswered));
+      const lateInstruction = `readonly after failure ${nonce}`;
+      fake.script(lateInstruction, () => ({ kind: "text", text: `late report ${nonce}` }));
+      const lateRoutine = newRoutine(busy.botId, lateInstruction);
+      await ended(busy, lateRoutine, fire(lateRoutine));
+      const afterFailure = `after failure ${nonce}`;
+      fake.script(afterFailure, () => ({ kind: "text", text: "fine" }));
+      await busy.settled(await busy.send(afterFailure));
+      await check("a request nobody answered does not look answered by the report after it", () => {
+        const messages = fake.requests(afterFailure)[0]?.body.messages ?? [];
+        const index = messages.findIndex((message) => message.content === unanswered);
+        assert.deepEqual(messages.slice(index).map((message) => message.role), ["user", "assistant", "assistant", "user"]);
+        assert.match(String(messages[index + 1]?.content), /ended before a final reply/);
+        assert.ok(String(messages[index + 2]?.content).includes(`late report ${nonce}`));
+      });
+
+      const removed = await chatFor(first, "readonly-remove");
+      const greeting = `greeting ${nonce}`;
+      const greetingReply = `greeting reply ${nonce}`;
+      fake.script(greeting, () => ({ kind: "text", text: greetingReply }));
+      await removed.settled(await removed.send(greeting));
+      prepareWorkspace(removed, "mkfifo hold.fifo");
+      const holdInstruction = `readonly hold ${nonce}`;
+      const holdReport = `hold report ${nonce}`;
+      fake.script(holdInstruction, ({ toolResults }) => (toolResults.length === 0 ? tools(readCall("hold.fifo")) : { kind: "text", text: holdReport }));
+      const holdRoutine = newRoutine(removed.botId, holdInstruction);
+      const holdRun = fire(holdRoutine);
+      await waitFor({
+        description: "the routine's read to be held open",
+        probe: async () => {
+          const run = await runOf(removed, holdRoutine, holdRun);
+          return run !== undefined && inJournal(holdRun, callIdOf(run, "read_file")) ? true : null;
+        },
+      });
+      await check("an owner's message sent while a routine runs is refused", async () => {
+        await assertRejected(removed.send(`too soon ${nonce}`), /active run/);
+      });
+      await check("a routine's thread takes no message, even after its run ends", async () => {
+        await assertRejected(first.mutation(api.threads.send, { threadId: holdRoutine.threadId, text: "hello" }), /routine/);
+      });
+      await check("the bot list shows the routine's run as the bot's activity, and its last message stays the chat's", async () => {
+        const row = await rowOf(removed.botId);
+        assert.deepEqual(row?.activity, { kind: "running", tool: "read_file" });
+        assert.equal(row?.lastMessage, greetingReply);
+      });
+      await check("bots.remove refuses during a read-only run", async () => {
+        await assertRejected(first.mutation(api.bots.remove, { botId: removed.botId }), /active run/);
+      });
+      await check("opening the chat during a routine returns the chat's thread and not the routine's", async () => {
+        assert.equal(await first.mutation(api.threads.ensureForBot, { botId: removed.botId }), removed.threadId);
+      });
+      release(removed, "hold.fifo");
+      await ended(removed, holdRoutine, holdRun);
+      await check("after the routine ends, the bot is idle and its last message is the report", async () => {
+        const row = await rowOf(removed.botId);
+        assert.deepEqual(row?.activity, { kind: "idle" });
+        assert.equal(row?.lastMessage, holdReport);
+      });
+      const purgedRuns = (await first.query(api.threads.timeline, { threadId: holdRoutine.threadId })).runs.map((run) => run._id);
+      const threadsOfBot = [removed.threadId, holdRoutine.threadId];
+      await first.mutation(api.bots.remove, { botId: removed.botId });
+      await check("after a delete, every thread, run, event, and schedule of that bot goes", async () => {
+        await waitFor({
+          description: "every thread of the bot to be purged",
+          timeoutMs: 60_000,
+          probe: () => (rowsOf("threads").some((line) => line.includes(removed.botId)) ? null : true),
+        });
+        assert.equal(rowsOf("runs").some((line) => line.includes(removed.botId)), false);
+        assert.equal(rowsOf("schedules").some((line) => line.includes(removed.botId)), false);
+        assert.deepEqual(purgedRuns.filter((runId) => rowsOf("runs").some((line) => line.includes(runId))), []);
+        for (const threadId of threadsOfBot) {
+          await assertRejected(first.query(api.threads.timeline, { threadId }), /Thread not found/);
+          const { page } = await service.query(api.threads.eventsPage, { threadId, paginationOpts: { numItems: 8, cursor: null } });
+          assert.deepEqual(page, []);
+        }
+      });
+    } finally {
+      for (const chat of chats) {
+        await chat.client.mutation(api.bots.remove, { botId: chat.botId }).catch(() => {});
       }
     }
   });
