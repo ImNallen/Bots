@@ -28,6 +28,20 @@ describe("ChatItem", () => {
     expect(render({ key: "a", kind: "assistant", text: "hi", streaming: true })).toContain('aria-live="polite"');
   });
 
+  it("labels a routine's report and gives it the same safety rules as other bot output", () => {
+    const html = render({
+      key: "r",
+      kind: "report",
+      text: '**found** <b>raw</b> ![i](https://e.example/i.png) [ok](https://e.example) [bad](javascript:alert(1))',
+    });
+    expect(html).toContain("Routine report");
+    expect(html).toContain("<strong>found</strong>");
+    expect(html).not.toContain("<b>");
+    expect(html).not.toContain("<img");
+    expect(html).toContain('href="https://e.example"');
+    expect(html).not.toContain("javascript:");
+  });
+
   it("shows reasoning collapsed and as plain text", () => {
     const html = render({ key: "r", kind: "reasoning", text: "**maybe**" });
     expect(html).toMatch(/<details[^>]*><summary>Reasoning<\/summary><p>\*\*maybe\*\*<\/p><\/details>/);

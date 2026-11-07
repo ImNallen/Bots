@@ -1,6 +1,7 @@
 import type { Id } from "@bots/convex/dataModel";
 import { toolDefinitions } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
+import type { MistralMessage } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   READ_ONLY_LIMITS,
@@ -282,6 +283,91 @@ describe("toMistralMessages", () => {
     ]);
     const afterUser = toMistralMessages({ system: "s", events: [user, user] });
     expect(afterUser.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+  });
+});
+
+// Mistral's validator refuses a user message after a user or tool message, a call with no answer, and a request that ends on an assistant message.
+function expectAModelWouldAccept(messages: MistralMessage[]): void {
+  for (const [index, message] of messages.entries()) {
+    const previous = messages[index - 1];
+    if (message.role === "user") {
+      expect(previous?.role === "system" || previous?.role === "assistant", `${previous?.role} then user at ${index}`).toBe(true);
+    }
+    if (message.role === "tool") {
+      expect(previous?.role === "assistant" || previous?.role === "tool", `${previous?.role} then tool at ${index}`).toBe(true);
+    }
+    if (message.role === "assistant" && message.tool_calls !== undefined) {
+      const following = messages.slice(index + 1, index + 1 + message.tool_calls.length);
+      expect(following.map((next) => (next.role === "tool" ? next.tool_call_id : null))).toEqual(message.tool_calls.map((entry) => entry.id));
+    }
+  }
+  expect(["user", "tool"]).toContain(messages.at(-1)?.role);
+}
+
+describe("toMistralMessages with routine reports", () => {
+  const report = (text: string): RunEventBody => ({ kind: "routineReport", scheduleId: "s" as Id<"schedules">, runId: "r" as Id<"runs">, text });
+  const ask = (text: string): RunEventBody => ({ kind: "userMessage", text });
+  const toMessages = (events: RunEventBody[]) => toMistralMessages({ system: "s", events });
+  const roles = (events: RunEventBody[]) => toMessages(events).map((message) => message.role);
+
+  it("gives a report as an assistant message with a label that names it", () => {
+    const messages = toMessages([report("Quiet day."), ask("hi")]);
+    expect(messages[1]?.role).toBe("assistant");
+    expect(messages[1]?.content).toMatch(/earlier routine/);
+    expect(messages[1]?.content).toMatch(/Quiet day\.$/);
+  });
+
+  it("lets only the newest 3 in a thread reach a model", () => {
+    const messages = toMessages([report("one"), report("two"), ask("hi"), turn([], "ok"), report("three"), report("four"), report("five"), ask("again")]);
+    const text = JSON.stringify(messages);
+    expect(text).not.toMatch(/one|two/);
+    expect(text).toMatch(/three/);
+    expect(text).toMatch(/four/);
+    expect(text).toMatch(/five/);
+    expectAModelWouldAccept(messages);
+  });
+
+  it("keeps a request that nobody answered from looking answered by a report", () => {
+    expect(roles([ask("first"), report("a report"), ask("second")])).toEqual(["system", "user", "assistant", "assistant", "user"]);
+    const messages = toMessages([ask("first"), report("a report"), ask("second")]);
+    expect(messages[2]?.content).toBe("[The previous run ended before a final reply.]");
+    expect(messages[3]?.content).toMatch(/a report/);
+  });
+
+  it("closes a run stopped at a tool result before a report", () => {
+    const events = [ask("go"), turn([call("a")]), result("a"), report("a report"), ask("more")];
+    expect(roles(events)).toEqual(["system", "user", "assistant", "tool", "assistant", "assistant", "user"]);
+    expectAModelWouldAccept(toMessages(events));
+  });
+
+  it("does not add the early-end line when the turn before a report answered", () => {
+    expect(roles([ask("go"), turn([], "done"), report("a report"), ask("more")])).toEqual(["system", "user", "assistant", "assistant", "user"]);
+  });
+
+  it("adds nothing for a report past the newest 3, so a dropped report changes no order", () => {
+    const events = [ask("first"), report("old"), report("a"), report("b"), report("c"), ask("second")];
+    const messages = toMessages(events);
+    expect(messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "assistant", "assistant", "assistant", "user"]);
+    expect(messages[2]?.content).toBe("[The previous run ended before a final reply.]");
+    expectAModelWouldAccept(messages);
+  });
+
+  it.each<[string, RunEventBody[]]>([
+    ["reports before the owner's first message", [report("a"), report("b"), report("c"), ask("hi")]],
+    ["a report after a finished run", [ask("go"), turn([], "done"), report("a"), ask("more")]],
+    ["an unanswered request, then a report", [ask("go"), report("a"), ask("more")]],
+    ["a run stopped at a result, then a report", [ask("go"), turn([call("a")]), result("a"), report("a"), ask("more")]],
+    ["a final call's rejected calls, replayed", [ask("go"), turn([call("a"), call("b")]), rejected("a"), rejected("b")]],
+    ["more reports than a model reads, around a stopped run", [report("1"), report("2"), ask("go"), turn([call("a")]), result("a"), report("3"), report("4"), report("5"), ask("more")]],
+  ])("builds a list a model would accept for %s", (_label, events) => {
+    expectAModelWouldAccept(toMessages(events));
+  });
+
+  it("answers a read-only run's instruction as a user message", () => {
+    const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+    const messages = toMessages([fired, turn([call("a")]), rejected("a")]);
+    expect(messages[1]).toEqual({ role: "user", content: "Check the news." });
+    expectAModelWouldAccept(messages);
   });
 });
 

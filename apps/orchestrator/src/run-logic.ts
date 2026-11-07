@@ -66,6 +66,8 @@ export function touchedComputer(events: readonly RunEventBody[]): boolean {
 }
 
 const RUN_ENDED_EARLY = "[The previous run ended before a final reply.]";
+const REPORT_LABEL = "[The report of an earlier routine, not an answer to anything above.]";
+const REPORTS_A_MODEL_READS = 3;
 
 function toolResultContent(result: ToolResultBody): string {
   const header = [`outcome: ${result.outcome}`];
@@ -103,23 +105,34 @@ function assistantMessage(turn: AssistantTurn): MistralMessage {
   };
 }
 
+// A cancelled or failed run can end on a tool result or a user message, and the conversation must still alternate.
+function closeUnanswered(messages: MistralMessage[]): void {
+  const previous = messages.at(-1);
+  if (previous?.role === "tool" || previous?.role === "user") {
+    messages.push({ role: "assistant", content: RUN_ENDED_EARLY });
+  }
+}
+
 export function toMistralMessages(args: {
   system: string;
   events: readonly RunEventBody[];
 }): MistralMessage[] {
   const messages: MistralMessage[] = [{ role: "system", content: args.system }];
+  let reportsToSkip = args.events.filter((event) => event.kind === "routineReport").length - REPORTS_A_MODEL_READS;
   for (const event of args.events) {
     switch (event.kind) {
       case "userMessage":
-      case "scheduleFired": {
-        const previous = messages.at(-1);
-        // A cancelled or failed run can end on a tool result or a user message, and the conversation must still alternate.
-        if (previous?.role === "tool" || previous?.role === "user") {
-          messages.push({ role: "assistant", content: RUN_ENDED_EARLY });
-        }
+      case "scheduleFired":
+        closeUnanswered(messages);
         messages.push({ role: "user", content: event.text });
         break;
-      }
+      case "routineReport":
+        reportsToSkip -= 1;
+        if (reportsToSkip < 0) {
+          closeUnanswered(messages);
+          messages.push({ role: "assistant", content: `${REPORT_LABEL}\n\n${event.text}` });
+        }
+        break;
       case "assistantTurn":
         messages.push(assistantMessage(event));
         break;
@@ -131,6 +144,8 @@ export function toMistralMessages(args: {
           content: toolResultContent(event),
         });
         break;
+      default:
+        event satisfies never;
     }
   }
   return messages;

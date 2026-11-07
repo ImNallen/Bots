@@ -195,6 +195,13 @@ export function ChatItem({ item, character }: { item: DisplayItem; character: Ch
           <Markdown text={item.text} />
         </div>
       );
+    case "report":
+      return (
+        <div className="bub report">
+          <p className="report-label">Routine report</p>
+          <Markdown text={item.text} />
+        </div>
+      );
     case "reasoning":
       return (
         <details className="reasoning">

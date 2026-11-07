@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideActivity, lastMessageOf } from "./activity.js";
+import type { Id } from "./_generated/dataModel.js";
+import { capText, decideActivity, lastMessageOf } from "./activity.js";
 import type { RunEventBody, RunState } from "./validators.js";
 
 const NOW = 1_000_000;
@@ -81,8 +82,24 @@ describe("lastMessageOf", () => {
     expect(lastMessageOf([turn("  First\n\n  second  ")])).toBe("First second");
   });
 
+  it("reads a routine's report in the chat as the last message", () => {
+    const report: RunEventBody = { kind: "routineReport", scheduleId: "s" as Id<"schedules">, runId: "r" as Id<"runs">, text: "Version 2 shipped." };
+    expect(lastMessageOf([report])).toBe("Version 2 shipped.");
+  });
+
   it("caps at 140 characters without splitting an emoji", () => {
     expect(lastMessageOf([user("a".repeat(141))])).toBe("a".repeat(140));
     expect(lastMessageOf([user(`${"a".repeat(139)}😀`)])).toBe("a".repeat(139));
+  });
+});
+
+describe("capText", () => {
+  it("keeps text at the limit and cuts text over it", () => {
+    expect(capText("a".repeat(8000), 8000)).toHaveLength(8000);
+    expect(capText("a".repeat(8001), 8000)).toHaveLength(8000);
+  });
+
+  it("does not split an emoji at the cut", () => {
+    expect(capText(`${"a".repeat(7999)}😀`, 8000)).toBe("a".repeat(7999));
   });
 });

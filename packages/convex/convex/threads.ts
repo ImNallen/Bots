@@ -6,7 +6,8 @@ import { requireIdentity, requireService } from "./identity.js";
 import type { RunState } from "./validators.js";
 
 const MAX_MESSAGE_LENGTH = 64 * 1024;
-const TIMELINE_RUNS = 30;
+const TIMELINE_USER_RUNS = 30;
+const TIMELINE_MAX_RUNS = 200;
 // A query may read 16 MiB. One event is at most 1 MiB, so stopping here cannot overshoot the limit.
 const TIMELINE_BYTES = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -102,6 +103,22 @@ export const send = mutation({
   },
 });
 
+// Only the owner's own runs fill the page, so reports cannot push their messages off it. Newest first.
+export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newest: readonly T[]): T[] {
+  const shown: T[] = [];
+  let userRuns = 0;
+  for (const run of newest.slice(0, TIMELINE_MAX_RUNS)) {
+    if (run.trigger === "user") {
+      if (userRuns === TIMELINE_USER_RUNS) {
+        break;
+      }
+      userRuns += 1;
+    }
+    shown.push(run);
+  }
+  return shown;
+}
+
 function publicState(state: RunState) {
   switch (state.kind) {
     case "running":
@@ -122,11 +139,12 @@ export const timeline = query({
       .query("runs")
       .withIndex("by_thread", (q) => q.eq("threadId", threadId))
       .order("desc")
-      .take(TIMELINE_RUNS + 1);
+      .take(TIMELINE_MAX_RUNS + 1);
+    const shownRuns = runsToShow(recentRuns);
     const runs = [];
     let bytes = 0;
-    let omittedOlder = recentRuns.length > TIMELINE_RUNS;
-    for (const run of recentRuns.slice(0, TIMELINE_RUNS)) {
+    let omittedOlder = recentRuns.length > shownRuns.length;
+    for (const run of shownRuns) {
       const events = [];
       for await (const event of ctx.db
         .query("runEvents")
