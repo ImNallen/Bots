@@ -315,6 +315,7 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
   const { service, log, ownerScope } = args;
   const active = new Set<Id<"runs">>();
   const waiting = new Set<Id<"runs">>();
+  const refused = new Set<Id<"runs">>();
   let queued: Id<"runs">[] = [];
   const deps: RunnerDeps = {
     ...args,
@@ -330,10 +331,12 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
   };
 
   async function attempt(runId: Id<"runs">): Promise<void> {
+    refused.add(runId);
     const claim = await service.mutation(api.runs.claim, { runId });
     if (claim.kind === "unavailable") {
       return;
     }
+    refused.delete(runId);
     log({ level: "info", event: "run-claimed", runId, seq: claim.nextSeq });
     const lease = holdLease({ deps, runId, claim });
     try {
@@ -345,7 +348,7 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
 
   // Any failure ends the attempt and leaves the lease to expire, so recovery takes the same path as a crash.
   function consider(runId: Id<"runs">): void {
-    if (active.has(runId) || active.size - waiting.size >= MAX_CONCURRENT_RUNS) {
+    if (active.has(runId) || refused.has(runId) || active.size - waiting.size >= MAX_CONCURRENT_RUNS) {
       return;
     }
     active.add(runId);
@@ -368,13 +371,17 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
 
   service.subscribe(api.runs.listQueued, { ownerId: ownerScope }, (ids) => {
     queued = ids;
+    refused.clear();
     queued.forEach(consider);
   });
 
   setInterval(() => {
     service
       .query(api.runs.listClaimable, { now: Date.now(), ownerId: ownerScope })
-      .then((ids) => ids.forEach(consider))
+      .then((ids) => {
+        refused.clear();
+        ids.forEach(consider);
+      })
       .catch((error: unknown) => {
         log({
           level: "warn",
