@@ -27,7 +27,7 @@ describe("runsToShow", () => {
     expect(names).not.toContain("past the page");
   });
 
-  it("reads at most 200 runs, so a month of reports cannot hold the query up", () => {
+  it("reads at most 200 runs, so an owner's run older than 200 reports goes off the page", () => {
     expect(runsToShow(many(500, report, "r"))).toHaveLength(200);
     const beyond = [...many(200, report, "r"), user("owner")];
     expect(runsToShow(beyond).map((row) => row.name)).not.toContain("owner");

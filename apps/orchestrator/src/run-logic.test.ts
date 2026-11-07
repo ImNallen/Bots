@@ -167,12 +167,12 @@ describe("nextAction", () => {
       expect(readOnly([fired, turn([call("a")]), result("a"), turn([call("b")])])).toEqual({ kind: "runTool", call: call("b") });
     });
 
-    // A model that never stops asking. Each pass decides from a copy of the stored events, as a restarted runner does.
-    function drive(modelTurn: (args: { final: boolean; index: number }) => RunEventBody, outcome: (id: string) => RunEventBody) {
+    function driveAcrossRestarts(modelTurn: (args: { final: boolean; index: number }) => RunEventBody, outcome: (id: string) => RunEventBody) {
       const events: RunEventBody[] = [fired];
       const finals: boolean[] = [];
       for (;;) {
-        const action = nextAction(structuredClone(events), "readOnly");
+        const storedEvents = structuredClone(events);
+        const action = nextAction(storedEvents, "readOnly");
         switch (action.kind) {
           case "callModel":
             finals.push(action.final);
@@ -199,25 +199,25 @@ describe("nextAction", () => {
     };
 
     it("gets a final call at the turn limit, and then ends with a report", () => {
-      const { events, finals } = drive(stubborn(1), result);
+      const { events, finals } = driveAcrossRestarts(stubborn(1), result);
       expect(finals).toEqual([...Array.from({ length: 11 }, () => false), true]);
       expect(lastText(events)).toBe("Report after 12 turns.");
     });
 
     it("gets a final call at the token limit, and then ends with a report", () => {
-      const { events, finals } = drive(stubborn(150_000), result);
+      const { events, finals } = driveAcrossRestarts(stubborn(150_000), result);
       expect(finals).toEqual([false, true]);
       expect(lastText(events)).toBe("Report after 2 turns.");
     });
 
     it("gets a final call at the rejection limit, and then ends with a report", () => {
-      const { events, finals } = drive(stubborn(1), rejected);
+      const { events, finals } = driveAcrossRestarts(stubborn(1), rejected);
       expect(finals).toEqual([false, false, false, true]);
       expect(lastText(events)).toBe("Report after 4 turns.");
     });
 
     it("ends with the final call's text when that call still asks for a tool", () => {
-      const { events, finals } = drive(
+      const { events, finals } = driveAcrossRestarts(
         (args) => (args.final ? turn([call("last")], "Report anyway.") : turnWithPrompt(150_000, [call(`c${args.index}`)])),
         result,
       );
@@ -286,7 +286,6 @@ describe("toMistralMessages", () => {
   });
 });
 
-// Mistral's validator refuses a user message after a user or tool message, a call with no answer, and a request that ends on an assistant message.
 function expectAModelWouldAccept(messages: MistralMessage[]): void {
   for (const [index, message] of messages.entries()) {
     const previous = messages[index - 1];

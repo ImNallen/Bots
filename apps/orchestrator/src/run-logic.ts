@@ -10,6 +10,7 @@ export type ToolCall = AssistantTurn["toolCalls"][number];
 
 export const MAX_ASSISTANT_TURNS = 40;
 export const READ_ONLY_LIMITS = { turns: 12, promptTokens: 150_000, rejectedCalls: 3 };
+const READ_ONLY_RESEARCH_TURNS = READ_ONLY_LIMITS.turns - 1;
 
 export type NextAction =
   | { kind: "callModel"; final: boolean }
@@ -18,15 +19,18 @@ export type NextAction =
   | { kind: "finish" }
   | { kind: "fail"; reason: "step-limit" };
 
-// The last of a run's turns is its final call, so research stops one turn short of the limit.
 function researchIsOver(events: readonly RunEventBody[]): boolean {
   const turns = events.filter((event) => event.kind === "assistantTurn");
   const rejected = events.filter((event) => event.kind === "toolResult" && event.outcome === "rejected");
   return (
-    turns.length >= READ_ONLY_LIMITS.turns - 1 ||
+    turns.length >= READ_ONLY_RESEARCH_TURNS ||
     (turns.at(-1)?.usage.promptTokens ?? 0) >= READ_ONLY_LIMITS.promptTokens ||
     rejected.length >= READ_ONLY_LIMITS.rejectedCalls
   );
+}
+
+function lastTurnWasFinalCall(events: readonly RunEventBody[], lastTurn: AssistantTurn): boolean {
+  return researchIsOver(events.slice(0, events.indexOf(lastTurn)));
 }
 
 export function nextAction(events: readonly RunEventBody[], capability: RunCapability): NextAction {
@@ -35,8 +39,7 @@ export function nextAction(events: readonly RunEventBody[], capability: RunCapab
     events.filter((event) => event.kind === "toolResult").map((event) => event.toolCallId),
   );
   const lastTurn = turns.at(-1);
-  // A turn is the final call if research was over before it. Only stored events say so, so a restart decides the same way.
-  const lastWasFinal = capability === "readOnly" && lastTurn !== undefined && researchIsOver(events.slice(0, events.indexOf(lastTurn)));
+  const lastWasFinal = capability === "readOnly" && lastTurn !== undefined && lastTurnWasFinalCall(events, lastTurn);
   for (const turn of turns) {
     const pending = turn.toolCalls.find((call) => !answered.has(call.id));
     if (pending !== undefined) {
@@ -105,8 +108,7 @@ function assistantMessage(turn: AssistantTurn): MistralMessage {
   };
 }
 
-// A cancelled or failed run can end on a tool result or a user message, and the conversation must still alternate.
-function closeUnanswered(messages: MistralMessage[]): void {
+function endUnansweredTurn(messages: MistralMessage[]): void {
   const previous = messages.at(-1);
   if (previous?.role === "tool" || previous?.role === "user") {
     messages.push({ role: "assistant", content: RUN_ENDED_EARLY });
@@ -123,13 +125,13 @@ export function toMistralMessages(args: {
     switch (event.kind) {
       case "userMessage":
       case "scheduleFired":
-        closeUnanswered(messages);
+        endUnansweredTurn(messages);
         messages.push({ role: "user", content: event.text });
         break;
       case "routineReport":
         reportsToSkip -= 1;
         if (reportsToSkip < 0) {
-          closeUnanswered(messages);
+          endUnansweredTurn(messages);
           messages.push({ role: "assistant", content: `${REPORT_LABEL}\n\n${event.text}` });
         }
         break;
@@ -154,7 +156,6 @@ export function toMistralMessages(args: {
 export type PromptNote = { id: string; by: "owner" | "you"; date: string; text: string };
 export type PromptReport = { date: string; text: string };
 
-// Only a read-only run has a final call or earlier reports, so a full run cannot carry either.
 export type PromptRun = { capability: "full" } | { capability: "readOnly"; final: boolean; reports: readonly PromptReport[] };
 
 type PromptArgs = {
@@ -255,7 +256,6 @@ function offeredTools(run: PromptRun): readonly (typeof toolDefinitions)[number]
   }
 }
 
-// What a run's next model call may read and call. A read-only run's events are its own, because the runner loads them by run.
 export function modelRequest(args: { prompt: PromptArgs; events: readonly RunEventBody[] }) {
   return {
     messages: toMistralMessages({ system: systemPrompt(args.prompt), events: args.events }),

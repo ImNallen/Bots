@@ -107,12 +107,11 @@ export const overview = query({
               .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
               .order("desc")
               .first();
-      // A routine's run is what the bot is doing now, but only the chat holds what the bot last said to its owner.
-      const run = (await activeRunOfBot(ctx, bot._id)) ?? chatRun;
+      const currentRun = (await activeRunOfBot(ctx, bot._id)) ?? chatRun;
       const chatEvents = chatRun === null ? [] : await newestEventsOfRun(ctx, chatRun._id, budget);
-      const newestEvents = run === null || run._id === chatRun?._id ? chatEvents : await newestEventsOfRun(ctx, run._id, budget);
+      const newestEvents = currentRun === null || currentRun._id === chatRun?._id ? chatEvents : await newestEventsOfRun(ctx, currentRun._id, budget);
       rows.push({
-        lastRunAt: run?._creationTime ?? 0,
+        lastRunAt: currentRun?._creationTime ?? 0,
         row: {
           _id: bot._id,
           name: bot.name,
@@ -121,8 +120,8 @@ export const overview = query({
           // The end time and not a comparison, because Convex does not rerun a query as time passes. The page decides when it ends.
           takeoverUntil: bot.takeoverUntil ?? null,
           activity: decideActivity({
-            hasPendingApproval: run !== null && runsWithPendingApproval.has(run._id),
-            runState: run?.state ?? null,
+            hasPendingApproval: currentRun !== null && runsWithPendingApproval.has(currentRun._id),
+            runState: currentRun?.state ?? null,
             newestEvents,
           }),
           lastMessage: lastMessageOf(chatEvents),
@@ -271,8 +270,7 @@ export const remove = mutation({
   },
 });
 
-// Each step takes one batch and schedules the next, walking every thread of the bot. A thread goes last, so a thread that is gone
-// means its whole history is.
+// Each step takes one batch and schedules the next. A thread goes last, so a thread that is gone means its whole history is.
 export const purge = internalMutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }): Promise<void> => {

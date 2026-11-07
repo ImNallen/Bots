@@ -33,7 +33,6 @@ function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touched
   }
 }
 
-// A read-only run has nobody to ask, so its answer does not depend on the level.
 export function decideTool(args: {
   capability: RunCapability;
   level: ApprovalLevel;

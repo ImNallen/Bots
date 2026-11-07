@@ -88,11 +88,9 @@ export default defineSchema({
   threads: defineTable({
     botId: v.id("bots"),
     ownerId: v.id("users"),
-    // Absent means the bot's chat. A routine's raw pages stay in its own thread, so they never load on a chat run.
     kind: v.optional(v.literal("routine")),
   }).index("by_bot", ["botId", "kind"]),
 
-  // Only what a run needs. Routines add when it fires.
   schedules: defineTable({
     ownerId: v.id("users"),
     botId: v.id("bots"),
@@ -106,7 +104,6 @@ export default defineSchema({
     ownerId: v.id("users"),
     trigger: runTrigger,
     capability: runCapability,
-    // Only a routine's own runs have this, so by_schedule holds no report in the chat.
     scheduleId: v.optional(v.id("schedules")),
     deadlineAt: v.optional(v.number()),
     endedAt: v.optional(v.number()),

@@ -36,7 +36,6 @@ export async function ensureChatThread(ctx: MutationCtx, bot: { botId: Id<"bots"
   return (await chatThreadOf(ctx, bot.botId))?._id ?? (await ctx.db.insert("threads", { botId: bot.botId, ownerId: bot.ownerId }));
 }
 
-// A bot has one browser, so it has one active run across all of its threads.
 export async function activeRunOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"runs"> | null> {
   for (const kind of ["running", "queued"] as const) {
     const run = await ctx.db
@@ -103,11 +102,10 @@ export const send = mutation({
   },
 });
 
-// Only the owner's own runs fill the page, so reports cannot push their messages off it. Newest first.
-export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newest: readonly T[]): T[] {
+export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newestFirst: readonly T[]): T[] {
   const shown: T[] = [];
   let userRuns = 0;
-  for (const run of newest.slice(0, TIMELINE_MAX_RUNS)) {
+  for (const run of newestFirst.slice(0, TIMELINE_MAX_RUNS)) {
     if (run.trigger === "user") {
       if (userRuns === TIMELINE_USER_RUNS) {
         break;

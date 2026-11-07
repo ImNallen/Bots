@@ -47,20 +47,17 @@ function pastDeadline(run: Pick<Doc<"runs">, "deadlineAt">, now: number): boolea
   return run.deadlineAt !== undefined && now > run.deadlineAt;
 }
 
-// The one writer of a terminal state and an end time, so no run can end without one.
-async function endRun(ctx: MutationCtx, run: Doc<"runs">, state: TerminalRunState): Promise<void> {
-  await ctx.db.patch(run._id, { state, endedAt: Date.now() });
-  await deleteStream(ctx, run._id);
+async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: TerminalRunState): Promise<void> {
+  await ctx.db.patch(runId, { state, endedAt: Date.now() });
+  await deleteStream(ctx, runId);
 }
 
-// run.cancelRequested means only that the owner pressed Stop, so a stop without it came from the deadline.
 export function finishedState(args: { run: Pick<Doc<"runs">, "cancelRequested" | "deadlineAt">; state: TerminalRunState; now: number }): TerminalRunState {
   const { run, state, now } = args;
   return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? { kind: "failed", reason: DEADLINE_REASON } : state;
 }
 
-// The text of a run's last turn, which any results after it cannot change.
-async function finalTextOf(ctx: QueryCtx, runId: Id<"runs">): Promise<string | null> {
+async function lastTurnTextOf(ctx: QueryCtx, runId: Id<"runs">): Promise<string | null> {
   for await (const { body } of ctx.db
     .query("runEvents")
     .withIndex("by_run_seq", (q) => q.eq("runId", runId))
@@ -73,8 +70,6 @@ async function finalTextOf(ctx: QueryCtx, runId: Id<"runs">): Promise<string | n
   return null;
 }
 
-// Only the report reaches the chat, so a routine's raw pages never load on a chat run. The row has no scheduleId, so by_schedule
-// holds only a routine's own runs.
 async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"schedules">, text: string): Promise<void> {
   const threadId = await ensureChatThread(ctx, run);
   const reportRunId = await ctx.db.insert("runs", {
@@ -83,8 +78,7 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
     ownerId: run.ownerId,
     trigger: "schedule",
     capability: "readOnly",
-    state: { kind: "done" },
-    endedAt: Date.now(),
+    state: { kind: "queued" },
     cancelRequested: false,
     nextSeq: 1,
   });
@@ -94,6 +88,7 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
     seq: 0,
     body: { kind: "routineReport", scheduleId, runId: run._id, text },
   });
+  await endRun(ctx, reportRunId, { kind: "done" });
 }
 
 // Every later model request replays this history, and a tool call with no result would make it malformed.
@@ -179,7 +174,7 @@ export const claim = mutation({
     }
     if (pastDeadline(run, now)) {
       await closeUnansweredCalls(ctx, run);
-      await endRun(ctx, run, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: DEADLINE_REASON });
+      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: DEADLINE_REASON });
       return { kind: "unavailable" as const };
     }
     // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
@@ -194,7 +189,7 @@ export const claim = mutation({
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
       await closeUnansweredCalls(ctx, run);
-      await endRun(ctx, run, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON });
+      await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: NO_PROGRESS_REASON });
       return { kind: "unavailable" as const };
     }
     const leaseToken = crypto.randomUUID();
@@ -226,7 +221,6 @@ export const heartbeat = mutation({
     }
     const now = Date.now();
     await ctx.db.patch(runId, { state: { ...run.state, leaseUntil: now + LEASE_MS } });
-    // Not stored, so run.cancelRequested still says only that the owner pressed Stop.
     return { kind: "renewed" as const, cancelRequested: run.cancelRequested || pastDeadline(run, now) };
   },
 });
@@ -271,20 +265,19 @@ export const finish = mutation({
     const run = await requireLease(ctx, { runId, leaseToken });
     const ended = finishedState({ run, state, now: Date.now() });
     if (ended.kind !== "done" || run.scheduleId === undefined) {
-      await endRun(ctx, run, ended);
+      await endRun(ctx, runId, ended);
       return;
     }
-    const report = await finalTextOf(ctx, runId);
+    const report = await lastTurnTextOf(ctx, runId);
     if (report === null) {
-      await endRun(ctx, run, { kind: "failed", reason: NO_REPORT_REASON });
+      await endRun(ctx, runId, { kind: "failed", reason: NO_REPORT_REASON });
       return;
     }
     await postReport(ctx, run, run.scheduleId, report);
-    await endRun(ctx, run, ended);
+    await endRun(ctx, runId, ended);
   },
 });
 
-// A read-only run reads these as data in its prompt. They come from the routine's own runs, so a report of another routine never reaches it.
 export const earlierReports = query({
   args: { runId: v.id("runs") },
   handler: async (ctx, { runId }) => {
@@ -301,7 +294,7 @@ export const earlierReports = query({
       .take(EARLIER_REPORTS);
     const reports = [];
     for (const run of runs.toReversed()) {
-      const text = await finalTextOf(ctx, run._id);
+      const text = await lastTurnTextOf(ctx, run._id);
       if (text !== null) {
         reports.push({ date: new Date(run._creationTime).toISOString(), text });
       }
@@ -333,7 +326,7 @@ export const requestCancel = mutation({
       // No runner holds a queued run, so nothing else would ever act on the request.
       case "queued":
         await ctx.db.patch(runId, { cancelRequested: true });
-        await endRun(ctx, run, { kind: "cancelled" });
+        await endRun(ctx, runId, { kind: "cancelled" });
         return;
       case "running":
         await ctx.db.patch(runId, { cancelRequested: true });

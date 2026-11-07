@@ -15,7 +15,6 @@ export const request = mutation({
     if (run === null) {
       throw new ConvexError("No such run");
     }
-    // Nobody is watching a read-only run, so no card can exist for one.
     if (run.capability !== "full") {
       throw new ConvexError("A read-only run cannot ask for approval");
     }

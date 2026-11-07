@@ -112,7 +112,6 @@ function holdLease(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Claim }):
   return { lost: lost.signal, cancel: cancel.signal, stop: () => clearInterval(interval) };
 }
 
-// A chat run replays its thread. A read-only run reads only its own events, so it holds neither its routine's earlier pages nor the chat.
 async function loadEvents(args: { service: Service; runId: Id<"runs">; claim: Claim }): Promise<RunEvent[]> {
   const { service, runId, claim } = args;
   const events: RunEvent[] = [];

@@ -243,7 +243,6 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
           items.push(item);
         }
         break;
-      // A result shows with its call. A routine's instruction stays in the routine's own thread, which the chat never shows.
       case "toolResult":
       case "scheduleFired":
         break;
