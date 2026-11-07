@@ -1,6 +1,6 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, makeCallId, parseToolCall, toolDefinitions } from "@bots/protocol";
+import { isMemoryInvocation, makeCallId, parseToolCall } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
@@ -10,11 +10,11 @@ import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
+  modelRequest,
   nextAction,
-  systemPrompt,
-  toMistralMessages,
   touchedComputer,
   withUniqueToolCallIds,
+  type PromptRun,
   type ToolCall,
 } from "./run-logic.ts";
 import { decryptApiKey } from "./secrets.ts";
@@ -126,8 +126,9 @@ async function callModel(args: {
   claim: Claim;
   lease: Lease;
   events: readonly RunEvent[];
+  run: PromptRun;
 }): Promise<CompletionResult> {
-  const { deps, runId, claim, lease, events } = args;
+  const { deps, runId, claim, lease, events, run } = args;
   const credential = await deps.service.query(api.credentials.ciphertextFor, { ownerId: claim.ownerId });
   if (credential === null) {
     return { kind: "failed", reason: NO_KEY_REASON };
@@ -157,18 +158,18 @@ async function callModel(args: {
   const result = await completeWithRetry({
     ...deps.mistral,
     apiKey,
-    messages: toMistralMessages({
-      system: systemPrompt({
+    ...modelRequest({
+      prompt: {
+        run,
         botName: profile.name,
         botId: claim.botId,
         title: profile.title,
         assignment: profile.assignment,
         about: profile.about,
         notes: profile.notes,
-      }),
+      },
       events: events.map((event) => event.body),
     }),
-    tools: toolDefinitions,
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),
     onProgress: (snapshot) => writer.update(snapshot),
@@ -297,7 +298,8 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
       case "callModel": {
         let result: CompletionResult;
         try {
-          result = await callModel({ deps, runId, claim, lease, events });
+          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: false, reports: [] };
+          result = await callModel({ deps, runId, claim, lease, events, run });
         } catch (error) {
           if (lease.lost.aborted || !lease.cancel.aborted) {
             throw error;
