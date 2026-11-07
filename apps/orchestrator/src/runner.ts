@@ -137,6 +137,7 @@ async function callModel(args: {
   } catch {
     return { kind: "failed", reason: UNREADABLE_KEY_REASON };
   }
+  const profile = await deps.service.query(api.bots.promptFor, { botId: claim.botId });
   const writer = createStreamWriter({
     // The stream is a preview. Fencing rejects a stale write, and the turn itself goes through append.
     write: async (snapshot) => {
@@ -156,7 +157,12 @@ async function callModel(args: {
     ...deps.mistral,
     apiKey,
     messages: toMistralMessages({
-      system: systemPrompt({ botName: claim.botName, botId: claim.botId }),
+      system: systemPrompt({
+        botName: profile.name,
+        botId: claim.botId,
+        title: profile.title,
+        assignment: profile.assignment,
+      }),
       events: events.map((event) => event.body),
     }),
     tools: toolDefinitions,

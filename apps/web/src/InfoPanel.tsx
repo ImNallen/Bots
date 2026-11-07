@@ -2,11 +2,12 @@ import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { useState } from "react";
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { BotFace, type FaceState } from "./BotFace.tsx";
 import { characterOf, type Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Icon } from "./Icon.tsx";
+import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
@@ -16,6 +17,85 @@ const APPROVAL_LEVELS = [
   ["shell", "Shell commands only"],
   ["nothing", "Nothing"],
 ] as const;
+
+function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChange: Dispatch<SetStateAction<ProfileEdits>> }) {
+  const { bot, edits, onEditsChange } = props;
+  const setProfile = useMutation(api.bots.setProfile);
+  const [save, setSave] = useState<
+    { kind: "idle" } | { kind: "pending" } | { kind: "saved" } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const saved = savedProfile(bot);
+  const shown = shownProfile(saved, edits);
+  const changed = hasChanges(edits);
+  const saving = save.kind === "pending";
+
+  function edit(field: keyof Profile, value: string) {
+    onEditsChange((current) => withEdit({ saved, edits: current, field, value }));
+    setSave({ kind: "idle" });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!changed || saving) {
+      return;
+    }
+    setSave({ kind: "pending" });
+    try {
+      await setProfile({ botId: bot._id, ...shown });
+      onEditsChange({});
+      setSave({ kind: "saved" });
+    } catch (error) {
+      setSave({ kind: "failed", message: errorMessage(error) });
+    }
+  }
+
+  return (
+    <>
+      <form className="card profile" onSubmit={(event) => void handleSubmit(event)}>
+        <label className="profile-field">
+          <span>Name</span>
+          <input className="field" autoComplete="off" readOnly={saving} value={shown.name} onChange={(event) => edit("name", event.target.value)} />
+        </label>
+        <label className="profile-field">
+          <span>Title</span>
+          <input
+            className="field"
+            autoComplete="off"
+            placeholder="What it does, in a few words"
+            readOnly={saving}
+            value={shown.title}
+            onChange={(event) => edit("title", event.target.value)}
+          />
+        </label>
+        <label className="profile-field">
+          <span>Assignment</span>
+          <textarea
+            className="field profile-assignment"
+            rows={6}
+            placeholder="What it should do in every conversation"
+            readOnly={saving}
+            value={shown.assignment}
+            onChange={(event) => edit("assignment", event.target.value)}
+          />
+        </label>
+        <div className="confirm-actions">
+          <button type="submit" className="btn btn-go" disabled={!changed || saving}>
+            {saving ? "Saving" : "Save"}
+          </button>
+        </div>
+      </form>
+      {save.kind === "failed" ? (
+        <p className="error panel-note" role="alert">
+          {save.message}
+        </p>
+      ) : (
+        <p className="panel-note" role="status">
+          {save.kind === "saved" ? "Saved. " : ""}Only you can change this. A change reaches the bot at its next step.
+        </p>
+      )}
+    </>
+  );
+}
 
 function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof APPROVAL_LEVELS)[number][0] }) {
   const setLevel = useMutation(api.bots.setApprovalLevel);
@@ -129,8 +209,15 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
   );
 }
 
-export function InfoPanel(props: { bot: Doc<"bots">; faceState: FaceState; onClose: () => void; onOpenScreen: () => void }) {
-  const { bot, faceState, onClose, onOpenScreen } = props;
+export function InfoPanel(props: {
+  bot: Doc<"bots">;
+  faceState: FaceState;
+  profileEdits: ProfileEdits;
+  onProfileEditsChange: Dispatch<SetStateAction<ProfileEdits>>;
+  onClose: () => void;
+  onOpenScreen: () => void;
+}) {
+  const { bot, faceState, profileEdits, onProfileEditsChange, onClose, onOpenScreen } = props;
   const isPhone = useIsPhone();
   const character = characterOf(bot);
   return (
@@ -140,7 +227,10 @@ export function InfoPanel(props: { bot: Doc<"bots">; faceState: FaceState; onClo
       </button>
       <div className="info-who">
         <BotFace character={character} size={isPhone ? 84 : 60} state={faceState} />
-        <h2>{bot.name}</h2>
+        <div>
+          <h2>{bot.name}</h2>
+          {bot.title !== undefined && <p className="info-title">{bot.title}</p>}
+        </div>
       </div>
       <h3 className="label">Computer</h3>
       <div className="card">
@@ -152,6 +242,8 @@ export function InfoPanel(props: { bot: Doc<"bots">; faceState: FaceState; onClo
           <span className="thumb" />
         </button>
       </div>
+      <h3 className="label">Profile</h3>
+      <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
       <h3 className="label">Approvals</h3>
       <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
       <h3 className="label">Character</h3>

@@ -319,6 +319,16 @@ A request is a row in Convex, keyed by the run and the call, so a restarted orch
 
 Approvals are a check on what a bot asks to do, not a sandbox. An approved shell command runs as a user with `sudo`, and what it starts is not asked about again. The network rules still hold, and step 8 adds the independent reviewer.
 
+## Why only the owner can write an assignment
+
+A bot's assignment is text that the model reads on every call, in every conversation. Whoever can write it decides what the bot works on from then on. If a bot could write its own, one prompt-injected page could leave a lasting instruction that reads as the owner's. So the assignment is an owner's field, and a bot's own notes, when they come, are a separate thing that ranks below it.
+
+One mutation writes it. `bots.setProfile` goes through `requireOwnedBot`, which finds the `users` row for the caller's token and compares it with the bot's owner. The orchestrator's service token has no `users` row, so it gets the same "Bot not found" as another user. The runner reads through `bots.promptFor`, which only the service token can call, and it has no way to write. No tool reaches `setProfile`. A bot holds no Convex token, and its VM reaches only the internet and the link port, so it cannot call Convex or open the web app.
+
+The runner reads the assignment before each model call and not at the claim. An edit during a run reaches the next call, and a resumed run reads the current text. The cost is that no event records which text a model call saw.
+
+An assignment is not a permission. The system prompt tells the model that the assignment cannot override the fixed rules, but that sentence is an instruction to a model and no code checks it. The checks that matter stay in code, so approvals and the network rules hold whatever an assignment says. Convex stores it in plain text, as it does the chat.
+
 ## Where secrets live
 
 The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.

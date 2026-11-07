@@ -10,7 +10,7 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
 | 4b | Done, with gaps listed below | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
-| 5 | **Next** | Schedules, the memory UI, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
+| 5 | **In progress** | The standing assignment, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
 | 6 | | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
 | 8 | | OAuth connectors, the independent reviewer, and the Vault | Bots use saved logins without seeing the passwords, and bots no longer have passwordless `sudo` |
@@ -160,6 +160,50 @@ This is a proposal, so change it if you find a better answer:
 4. Done. Settings has a left navigation with General and Mistral key on a computer, and one column on a phone. A question card says how many rendered lines of an argument are below its box, counting wrapped lines, and updates as the person scrolls. The sign-in, reconnecting, problem, and not-found notices share one look, a focus ring inside a card or the bot list is no longer clipped, and five bubble colours are darker so white text reaches 4.5:1, which a test now holds. Tested with a scripted fake model at 1280 and 412 wide, in light and dark. A real phone's touch scrolling and hidden scrollbars are untested until the owner accepts this step.
 5. Done. `verify:screen` and `verify:takeover` passed on the control VM, a real model and the real desktop worked in the new design, and the owner accepted it on 2026-11-06. A Convex export from just before the first deploy of this design is at `/root/backups/bots-before-redesign-2026-11-06.zip` on that VM. Going back to a commit before this redesign would need that export or a cleanup of stored bot looks, because the older schema has no `shape` or `color`.
 
+## Step 5: a standing assignment, memory, and schedules
+
+Before this step, a bot has only a fixed system prompt. It has no job of its own, and it remembers only what is in its thread.
+
+### What Grok Bot does
+
+The owner asked a Grok Bot about itself on 2026-11-06, and its answers agree with [its documentation](https://docs.x.ai/grok-bot/bots) on memory.
+
+- A bot keeps lasting notes and a dated log. Each bot has its own, across all its chats. A few personal facts, such as a name and a time zone, reach the owner's other bots.
+- A bot decides by itself when to save, and it does not ask first. Saying "remember" makes a save certain. Nothing lists the notes, so the owner asks the bot what it remembers.
+- A reset keeps memory, and deleting the bot deletes it. Logins and cards belong in the Vault.
+
+The two sources disagree on the rest. The bot described a name, a title, and a free-text description that holds its assignment. The documentation says that a personal bot no longer has a description, that a shared bot does, and that a job is set by telling the bot in chat. It does not say how routines run or whether they are read-only, and it describes no activity view.
+
+Bots differs on purpose in four ways. The owner can read and edit each note. No bot can write a fact that another bot reads, because one injected page could then reach every bot. A save after a computer tool asks first at the default level, so a page cannot plant a note silently. Nothing stores a dated log, because the thread already records the work, and a log would be one more way into every later prompt. Add one if long threads get compaction.
+
+### What to build
+
+1. The standing assignment. Each bot gets a title and an assignment that only its owner writes, and the model reads them on each call.
+2. The tool table, with no change in behavior. One required `effect` for each tool replaces `FREE_AT_OUTSIDE_LEVEL`.
+3. Memory. A bot saves and forgets its own notes with `memory_save` and `memory_forget`, the owner reads and edits them in the panel, and `users.about` holds what the owner writes about themselves.
+4. Read-only runs. Such a run can call `read_file`, `browser_navigate`, and `browser_snapshot`, never creates an approval, and cannot write memory.
+5. Schedules and the step's check. A Convex cron starts each scheduled run once, and the orchestrator rejects a write attempt from that run.
+6. The Activity view, which needs no table of its own.
+
+These are proposals, so change them if you find a better answer:
+
+| Question | Proposal | Why |
+|---|---|---|
+| A bot's title | Keep it | The owner named it, it is one optional field, and the panel and the chat header show it |
+| Facts that all of an owner's bots read | One string, `users.about`, that only the owner writes | A name and a time zone are few facts, and an owner types them once. Shared rows and a Share button are more to build for the same result, and no bot can write what other bots read |
+| How a bot's save gets checked | The question card, once a computer tool has run in this run | A hold for review would need a tap on nearly every save, because a thread stays exposed for good. It would also add a status and a review UI. The card already exists and shows the exact text |
+| The memory tools | `memory_save` and `memory_forget` | Each card and chat row says one thing. A replace in one `update_memory` tool is not worth a second optional field |
+| Where a bot's memory write happens | `runs.append` takes a memory call | The note and its tool result go in one fenced mutation, so a kill leaves both or neither |
+| The tool table's shape | One required `effect` for each tool | One field answers every consumer, and three fields could disagree |
+| A separate type for calls cleared to reach `link.call` | None | `Link.call` already takes only `ToolInvocation`, so passing it a memory call fails to compile |
+| The shape of a schedule, its thread, a site list, preemption, and Activity's summary | Decide in the schedules PR | These are the contested part, and they do not affect PRs 1 to 3 |
+
+Two questions need a review before the schedules PR. The first is one shared thread or a sealed thread for each scheduled run. The second is a site list on `browser_navigate` or open browsing.
+
+### Progress on step 5
+
+1. Done. An owner sets a bot's name, title, and assignment in the info panel, and the title shows under the name there and in the chat header. `callModel` reads them through `bots.promptFor`, so an edit reaches the run's next model call. `VERIFY_SCENARIOS=assignment pnpm verify:agent` checks this with a scripted fake model, and it checks that another user and the service token cannot write them. Tested in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. Going back to a commit before this one needs a cleanup of stored titles and assignments, because the older schema has neither field and Convex checks every stored row at a deploy.
+
 ## After step 3: deploy from `main`
 
 Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tailscale key and no SSH key. The timer does these things:
@@ -173,6 +217,10 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
+- After `runs.claim` answers `unavailable`, `.finally` in `consider` in `apps/orchestrator/src/runner.ts` calls `queued.forEach(consider)` at once, and the run is still in that list. So during an update fence, the runner calls `runs.claim` in a loop with no wait until the fence ends, which can take a minute. The limit of 5 attempts does not stop this, because `claim` refuses a fenced run before it counts an attempt. This comes from reading the code, and nobody has measured it.
+- Unsaved text in the panel's profile section survives closing the panel, and it goes on a reload or a move to another bot. It stays in that page only, so a second tab can save over the same field.
+- The profile's fields are read-only while a save is in flight, so an edit cannot be lost to the save's end. On a lost connection they stay read-only until the save finishes, with the text still on screen.
+- On a computer the info panel takes no history entry, and on a phone closing it goes back in history. So a window narrowed below 760 wide with the panel open leaves the bot when the panel closes.
 - A question card locks Approve until the person has reached the end of every argument, so a very long command takes a long scroll. Automatic review, below, is the later answer.
 - A focus ring takes the bot's colour, as the prototype does. On a light page, amber, green, teal, and grey rings fall below 3:1, measured at 2.25, 2.30, 2.45, and 2.92.
 - A question card shows an argument's text as it is, so Unicode bidirectional controls may change how a command reads. Nobody has tested this.

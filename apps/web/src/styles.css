@@ -690,6 +690,28 @@ pre {
   white-space: nowrap;
 }
 
+.pill-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.pill-who small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill:has(small) {
+  height: 34px;
+  border-radius: 17px;
+}
+
 .chat-scroll {
   flex: 1;
   min-height: 0;
@@ -1506,6 +1528,11 @@ button.tool:hover {
   font-weight: 500;
 }
 
+.info-title {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .info-gap {
   flex: none;
   height: 16px;
@@ -1617,6 +1644,30 @@ button.card-row:hover {
 .confirm-actions {
   display: flex;
   gap: 6px;
+}
+
+.profile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-field span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.profile-assignment {
+  padding-block: 7px;
+  line-height: 1.4;
+  resize: vertical;
 }
 
 /* Character picker */
@@ -1899,12 +1950,17 @@ button.card-row:hover {
     top: calc(10px + var(--safe-top));
   }
 
-  .pill {
+  .pill,
+  .pill:has(small) {
     max-width: calc(100% - 96px);
     height: 40px;
     padding: 0 14px 0 8px;
     font-size: 16px;
     border-radius: 20px;
+  }
+
+  .pill-who small {
+    font-size: 12px;
   }
 
   .chat-scroll {
@@ -2045,6 +2101,14 @@ button.card-row:hover {
 
   .info-who h2 {
     font-size: 17px;
+  }
+
+  .info-title {
+    font-size: 14px;
+  }
+
+  .profile-field span {
+    font-size: 13px;
   }
 
   .label {

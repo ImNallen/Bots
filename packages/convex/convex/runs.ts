@@ -140,13 +140,11 @@ export const claim = mutation({
       lastClaimSeq: run.nextSeq,
       claimsWithoutProgress,
     });
-    const bot = await ctx.db.get(run.botId);
     return {
       kind: "claimed" as const,
       leaseToken,
       threadId: run.threadId,
       botId: run.botId,
-      botName: bot?.name ?? "Bot",
       ownerId: run.ownerId,
       cancelRequested: run.cancelRequested,
       nextSeq: run.nextSeq,

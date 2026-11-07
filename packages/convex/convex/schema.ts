@@ -19,6 +19,8 @@ export default defineSchema({
     // A bot with no value takes its look from its id.
     shape: v.optional(botShape),
     color: v.optional(botColor),
+    title: v.optional(v.string()),
+    assignment: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),
 
   // A deleted bot whose files may still be on its owner's VM. The reconcile loop removes both.

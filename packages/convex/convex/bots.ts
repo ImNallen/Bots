@@ -4,10 +4,10 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
+import { parseBotName, parseBotProfile } from "./profile.js";
 import { isActive } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
-const MAX_NAME_LENGTH = 64;
 const DEFAULT_APPROVAL_LEVEL = "outside";
 // Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
 const TAKEOVER_MS = 15 * 60 * 1000;
@@ -139,14 +139,7 @@ export const create = mutation({
     if (user === null) {
       throw new ConvexError("Call users.ensureCurrent before creating a bot");
     }
-    const trimmed = name.trim();
-    if (trimmed === "") {
-      throw new ConvexError("Name cannot be empty");
-    }
-    if (trimmed.length > MAX_NAME_LENGTH) {
-      throw new ConvexError(`Name cannot be longer than ${MAX_NAME_LENGTH} characters`);
-    }
-    return await ctx.db.insert("bots", { ownerId: user._id, name: trimmed, shape, color });
+    return await ctx.db.insert("bots", { ownerId: user._id, name: parseBotName(name), shape, color });
   },
 });
 
@@ -220,6 +213,23 @@ export const setCharacter = mutation({
   handler: async (ctx, { botId, shape, color }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, { shape, color });
+  },
+});
+
+export const setProfile = mutation({
+  args: { botId: v.id("bots"), name: v.string(), title: v.string(), assignment: v.string() },
+  handler: async (ctx, { botId, ...fields }) => {
+    await requireOwnedBot(ctx, botId);
+    await ctx.db.patch(botId, parseBotProfile(fields));
+  },
+});
+
+export const promptFor = query({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    await requireService(ctx);
+    const bot = await ctx.db.get(botId);
+    return { name: bot?.name ?? "Bot", title: bot?.title, assignment: bot?.assignment };
   },
 });
 

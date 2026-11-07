@@ -14,6 +14,7 @@ import type * as bots from "../bots.js";
 import type * as computers from "../computers.js";
 import type * as credentials from "../credentials.js";
 import type * as identity from "../identity.js";
+import type * as profile from "../profile.js";
 import type * as runs from "../runs.js";
 import type * as threads from "../threads.js";
 import type * as users from "../users.js";
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   computers: typeof computers;
   credentials: typeof credentials;
   identity: typeof identity;
+  profile: typeof profile;
   runs: typeof runs;
   threads: typeof threads;
   users: typeof users;
