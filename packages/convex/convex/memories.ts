@@ -11,7 +11,7 @@ const MAX_DESCRIPTION_LENGTH = 8000;
 
 const found = (pattern: RegExp) => (text: string) => pattern.test(text);
 
-const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|account[ _-]?key|private[ _-]?key)/;
+const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)/;
 
 const CARD_IN_GROUPS_OF_FOUR = /\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}/;
 const CARD_OF_THIRTEEN_DIGITS = /\d{4}[ -]\d{4}[ -]\d{5}/;
@@ -31,14 +31,76 @@ function holdsCardNumber(text: string): boolean {
   return (text.match(CARD_DIGITS) ?? []).some((digits) => passesLuhn(digits.replace(/[ -]/g, "")));
 }
 
-const SHORTEST_MIXED_CASE_KEY = 32;
-const LONGEST_URL_SCHEME = SHORTEST_MIXED_CASE_KEY - 1;
-const URL_UP_TO_ITS_QUERY = new RegExp(String.raw`\b[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/[^\s?#"'<>()\[\]{},;|\x60]*`, "gi");
-const LONG_RUN_OF_LETTERS_AND_DIGITS = new RegExp(`[A-Za-z0-9]{${SHORTEST_MIXED_CASE_KEY},}`, "g");
+const SHORTEST_LONG_TOKEN = 32;
+const SHORTEST_LONG_VALUE = 16;
+const TOKEN_CHARACTERS = String.raw`A-Za-z0-9_+=/.~-`;
+const NAME_CHARACTERS = String.raw`A-Za-z0-9_.-`;
+const URL_PATH_CHARACTERS = String.raw`A-Za-z0-9._~/-`;
+const OPENING_MARK = String.raw`\\?["'\x60(<[{]?`;
 
-function holdsMixedCaseKey(text: string): boolean {
-  const runs = text.replace(URL_UP_TO_ITS_QUERY, " ").match(LONG_RUN_OF_LETTERS_AND_DIGITS) ?? [];
-  return runs.some((run) => /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run));
+const LONGEST_URL_SCHEME = SHORTEST_LONG_TOKEN - 1;
+// A URL with a user name, or with a long run where its host belongs, is read as text, because that is where a key sits in `https://<key>@github.com`.
+const URL_WITHOUT_ITS_QUERY = new RegExp(
+  String.raw`(?<![A-Za-z0-9_+/.~-])[a-z][a-z0-9+.-]{0,${LONGEST_URL_SCHEME - 1}}:\/\/(?![A-Za-z0-9._~-]*@)(?![A-Za-z0-9_~-]{${SHORTEST_LONG_TOKEN}})[A-Za-z0-9._~-]*(?::\d{1,5}(?![A-Za-z0-9_+=.~-]))?(?:\/[${URL_PATH_CHARACTERS}]*)?`,
+  "gi",
+);
+const outsideUrls = (holds: (text: string) => boolean) => (text: string) => holds(text.replace(URL_WITHOUT_ITS_QUERY, "url"));
+
+const isDigits = found(/^\d+$/);
+const isUuid = found(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+const isGitHash = found(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+const WORD_IN_ONE_CASE_OR_CAMEL_CASE = /^[a-z]*(?:[A-Z]+[a-z]{2,})*[A-Z]*\d{0,4}$/;
+
+function readsAsWords(token: string, lettersNeeded: number): boolean {
+  const segments = token.split(/[^A-Za-z0-9]+/).filter((segment) => segment !== "");
+  const isWord = (segment: string) => segment.length < SHORTEST_LONG_TOKEN && WORD_IN_ONE_CASE_OR_CAMEL_CASE.test(segment);
+  return segments.every((segment) => isDigits(segment) || isWord(segment)) && segments.filter((segment) => !isDigits(segment)).length >= lettersNeeded;
+}
+
+const withoutOuterSeparators = (token: string) => /[A-Za-z0-9](?:.*[A-Za-z0-9])?/.exec(token)?.[0] ?? "";
+
+const ORDINARY_LONG_TOKENS = {
+  onlySeparators: (token) => token === "",
+  words: (token) => readsAsWords(token, 2),
+  uuid: isUuid,
+  gitHash: isGitHash,
+  digits: isDigits,
+} satisfies Record<string, (token: string) => boolean>;
+
+const LONG_RUN = new RegExp(`[${TOKEN_CHARACTERS}]{${SHORTEST_LONG_TOKEN},}`, "g");
+
+function holdsLongToken(text: string): boolean {
+  const pieces = (text.match(LONG_RUN) ?? []).flatMap((run) => run.split(/=(?=[^=])/));
+  return pieces.some((piece) => {
+    const token = withoutOuterSeparators(piece);
+    return piece.length >= SHORTEST_LONG_TOKEN && !Object.values(ORDINARY_LONG_TOKENS).some((isOrdinary) => isOrdinary(token));
+  });
+}
+
+const looksLikeToken = (value: string) => /\d/.test(value) && /[A-Za-z]/.test(value) && !readsAsWords(value, 1);
+
+const NAMES_THAT_HOLD_HASHES = /^(?:commit|hash|sha|sha1|sha256|digest|rev|revision|etag|id|uuid)$/i;
+const VALUE_AFTER_EQUALS_OR_COLON = new RegExp(String.raw`[=:](?<=([${NAME_CHARACTERS}]*)\\?["'\x60]?[ \t]*[=:])[ \t]*${OPENING_MARK}([${TOKEN_CHARACTERS}]{${SHORTEST_LONG_VALUE},})`, "g");
+
+function holdsLongValueAfterEqualsOrColon(text: string): boolean {
+  return [...text.matchAll(VALUE_AFTER_EQUALS_OR_COLON)].some(([, name = "", value = ""]) => {
+    const token = withoutOuterSeparators(value);
+    const isHashUnderItsName = NAMES_THAT_HOLD_HASHES.test(name) && (isGitHash(token) || isUuid(token));
+    return looksLikeToken(value) && !isHashUnderItsName;
+  });
+}
+
+const FLAG_AND_VALUE = new RegExp(String.raw`(?<![A-Za-z0-9_-])-([A-Za-z0-9_-]+)[ \t]+${OPENING_MARK}([${TOKEN_CHARACTERS}]{${SHORTEST_LONG_VALUE},})`, "g");
+const ENDS_IN_A_SECRET_WORD = new RegExp(String.raw`(?:${SECRET_NAME.source}|pass|key|auth)$`, "i");
+
+function holdsLongValueAfterFlag(text: string): boolean {
+  return [...text.matchAll(FLAG_AND_VALUE)].some(([, flag = "", value = ""]) => ENDS_IN_A_SECRET_WORD.test(flag) && looksLikeToken(value));
+}
+
+const SECRET_WORD_AND_VALUE = new RegExp(String.raw`(?:bearer|basic|key|${SECRET_NAME.source})\\?["'\x60]?[ \t]+(?:is[ \t]+)?${OPENING_MARK}([${TOKEN_CHARACTERS}]{${SHORTEST_LONG_VALUE},})`, "gi");
+
+function holdsLongValueAfterSecretWord(text: string): boolean {
+  return [...text.matchAll(SECRET_WORD_AND_VALUE)].some(([, value = ""]) => looksLikeToken(value));
 }
 
 export const SECRET_SHAPES = {
@@ -56,16 +118,17 @@ export const SECRET_SHAPES = {
   awsAccessKey: found(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/),
   googleApiKey: found(/\bAIza[0-9A-Za-z_-]{30,}/),
   jwt: found(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/),
-  pairWithEquals: found(new RegExp(String.raw`(?<![A-Za-z0-9])${SECRET_NAME.source}["']?\s*=\s*\S+`, "i")),
-  pairWithColon: found(new RegExp(String.raw`(?<![A-Za-z0-9])${SECRET_NAME.source}["']?\s*:\s*\S+[ \t]*$`, "im")),
-  bearerToken: found(/\bbearer\s+[A-Za-z0-9._~+\/=-]{16,}/i),
-  cookieValue: found(/\b(?:cookie:\s*[^\s=]+=|session(?:[ _-]?id)?=|sid=)[^\s;&]{16,}/i),
+  pairWithEquals: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*=(?!=)\s*\S+|_${SECRET_NAME.source}\s*=(?!=)\s*(?=[^\s=]*\d)(?=[^\s=]*[A-Za-z])\S`, "i")),
+  pairWithColon: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*:\s*\S+[ \t]*$`, "im")),
   urlPassword: found(/\/\/[^\s/:@]+:[^\s/@]+@/),
   urlQuerySecret: found(/[?&#](?:token|key|api_key|apikey|secret|password|access_token|auth|sig|signature)=[^\s&#]{16,}/i),
   slackWebhook: found(/\bhooks\.slack\.com\/services\/[A-Za-z0-9]/i),
   discordWebhook: found(/\bdiscord(?:app)?\.com\/api\/webhooks\/[0-9]/i),
   cardNumber: holdsCardNumber,
-  mixedCaseKey: holdsMixedCaseKey,
+  longToken: outsideUrls(holdsLongToken),
+  longValueAfterEqualsOrColon: outsideUrls(holdsLongValueAfterEqualsOrColon),
+  longValueAfterFlag: outsideUrls(holdsLongValueAfterFlag),
+  longValueAfterSecretWord: outsideUrls(holdsLongValueAfterSecretWord),
 } satisfies Record<string, (text: string) => boolean>;
 
 export function looksLikeSecret(text: string): boolean {
