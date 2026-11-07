@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./convex/_generated/api.js",
-    "./dataModel": "./convex/_generated/dataModel.d.ts"
+    "./dataModel": "./convex/_generated/dataModel.d.ts",
+    "./scheduleTime": "./convex/scheduleTime.ts"
   },
   "scripts": {
     "dev": "convex dev",
