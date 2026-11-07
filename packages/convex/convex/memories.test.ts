@@ -1,6 +1,6 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
-import { DESCRIPTION_PROBLEMS, looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseDescription, parseNote } from "./memories.js";
+import { DESCRIPTION_PROBLEMS, looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseDescription, parseNote, textProblem } from "./memories.js";
 
 const note = (text: string, otherNotes = 0) => parseNote({ text, otherNotes });
 const textOfLength = (length: number) => "word ".repeat(length).slice(0, length).replace(/ $/, "x");
@@ -45,6 +45,80 @@ describe("parseNote", () => {
 
   it("refuses a secret", () => {
     expect(note("password=hunter2")).toEqual({ kind: "refused", problem: "secret" });
+  });
+});
+
+describe("textProblem's characters", () => {
+  it.each([
+    ["a zero-width space between Latin letters", "a\u200Bb"],
+    ["a BOM", "a\uFEFFb"],
+    ["a BOM at the start", "\uFEFFab"],
+    ["a soft hyphen", "a\u00ADb"],
+    ["a word joiner", "a\u2060b"],
+    ["a tag character", "a\u{E0041}b"],
+    ["a subdivision flag, which is built from tag characters", "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"],
+    ["a variation selector from the supplement", "a\u{E0100}b"],
+    ["a text-style variation selector", "\u2764\uFE0E"],
+    ["a Hangul filler", "a\u3164b"],
+    ["a halfwidth Hangul filler", "a\uFFA0b"],
+    ["a Hangul choseong filler", "a\u115Fb"],
+    ["a braille blank", "a\u2800b"],
+    ["a right-to-left mark", "a\u200Fb"],
+    ["an Arabic letter mark", "a\u061Cb"],
+    ["a left-to-right embedding", "a\u202Ab"],
+    ["a right-to-left override", "a\u202Eb"],
+    ["a directional isolate", "a\u2067b"],
+    ["a line separator", "a\u2028b"],
+    ["a paragraph separator", "a\u2029b"],
+    ["a NUL", "a\u0000b"],
+    ["a carriage return", "a\rb"],
+    ["a C1 control", "a\u0085b"],
+    ["a zero-width joiner between digits", "1\u200D2"],
+    ["a zero-width joiner with no letter or emoji beside it", ". \u200D ."],
+    ["a zero-width non-joiner with no letter beside it", ". \u200C ."],
+    ["a zero-width non-joiner between emoji", "\u{1F469}\u200C\u{1F4BB}"],
+    ["an emoji style after a Latin letter", "a\uFE0F"],
+    ["an emoji style after a digit with no keycap", "1\uFE0F"],
+    ["a second emoji style after an emoji", "\u2764\uFE0F\uFE0F"],
+    ["a joiner between two joiners", "a\u200D\u200D\u200Db"],
+  ])("refuses %s", (_label, text) => {
+    expect(textProblem(text, 100)).toBe("characters");
+  });
+
+  it.each([
+    ["a family emoji", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}"],
+    ["a joined emoji with a skin tone", "\u{1F469}\u{1F3FD}\u200D\u{1F4BB}"],
+    ["a joined emoji with an emoji style", "\u{1F3F3}\uFE0F\u200D\u{1F308}"],
+    ["a joined emoji that ends in an emoji style", "\u{1F3F4}\u200D\u2620\uFE0F"],
+    ["a heart with an emoji style", "\u2764\uFE0F"],
+    ["a digit keycap", "1\uFE0F\u20E3"],
+    ["a hash keycap", "#\uFE0F\u20E3"],
+    ["Persian with a zero-width non-joiner", "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645"],
+    ["Persian with a zero-width non-joiner before a space", "\u0646\u0627\u0645\u0647\u200C \u0627\u06CC"],
+    ["Hindi with a zero-width joiner", "\u0915\u094D\u200D\u0937"],
+    ["Hindi with a zero-width non-joiner", "\u0915\u094D\u200C\u0937"],
+    ["Malayalam with a joiner that ends a word", "\u0D05\u0D35\u0D28\u0D4D\u200D \u0D35\u0D28\u0D4D\u0D28\u0D41"],
+    ["a tab and a line break", "a\tb\nc"],
+    ["accented and right-to-left letters", "Malm\u00F6, \u05E9\u05DC\u05D5\u05DD"],
+    ["a Latin word with a zero-width non-joiner, a gap the docs record", "a\u200Cb"],
+  ])("allows %s", (_label, text) => {
+    expect(textProblem(text, 100)).toBeNull();
+  });
+
+  it("a note trims a leading BOM, so the stored text holds none", () => {
+    expect(note("\uFEFFab")).toEqual({ kind: "ok", text: "ab" });
+    expect(note("\uFEFF")).toEqual({ kind: "refused", problem: "empty" });
+  });
+});
+
+describe("the character refusal's words", () => {
+  it.each([
+    ["a note, to its owner", NOTE_PROBLEMS.characters.owner],
+    ["a note, to a bot", NOTE_PROBLEMS.characters.bot],
+    ["a description, to its owner", DESCRIPTION_PROBLEMS.characters.owner],
+    ["a description, to a bot", DESCRIPTION_PROBLEMS.characters.bot],
+  ])("name invisible characters for %s", (_label, words) => {
+    expect(words).toMatch(/invisible or control characters/);
   });
 });
 
@@ -120,7 +194,8 @@ describe("parseAbout", () => {
 
   it("refuses a secret and a direction control, as a note does", () => {
     expect(() => parseAbout("password=hunter2")).toThrow(/looks like/);
-    expect(() => parseAbout("a\u202Eb")).toThrow(/direction/);
+    expect(() => parseAbout("a\u202Eb")).toThrow(/invisible or control characters/);
+    expect(() => parseAbout("a\u200Bb")).toThrow(/invisible or control characters/);
   });
 });
 

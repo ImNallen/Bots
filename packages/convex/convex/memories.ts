@@ -27,11 +27,15 @@ export function looksLikeSecret(text: string): boolean {
   return SECRET_SHAPES.some((shape) => shape.test(text));
 }
 
-const REFUSED_CHARACTERS: readonly RegExp[] = [
-  /[^\P{Cc}\n\t]/u,
-  /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/,
-  /[\u2028\u2029]/,
-];
+const EMOJI_JOINER = /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/u;
+const EMOJI_STYLE = /(?<=\p{Extended_Pictographic})\uFE0F/u;
+const KEYCAP_STYLE = /(?<=[0-9#*])\uFE0F(?=\u20E3)/u;
+// A virama is a mark, and in Malayalam and Sinhala it can sit before a joiner that ends a word.
+const LETTER_JOINER = /(?<=[\p{L}\p{M}])[\u200C\u200D]|[\u200C\u200D](?=[\p{L}\p{M}])/u;
+
+const INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS = new RegExp([EMOJI_JOINER, EMOJI_STYLE, KEYCAP_STYLE, LETTER_JOINER].map((pattern) => pattern.source).join("|"), "gu");
+
+const REFUSED_CHARACTERS: readonly RegExp[] = [/[^\P{Cc}\n\t]/u, /[\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800]/u];
 
 export type TextProblem = "tooLong" | "characters" | "secret";
 
@@ -39,7 +43,8 @@ export function textProblem(text: string, max: number): TextProblem | null {
   if (text.length > max) {
     return "tooLong";
   }
-  if (REFUSED_CHARACTERS.some((characters) => characters.test(text))) {
+  const refusable = text.replace(INVISIBLE_CHARACTERS_REAL_TEXT_NEEDS, "");
+  if (REFUSED_CHARACTERS.some((characters) => characters.test(refusable))) {
     return "characters";
   }
   return looksLikeSecret(text) ? "secret" : null;
@@ -54,8 +59,8 @@ export const NOTE_PROBLEMS: Record<NoteProblem, { owner: string; bot: string }> 
     bot: `A note cannot be longer than ${MAX_NOTE_LENGTH} characters, so nothing was saved. Save a shorter note.`,
   },
   characters: {
-    owner: "A note cannot hold control characters or characters that change the text's direction",
-    bot: "A note cannot hold control characters or characters that change the text's direction, so nothing was saved. Save it without them.",
+    owner: "A note cannot hold invisible or control characters. Pasted text can carry them, so type it again",
+    bot: "A note cannot hold invisible or control characters, so nothing was saved. Save it without them.",
   },
   secret: {
     owner: "This looks like a password, key, token, or card number, so it was not saved. For a login, take over the bot's screen",
@@ -78,7 +83,7 @@ export function parseNote(args: {
 
 const ABOUT_PROBLEMS: Record<TextProblem, string> = {
   tooLong: `About you cannot be longer than ${MAX_ABOUT_LENGTH.toLocaleString("en-US")} characters`,
-  characters: "About you cannot hold control characters or characters that change the text's direction",
+  characters: "About you cannot hold invisible or control characters. Pasted text can carry them, so type it again",
   secret: "This looks like a password, key, token, or card number, so it was not saved. All of your bots read this text",
 };
 
@@ -97,8 +102,8 @@ export const DESCRIPTION_PROBLEMS: Record<TextProblem, { owner: string; bot: str
     bot: `Your description cannot be longer than ${MAX_DESCRIPTION_LENGTH.toLocaleString("en-US")} characters, so nothing changed. Write a shorter one.`,
   },
   characters: {
-    owner: "Description cannot hold control characters or characters that change the text's direction",
-    bot: "Your description cannot hold control characters or characters that change the text's direction, so nothing changed. Write it without them.",
+    owner: "Description cannot hold invisible or control characters. Pasted text can carry them, so type it again",
+    bot: "Your description cannot hold invisible or control characters, so nothing changed. Write it without them.",
   },
   secret: {
     owner: "This looks like a password, key, token, or card number, so the description was not saved. For a login, take over the bot's screen",
