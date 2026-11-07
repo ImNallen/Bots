@@ -3121,6 +3121,332 @@ try {
     }
   });
 
+  await scenario("activity. one page lists each fire once, says what was blocked, and loads at its limits", async () => {
+    await putKey(MISTRAL_KEY);
+    const ZONE = "Europe/Stockholm";
+    const DAY = 24 * 60 * 60_000;
+    const WRITE_RETRY_MS = 500;
+    const NEAR_ONE_MIB = "漢".repeat(340_000);
+    const LARGEST_NAME = "x".repeat(256 * 1024);
+    const LISTED = 50;
+    const OLDEST_LISTED = 1;
+    type Page = Awaited<ReturnType<typeof first.query<typeof api.activity.page>>>;
+    type Row = Page["runs"][number];
+    const adminRun = <T>(fn: string, args: object = {}): T => {
+      const result = runConvex(["run", fn, JSON.stringify(args)]);
+      assert.ok(result.kind === "ok", `convex run ${fn} failed: ${result.kind === "failed" ? result.output : ""}`);
+      const printed = result.stdout.trim();
+      return JSON.parse(printed === "" ? "null" : printed) as T;
+    };
+    const owners: ConvexHttpClient[] = [first];
+    const newOwner = async (name: string) => {
+      const client = clientFor(await signToken(`dev:verify-activity-${name}-${nonce}@localhost`));
+      await client.mutation(api.users.ensureCurrent, {});
+      owners.push(client);
+      return client;
+    };
+    const chats: Chat[] = [];
+    const chatFor = async (client: ConvexHttpClient, name: string) => {
+      const chat = await newChat({ client, name: `activity-${name}` });
+      chats.push(chat);
+      return chat;
+    };
+    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<{ scheduleId: Id<"schedules">; threadId: Id<"threads"> }>("scheduleChecks:createForCheck", { botId, instruction });
+    const pageOf = (client: ConvexHttpClient) => client.query(api.activity.page, {});
+    const rowsOfBot = async (client: ConvexHttpClient, botId: Id<"bots">) => (await pageOf(client)).runs.filter((row) => row.bot._id === botId);
+    const rowOfRun = (client: ConvexHttpClient, runId: Id<"runs">) =>
+      waitFor({
+        description: `run ${runId} to reach an end in Activity`,
+        timeoutMs: 90_000,
+        intervalMs: 200,
+        probe: async () => {
+          const row = (await pageOf(client)).runs.find((candidate) => candidate._id === runId);
+          return row !== undefined && TERMINAL.includes(row.state.kind) ? row : null;
+        },
+      });
+    const reportsIn = async (client: ConvexHttpClient, threadId: Id<"threads">) =>
+      (await client.query(api.threads.timeline, { threadId })).runs.flatMap(bodiesOf).filter((body) => body.kind === "routineReport");
+    const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
+    const leases = new Map<Id<"runs">, string>();
+    const claimed = async (runId: Id<"runs">) => {
+      const claim = await service.mutation(api.runs.claim, { runId });
+      assert.ok(claim.kind === "claimed", "the claim was refused");
+      leases.set(runId, claim.leaseToken);
+      return claim;
+    };
+    const finished = async (runId: Id<"runs">, leaseToken: string, kind: "done" | "cancelled" = "done") => {
+      await service.mutation(api.runs.finish, { runId, leaseToken, state: { kind } });
+      leases.delete(runId);
+    };
+    // The self-hosted backend allows 4 MiB of writes per second.
+    const paced = async <T>(write: () => Promise<T>): Promise<T> => {
+      for (;;) {
+        try {
+          return await write();
+        } catch (error) {
+          if (!String(error).includes("TooManyWrites")) {
+            throw error;
+          }
+          await sleep(WRITE_RETRY_MS);
+        }
+      }
+    };
+    const storeFinishedRun = async (chat: Chat, text: string, body: Body) => {
+      const runId = await paced(() => chat.send(text));
+      const { leaseToken, nextSeq } = await paced(() => claimed(runId));
+      await paced(() => service.mutation(api.runs.append, { runId, leaseToken, expectedSeq: nextSeq, body }));
+      await paced(() => finished(runId, leaseToken));
+      return runId;
+    };
+
+    try {
+      const blocking = await chatFor(first, "blocked");
+      const instruction = `activity blocked **bold** <b>html</b> ${nonce}`;
+      const report = `activity report ${nonce}`;
+      const blockedRoutine = newRoutine(blocking.botId, instruction);
+      fake.script(instruction, ({ toolResults }) => (toolResults.length === 0 ? tools(shellCall("echo ran")) : { kind: "text", text: report }));
+      const blockedRunId = adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: blockedRoutine.scheduleId });
+      const blockedRow = await rowOfRun(first, blockedRunId);
+      await check("a read-only run that had a rejected call is blocked, and its row has what the owner needs", () => {
+        assert.equal(blockedRow.blocked, true);
+        assert.equal(blockedRow.trigger, "schedule");
+        assert.equal(blockedRow.instruction, instruction);
+        assert.deepEqual(blockedRow.state, { kind: "done" });
+        assert.equal(blockedRow.lastText, report);
+        assert.equal(typeof blockedRow.createdAt, "number");
+        assert.equal(typeof blockedRow.endedAt, "number");
+        assert.equal(blockedRow.bot.name, `activity-blocked-${nonce}`);
+      });
+      await check("a fire shows once, as the routine's own run, although a report row for it is in the chat", async () => {
+        assert.deepEqual((await reportsIn(first, blocking.threadId)).map((body) => body.text), [report]);
+        const reportRuns = await first.query(api.threads.timeline, { threadId: blocking.threadId });
+        assert.equal(reportRuns.runs.length, 1);
+        assert.deepEqual((await rowsOfBot(first, blocking.botId)).map((row) => row._id), [blockedRunId]);
+      });
+
+      const chatText = `activity chat ${nonce}`;
+      const chatReply = `activity reply\n\n  on two lines ${nonce}`;
+      fake.script(chatText, () => ({ kind: "text", text: chatReply }));
+      const chatRow = await rowOfRun(first, await blocking.send(chatText));
+      await check("a chat run is a chat row, with no routine and nothing blocked, and its text on one line", () => {
+        assert.equal(chatRow.trigger, "user");
+        assert.equal(chatRow.instruction, null);
+        assert.equal(chatRow.blocked, false);
+        assert.equal(chatRow.lastText, `activity reply on two lines ${nonce}`);
+      });
+      await check("rows come newest first", async () => {
+        const created = (await rowsOfBot(first, blocking.botId)).map((row) => row.createdAt);
+        assert.equal(created.length, 2);
+        assert.deepEqual(created, created.toSorted((a, b) => b - a));
+      });
+
+      const failing = await chatFor(first, "failed");
+      const failedRoutine = newRoutine(failing.botId, `activity late ${nonce}`);
+      const lateRunId = adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: failedRoutine.scheduleId, deadlineAt: Date.now() - 1000 });
+      const lateRow = await rowOfRun(first, lateRunId);
+      await check("a failed routine run gives its reason, has no text, and posts nothing to the chat", async () => {
+        assert.deepEqual(lateRow.state, { kind: "failed", reason: "The routine ran past its 30 minute limit" });
+        assert.equal(lateRow.lastText, null);
+        assert.equal(lateRow.blocked, false);
+        assert.deepEqual(await reportsIn(first, failing.threadId), []);
+      });
+      const failText = `activity model error ${nonce}`;
+      fake.script(failText, () => ({ kind: "status", status: 400 }));
+      const failedChatRow = await rowOfRun(first, await failing.send(failText));
+      await check("a failed chat run gives its reason and keeps the owner's message as its text", () => {
+        assert.equal(failedChatRow.state.kind, "failed");
+        assert.ok(failedChatRow.state.kind === "failed" && failedChatRow.state.reason.length > 0);
+        assert.equal(failedChatRow.lastText, failText);
+      });
+
+      const stopping = await chatFor(first, "stopped");
+      const stopText = `activity stop ${nonce}`;
+      fake.script(stopText, () => ({ kind: "stall", partial: "stuck" }));
+      const stopRunId = await stopping.send(stopText);
+      const running = await waitFor({
+        description: "the run to hold a lease",
+        probe: async () => {
+          const page = await pageOf(first);
+          return page.runs.find((row) => row._id === stopRunId)?.state.kind === "running" ? page : null;
+        },
+      });
+      await check("a running run shows as running, and the page has no lease in it", () => {
+        const row = running.runs.find((candidate) => candidate._id === stopRunId);
+        assert.deepEqual(row?.state, { kind: "running" });
+        assert.equal(row?.endedAt, undefined);
+        assert.ok(!/lease/i.test(JSON.stringify(running)));
+      });
+      await first.mutation(api.runs.requestCancel, { runId: stopRunId });
+      const stoppedRow = await rowOfRun(first, stopRunId);
+      await check("a stopped run shows as stopped, with its end time", () => {
+        assert.deepEqual(stoppedRow.state, { kind: "cancelled" });
+        assert.equal(typeof stoppedRow.endedAt, "number");
+        assert.equal(stoppedRow.blocked, false);
+      });
+
+      await first.mutation(api.users.setTimeZone, { timeZone: ZONE });
+      const planner = await chatFor(first, "upcoming");
+      const pausedRoutine = newRoutine(planner.botId, `activity paused ${nonce}`);
+      const soonRoutine = newRoutine(planner.botId, `activity soon ${nonce}`);
+      const laterRoutine = newRoutine(planner.botId, `activity later ${nonce}`);
+      const soonAt = Date.now() + 2 * DAY;
+      adminRun("scheduleChecks:moveForCheck", { scheduleId: laterRoutine.scheduleId, nextFireAt: Date.now() + 5 * DAY });
+      adminRun("scheduleChecks:moveForCheck", { scheduleId: soonRoutine.scheduleId, nextFireAt: soonAt });
+      const upcomingOf = async () => (await pageOf(first)).upcoming.filter((row) => row.bot._id === planner.botId);
+      await check("upcoming lists the soonest routine first and a paused routine last, with words for when", async () => {
+        const upcoming = await upcomingOf();
+        assert.deepEqual(upcoming.map((row) => row.instruction), [`activity soon ${nonce}`, `activity later ${nonce}`, `activity paused ${nonce}`]);
+        assert.equal(upcoming[0]?.nextFireAt, soonAt);
+        assert.equal(upcoming[0]?.when, describeCadence({ kind: "everyHours", hours: 24 }, ZONE));
+        assert.equal(upcoming[0]?.bot.name, `activity-upcoming-${nonce}`);
+        assert.equal(upcoming[2]?.nextFireAt, undefined);
+      });
+      adminRun("scheduleChecks:moveForCheck", { scheduleId: laterRoutine.scheduleId, nextFireAt: Date.now() - 2 * 60 * 60_000 });
+      runConvex(["run", "schedules:fireDue", "{}"]);
+      await check("a routine's last missed run shows on its upcoming row, because a miss has no run of its own", async () => {
+        const missed = (await upcomingOf()).find((row) => row.instruction === `activity later ${nonce}`);
+        assert.equal(typeof missed?.lastMissed?.at, "number");
+        assert.ok((missed?.lastMissed?.reason ?? "").length > 0);
+        assert.ok((missed?.nextFireAt ?? 0) > Date.now());
+        assert.deepEqual(await rowsOfBot(first, planner.botId), []);
+      });
+
+      adminRun("scheduleChecks:seedRunsForCheck", { scheduleId: soonRoutine.scheduleId, count: 3, state: { kind: "done" }, endedAt: Date.now(), asReports: true });
+      await check("report rows that have no raw run, as after a purge, are not listed and do not break the page", async () => {
+        assert.deepEqual(await rowsOfBot(first, planner.botId), []);
+      });
+
+      await check("another user sees none of this", async () => {
+        const seen = JSON.stringify(await pageOf(second));
+        for (const chat of chats) {
+          assert.ok(!seen.includes(chat.botId));
+        }
+        assert.ok(!seen.includes(instruction));
+      });
+      await check("a signed-in identity with no user row gets an empty page", async () => {
+        const stranger = clientFor(await signToken(`dev:verify-activity-stranger-${nonce}@localhost`));
+        const page = await pageOf(stranger);
+        assert.deepEqual([page.upcoming, page.runs], [[], []]);
+      });
+      await check("the service token gets an empty page", async () => {
+        const page = await pageOf(service);
+        assert.deepEqual([page.upcoming, page.runs], [[], []]);
+      });
+      await check("a query with no sign-in gets nothing", async () => {
+        await assertRejected(pageOf(anonymous), /Not authenticated/);
+      });
+
+      await first.mutation(api.schedules.remove, { scheduleId: blockedRoutine.scheduleId });
+      await check("deleting a routine takes its rows and leaves its report in the chat, and the page loads throughout", async () => {
+        await waitFor({
+          description: "the routine's raw runs to go",
+          timeoutMs: 30_000,
+          probe: async () => ((await rowsOfBot(first, blocking.botId)).some((row) => row.trigger === "schedule") ? null : true),
+        });
+        assert.deepEqual((await reportsIn(first, blocking.threadId)).map((body) => body.text), [report]);
+      });
+
+      await first.mutation(api.bots.remove, { botId: failing.botId });
+      await check("a run of a bot that is gone does not appear, at once, before its history is purged", async () => {
+        const page = await pageOf(first);
+        assert.ok(!page.runs.some((row) => row.bot._id === failing.botId));
+        assert.ok(!page.upcoming.some((row) => row.bot._id === failing.botId));
+      });
+
+      const wideOwner = await newOwner("wide");
+      const wide = await chatFor(wideOwner, "wide");
+      const wideRuns: Id<"runs">[] = [];
+      for (let index = 0; index <= LISTED; index += 1) {
+        const body: Body =
+          index === OLDEST_LISTED
+            ? { kind: "toolResult", toolCallId: "refused", name: "shell", outcome: "rejected", output: "no", truncated: false }
+            : index % 2 === 0
+              ? { kind: "assistantTurn", text: NEAR_ONE_MIB, toolCalls: [], usage: { promptTokens: 1, completionTokens: 1 }, model: "wide" }
+              : { kind: "toolResult", toolCallId: `wide${index}`, name: "shell", outcome: "ok", output: NEAR_ONE_MIB, truncated: false };
+        wideRuns.push(await storeFinishedRun(wide, `wide ${index} ${nonce}`, body));
+      }
+      const widePage = await pageOf(wideOwner);
+      const textOf = (row: Row | undefined) => row?.lastText ?? null;
+      await check("50 runs with events near 1 MiB load inside the query limit, newest first, and the 51st is not listed", () => {
+        assert.equal(widePage.runs.length, LISTED);
+        assert.deepEqual(widePage.runs.map((row) => row._id), wideRuns.slice(1).reverse());
+      });
+      await check("the budget gives text to the newest rows, cut to a line or two, and past it a row has none and still loads", () => {
+        const withText = widePage.runs.filter((row) => row.lastText !== null);
+        assert.ok(withText.length >= 4 && withText.length < LISTED, `${withText.length} rows had text`);
+        assert.ok(withText.every((row) => (row.lastText ?? "").length <= 280));
+        assert.notEqual(textOf(widePage.runs[0]), null);
+        assert.equal(textOf(widePage.runs.at(-1)), null);
+      });
+      await check("blocked holds past the budget, on the oldest listed row, and only there", () => {
+        assert.equal(widePage.runs.at(-1)?.blocked, true);
+        assert.deepEqual(widePage.runs.filter((row) => row.blocked).map((row) => row._id), [wideRuns[OLDEST_LISTED]]);
+      });
+      await check("the second user's page holds none of the wide owner's rows", async () => {
+        assert.ok(!(await pageOf(second)).runs.some((row) => row.bot._id === wide.botId));
+      });
+      await check("a claimed run's lease token never reaches the page", async () => {
+        const runId = await wide.send(`held ${nonce}`);
+        const { leaseToken } = await claimed(runId);
+        const page = JSON.stringify(await pageOf(wideOwner));
+        assert.ok(page.includes(runId));
+        assert.ok(!page.includes(leaseToken));
+        await finished(runId, leaseToken);
+      });
+
+      const namedOwner = await newOwner("named");
+      const named = await chatFor(namedOwner, "named");
+      for (let index = 0; index < LISTED; index += 1) {
+        await storeFinishedRun(named, `named ${index} ${nonce}`, { kind: "toolResult", toolCallId: "refused", name: LARGEST_NAME, outcome: "rejected", output: "no", truncated: false });
+      }
+      await check("50 rejected calls with the longest name a model can send still load, and every row is blocked", async () => {
+        const page = await pageOf(namedOwner);
+        assert.equal(page.runs.length, LISTED);
+        assert.ok(page.runs.every((row) => row.blocked));
+      });
+    } finally {
+      for (const [runId, leaseToken] of leases) {
+        await paced(() => finished(runId, leaseToken, "cancelled")).catch(() => {});
+      }
+      for (const client of owners) {
+        const bots = await client.query(api.bots.list, {}).catch(() => []);
+        for (const bot of bots) {
+          for (const routine of (await client.query(api.schedules.listForBot, { botId: bot._id }).catch(() => null))?.routines ?? []) {
+            await client.mutation(api.schedules.pause, { scheduleId: routine._id }).catch(() => {});
+          }
+        }
+      }
+      for (const chat of chats) {
+        const active = await chat.client.query(api.threads.activeRun, { botId: chat.botId }).catch(() => null);
+        if (active !== null) {
+          await chat.client.mutation(api.runs.requestCancel, { runId: active._id }).catch(() => {});
+        }
+      }
+      for (const chat of chats) {
+        await waitFor({
+          description: "the bot to have no active run",
+          timeoutMs: 40_000,
+          probe: async () => ((await chat.client.query(api.threads.activeRun, { botId: chat.botId }).catch(() => null)) === null ? true : null),
+        }).catch(() => {});
+        await chat.client.mutation(api.bots.remove, { botId: chat.botId }).catch((error: unknown) => {
+          if (!String(error).includes("Bot not found")) {
+            console.log(`info  could not delete ${chat.botId}: ${String(error)}`);
+          }
+        });
+      }
+      await check("this scenario leaves no routine behind", async () => {
+        for (const client of owners) {
+          const user = await client.query(api.users.current, {});
+          const left = user === null ? [] : adminRun<unknown[]>("scheduleChecks:routinesOfOwnerForCheck", { ownerId: user._id });
+          assert.deepEqual(left, []);
+        }
+        for (const chat of chats) {
+          assert.equal(await chat.client.query(api.bots.get, { botId: chat.botId }), null);
+        }
+      });
+    }
+  });
+
   await scenario("C. the roadmap check: SIGKILL the orchestrator mid-tool", async () => {
     const chat = await newChat({ client: first, name: "kill-mid-tool" });
     const text = `kill mid tool ${nonce}`;

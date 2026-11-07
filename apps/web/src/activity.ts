@@ -46,7 +46,7 @@ export function friendlyStep(tool: string | null): string {
 }
 
 // The list shows one line of plain text, and a bot's last message is markdown that has already lost its line breaks.
-function withoutMarkdown(message: string): string {
+export function withoutMarkdown(message: string): string {
   return message
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^(#{1,6}|>|[-*+]|\d+[.)])\s+/, "")

@@ -214,12 +214,13 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
 export function InfoPanel(props: {
   bot: Doc<"bots">;
   faceState: FaceState;
+  revealRoutines: boolean;
   profileEdits: ProfileEdits;
   onProfileEditsChange: Dispatch<SetStateAction<ProfileEdits>>;
   onClose: () => void;
   onOpenScreen: () => void;
 }) {
-  const { bot, faceState, profileEdits, onProfileEditsChange, onClose, onOpenScreen } = props;
+  const { bot, faceState, revealRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen } = props;
   const isPhone = useIsPhone();
   const character = characterOf(bot);
   return (
@@ -247,7 +248,7 @@ export function InfoPanel(props: {
       <h3 className="label">Profile</h3>
       <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
       <MemorySection botId={bot._id} botName={bot.name} />
-      <RoutinesSection botId={bot._id} botName={bot.name} />
+      <RoutinesSection botId={bot._id} botName={bot.name} reveal={revealRoutines} />
       <h3 className="label">Approvals</h3>
       <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
       <h3 className="label">Character</h3>

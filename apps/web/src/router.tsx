@@ -5,6 +5,7 @@ import {
   createRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import { ActivityPage } from "./ActivityPage.tsx";
 import { AppShell } from "./AppShell.tsx";
 import { useAuthReconnecting } from "./auth.tsx";
 import { BotPage } from "./BotPage.tsx";
@@ -47,18 +48,25 @@ const indexRoute = createRoute({
   component: Home,
 });
 
+const activityRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/activity",
+  component: ActivityPage,
+});
+
 const botRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/bots/$botId",
-  validateSearch: (search: Record<string, unknown>): { info?: true; screen?: true } => ({
+  validateSearch: (search: Record<string, unknown>): { info?: true; screen?: true; routines?: true } => ({
     ...(search.info === true && { info: true }),
     ...(search.screen === true && { screen: true }),
+    ...(search.routines === true && { routines: true }),
   }),
   component: BotPage,
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([appRoute.addChildren([indexRoute, botRoute])]),
+  routeTree: rootRoute.addChildren([appRoute.addChildren([indexRoute, activityRoute, botRoute])]),
   defaultErrorComponent: RouteError,
   defaultNotFoundComponent: NotFound,
 });

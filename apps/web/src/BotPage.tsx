@@ -275,7 +275,7 @@ function BotThread(props: { botId: Id<"bots">; botName: string; character: Chara
 function BotChat({ botId }: { botId: string }) {
   const bot = useQuery(api.bots.get, { botId });
   const rows = useQuery(api.bots.overview);
-  const { info, screen } = useSearch({ from: "/app/bots/$botId" });
+  const { info, screen, routines } = useSearch({ from: "/app/bots/$botId" });
   const navigate = useNavigate();
   const router = useRouter();
   const isPhone = useIsPhone();
@@ -352,6 +352,7 @@ function BotChat({ botId }: { botId: string }) {
         <InfoPanel
           bot={bot}
           faceState={faceState}
+          revealRoutines={routines === true}
           profileEdits={profileEdits}
           onProfileEditsChange={setProfileEdits}
           onClose={closeInfo}

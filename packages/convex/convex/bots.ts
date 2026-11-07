@@ -1,22 +1,17 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
-import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
-import { decideActivity, lastMessageOf } from "./activity.js";
+import { internalMutation, mutation, query } from "./_generated/server.js";
+import { TEXT_READ_BYTES, decideActivity, lastMessageOf, newestEventsUpToText } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
 import { promptRoutines, routinesOfBot } from "./schedules.js";
 import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
-import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
+import { approvalLevel, botColor, botShape } from "./validators.js";
 
 const DEFAULT_APPROVAL_LEVEL = "outside";
 // Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
 const TAKEOVER_MS = 15 * 60 * 1000;
-const OVERVIEW_EVENTS_PER_BOT = 6;
-// A query may read 16 MiB and one event can be 1 MiB. Past this, a bot's row has no tool or message, and the list still loads.
-const OVERVIEW_EVENT_BYTES = 8 * 1024 * 1024;
-const encoder = new TextEncoder();
 
 export const list = query({
   args: {},
@@ -46,37 +41,6 @@ export const get = query({
   },
 });
 
-async function newestEventsOfRun(ctx: QueryCtx, runId: Id<"runs">, budget: { bytes: number }): Promise<RunEventBody[]> {
-  if (budget.bytes <= 0) {
-    return [];
-  }
-  const events: RunEventBody[] = [];
-  const spend = (event: { body: RunEventBody }) => {
-    budget.bytes -= encoder.encode(JSON.stringify(event)).length;
-    events.push(event.body);
-  };
-  for await (const event of ctx.db
-    .query("runEvents")
-    .withIndex("by_run_seq", (q) => q.eq("runId", runId))
-    .order("desc")) {
-    spend(event);
-    if (events.length === OVERVIEW_EVENTS_PER_BOT || budget.bytes <= 0) {
-      break;
-    }
-  }
-  // A long tool loop can fill the window with turns that have no text. Every run starts with its user's message.
-  if (lastMessageOf(events) === null && budget.bytes > 0) {
-    const first = await ctx.db
-      .query("runEvents")
-      .withIndex("by_run_seq", (q) => q.eq("runId", runId))
-      .first();
-    if (first !== null) {
-      spend(first);
-    }
-  }
-  return events;
-}
-
 export const overview = query({
   args: {},
   handler: async (ctx) => {
@@ -94,7 +58,7 @@ export const overview = query({
       .withIndex("by_owner_state", (q) => q.eq("ownerId", user._id).eq("state", "pending"))
       .collect();
     const runsWithPendingApproval = new Set<string>(pending.map((approval) => approval.runId));
-    const budget = { bytes: OVERVIEW_EVENT_BYTES };
+    const budget = { bytes: TEXT_READ_BYTES };
     const rows = [];
     for (const bot of bots) {
       const thread = await chatThreadOf(ctx, bot._id);
@@ -107,8 +71,8 @@ export const overview = query({
               .order("desc")
               .first();
       const currentRun = (await activeRunOfBot(ctx, bot._id)) ?? chatRun;
-      const chatEvents = chatRun === null ? [] : await newestEventsOfRun(ctx, chatRun._id, budget);
-      const newestEvents = currentRun === null || currentRun._id === chatRun?._id ? chatEvents : await newestEventsOfRun(ctx, currentRun._id, budget);
+      const chatEvents = chatRun === null ? [] : await newestEventsUpToText(ctx, chatRun._id, budget);
+      const newestEvents = currentRun === null || currentRun._id === chatRun?._id ? chatEvents : await newestEventsUpToText(ctx, currentRun._id, budget);
       rows.push({
         lastRunAt: currentRun?._creationTime ?? 0,
         row: {

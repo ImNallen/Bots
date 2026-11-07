@@ -664,6 +664,16 @@ The prompt tells a chat run to propose a routine only when the owner asks for so
 
 A chat run still browses logged in, so a page in a chat run can log the bot into another account, which a later take-over then spreads. Downloads in a chat run are not blocked. The roadmap lists both.
 
+## How the Activity page reads
+
+Activity lists what all of an owner's bots did and what is coming up. It is the only list that shows a failed routine next to the rest, because a failed run posts nothing to the chat. It has no table of its own, so nothing can fall out of step with the runs. A missed run has no row, because `lastMissed` holds only the newest miss, so it shows on its routine.
+
+One query, `activity.page`, reads `runs.by_owner`, newest first. A finished routine has its raw run and a report row in the chat, and the report row has trigger `schedule` and no `scheduleId`. Activity leaves report rows out, so each fire shows once and a failed one looks like the rest. Report rows stay for good, so the query stops after 2,000 rows or at 50 runs.
+
+A query may read 16 MiB, and an event can be 1 MiB. So text reads share a budget of 8 MiB, as in `bots.overview`, and they stop at a run's newest text, because a finished routine's newest event is its report. `blocked` reads `runEvents.by_run_outcome` once for each run, and it never gives up. A model chooses a rejected call's name, up to 256 KiB, so those reads come first and take from the same budget, which keeps the worst case at about 15 MiB by arithmetic. A test that left them out of the budget failed on the real backend with too many bytes read.
+
+Text from a bot renders as plain text, because a page can write it. `publicState` removes a running run's lease before any of this leaves the query.
+
 ## Where secrets live
 
 The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.

@@ -1,5 +1,5 @@
 import { api } from "@bots/convex";
-import { Link, Outlet, useParams } from "@tanstack/react-router";
+import { Link, Outlet, useMatchRoute, useParams } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { createContext, useContext, useState } from "react";
 import { FACE_STATES, subLineOf, useShownActivity, type BotRow } from "./activity.ts";
@@ -50,6 +50,12 @@ function Sidebar(props: { email: string; onNewBot: () => void; onSettings: () =>
           <Icon name="plus" />
         </button>
       </div>
+      <Link className="row side-activity" to="/activity">
+        <span className="side-activity-icon">
+          <Icon name="pulse" />
+        </span>
+        <span className="row-name">Activity</span>
+      </Link>
       <nav className="rows" aria-label="Your bots">
         {rows === undefined && (
           <p className="rows-note" role="status">
@@ -72,11 +78,13 @@ function Sidebar(props: { email: string; onNewBot: () => void; onSettings: () =>
 
 function Shell({ email }: { email: string }) {
   const { botId } = useParams({ strict: false });
+  const matchRoute = useMatchRoute();
+  const showsContent = botId !== undefined || matchRoute({ to: "/activity" }) !== false;
   const [dialog, setDialog] = useState<"newBot" | "settings" | null>(null);
   const openNewBot = () => setDialog("newBot");
   const closeDialog = () => setDialog(null);
   return (
-    <div className="app" data-view={botId === undefined ? "list" : "bot"}>
+    <div className="app" data-view={showsContent ? "content" : "list"}>
       <Sidebar email={email} onNewBot={openNewBot} onSettings={() => setDialog("settings")} />
       <main className="content">
         <OpenNewBot.Provider value={openNewBot}>
