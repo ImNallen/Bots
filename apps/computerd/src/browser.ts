@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { capText, type BrowserInvocation, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
 import type { Desktops } from "./desktops.ts";
+import { log } from "./log.ts";
 
 const CDP_CONNECT_TIMEOUT_MS = 5000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -10,9 +11,20 @@ const MAX_SETTLE_ROUNDS = 4;
 // The orchestrator's link gives a browser tool this long plus a 60 second margin. That margin holds a take-over's wait and a desktop's
 // start, so the tool answers for itself, and the link's 120 seconds never turn a slow page into an unknown outcome.
 const TOOL_DEADLINE_MS = 60_000;
+// A page that gives no answer for this long, after a call ended early, counts as frozen. With CLOSE_PAGE_MS it fits inside the 10
+// seconds that the link waits after a cancel.
+const FROZEN_PROBE_MS = 5000;
+const CLOSE_PAGE_MS = 3000;
 
-const DEADLINE_OUTPUT = (deadlineMs: number) =>
-  `The browser action did not finish in ${deadlineMs / 1000} seconds, so it stopped, and it may have partly happened. Take a new snapshot to see where the page got to.`;
+// What a call that ended early left behind. A page that is gone counts as answering, because nothing is left to free.
+type PageFate = "answers" | "closed" | "keptForOwner" | "stuck";
+
+const PAGE_FATE_OUTPUT: Record<PageFate, string> = {
+  answers: "Take a new snapshot to see where the page got to.",
+  closed: "The page froze and was closed. The next browser tool starts on a new blank page.",
+  keptForOwner: "The page is not answering. It stayed open because the owner has the screen.",
+  stuck: "The page froze, and the browser did not close it.",
+};
 
 const KEY_CODES: Record<string, number> = {
   Enter: 13,
@@ -157,9 +169,12 @@ export function createBrowser(args: {
   desktops: Pick<Desktops, "acquire">;
   connector?: CdpConnector;
   takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
+  // A person who is typing on the screen answers for the page, so nothing closes it under them.
+  personHasScreen?: (botId: string) => boolean;
   toolDeadlineMs?: number;
+  frozenProbeMs?: number;
 }): Browser {
-  const { desktops, connector = webSocketConnector, takeoverSettled, toolDeadlineMs = TOOL_DEADLINE_MS } = args;
+  const { desktops, connector = webSocketConnector, takeoverSettled, personHasScreen, toolDeadlineMs = TOOL_DEADLINE_MS, frozenProbeMs = FROZEN_PROBE_MS } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
@@ -189,11 +204,11 @@ export function createBrowser(args: {
     }
     const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
     const id = String(sessionId);
+    sessions.set(targetId, id);
     await client.send("Page.enable", {}, id);
     await client.send("Runtime.enable", {}, id);
     // A bot's input through CDP needs the page to believe it has focus, and only one window can have X focus.
     await client.send("Emulation.setFocusEmulationEnabled", { enabled: true }, id);
-    sessions.set(targetId, id);
     return id;
   }
 
@@ -299,6 +314,33 @@ export function createBrowser(args: {
     return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT));
   }
 
+  // A new blank page goes on top, so the next call works at once even if a same-site opener shares the frozen process. Its refs are
+  // gone, so an old click gets the stale ref error. The browser holds all of this, so a restart of computerd finds the same pages.
+  async function settlePage(botId: string, connection: Connection): Promise<PageFate> {
+    const { client } = connection;
+    const targetId = connection.pages.at(-1);
+    const sessionId = targetId === undefined ? undefined : connection.sessions.get(targetId);
+    if (targetId === undefined || sessionId === undefined) {
+      return "answers";
+    }
+    const probe = AbortSignal.timeout(frozenProbeMs);
+    await untilEnd(probe, () => client.send("Runtime.evaluate", { expression: "1" }, sessionId)).catch(() => {});
+    if (!probe.aborted) {
+      return "answers";
+    }
+    if (personHasScreen?.(botId) === true) {
+      return "keptForOwner";
+    }
+    const limit = AbortSignal.timeout(CLOSE_PAGE_MS);
+    try {
+      await untilEnd(limit, () => client.send("Target.closeTarget", { targetId }));
+      await untilEnd(limit, () => client.send("Target.createTarget", { url: "about:blank" }));
+      return "closed";
+    } catch {
+      return "stuck";
+    }
+  }
+
   async function run(botId: string, tool: BrowserInvocation, signal: AbortSignal): Promise<ToolResult> {
     // A cancelled call can wait in the queue, and a stopped run must not click or submit anything after that.
     signal.throwIfAborted();
@@ -314,10 +356,15 @@ export function createBrowser(args: {
         const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, tool)}`);
         return { outcome: "ok", output, truncated };
       } catch (error) {
-        if (signal.aborted || !call.ends.aborted) {
+        if (!call.ends.aborted) {
           throw error;
         }
-        return { outcome: "timeout", output: DEADLINE_OUTPUT(toolDeadlineMs), truncated: false };
+        const fate = await settlePage(botId, connection);
+        log({ level: "info", event: "browser-call-ended-early", botId, tool: tool.name, cancelled: signal.aborted, fate });
+        const page = PAGE_FATE_OUTPUT[fate];
+        return signal.aborted
+          ? { outcome: "cancelled", output: `The browser action was cancelled. ${page}`, truncated: false }
+          : { outcome: "timeout", output: `The browser action did not finish in ${toolDeadlineMs / 1000} seconds, so it stopped, and it may have partly happened. ${page}`, truncated: false };
       }
     } finally {
       lease.release();

@@ -167,6 +167,7 @@ export type Logins = {
   recover: (acquire: (botId: string) => Promise<DesktopLease>) => Promise<void>;
   // Waits until this bot has no input stream and its last take-over's cookies are read, or for a limit, or for the signal.
   settled: (botId: string, signal: AbortSignal) => Promise<void>;
+  hasInputStream: (botId: string) => boolean;
 };
 
 const BROWSER_DEADLINE_MS = 10_000;
@@ -327,6 +328,7 @@ export function createLogins(args: {
           }
         }
       }),
+    hasInputStream: (botId) => openStreams.has(botId),
     // The runner resumes a bot as soon as a take-over ends, and the input stream closes after that. A cookie that the bot changes in
     // between would move as if the owner had changed it, and could spread the bot's own account or logout to every other bot.
     settled: async (botId, signal) => {

@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BrowserInvocation } from "@bots/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBrowser, nextPages, type CdpConnector } from "./browser.ts";
-import { desktopOf, type Desktops, type Slot } from "./desktops.ts";
+import { createCalls } from "./calls.ts";
+import { createDesktops, desktopOf, IDLE_STOP_MS, type Desktops, type Slot } from "./desktops.ts";
+import { openJournal } from "./journal.ts";
 
 type Sent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
@@ -12,7 +17,8 @@ function fakeChromium() {
   let nextTarget = 1;
   let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
   let sendHook: ((method: string) => void) | undefined;
-  let frozen = false;
+  const frozen = new Set<string>();
+  const stalled = new Set<string>();
 
   return {
     pages,
@@ -30,11 +36,12 @@ function fakeChromium() {
       locateResult = value;
     },
     // A page's main thread that never yields answers nothing on its session. The browser process still answers.
-    freezePage: () => {
-      frozen = true;
+    freezePage: (targetId = "target-0") => {
+      frozen.add(`session-${targetId}`);
     },
-    thawPage: () => {
-      frozen = false;
+    thaw: () => frozen.clear(),
+    stall: (method: string) => {
+      stalled.add(method);
     },
     client: {
       identity: "browser",
@@ -45,7 +52,7 @@ function fakeChromium() {
       send: async (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
         sent.push({ method, params, sessionId });
         sendHook?.(method);
-        if (frozen && sessionId !== undefined) {
+        if ((sessionId !== undefined && frozen.has(sessionId)) || stalled.has(method)) {
           return await new Promise<Record<string, unknown>>(() => {});
         }
         switch (method) {
@@ -61,6 +68,9 @@ function fakeChromium() {
             pages.set(targetId, {});
             return { targetId };
           }
+          case "Target.closeTarget":
+            pages.delete(String(params.targetId));
+            return { success: true };
           case "Target.attachToTarget":
             return { sessionId: `session-${String(params.targetId)}` };
           case "Runtime.evaluate": {
@@ -130,6 +140,7 @@ function world() {
     desktops,
     connector,
     slots,
+    chromiumOn,
     chromiumOfBot: (botId: string) => chromiumOn(desktopOf(slots.get(botId) as Slot).cdpPort),
     openLeases: () => openLeases,
     acquires: () => acquires,
@@ -405,33 +416,107 @@ describe("browser", () => {
   });
 
   describe("a page that does not answer", () => {
-    const QUICK_DEADLINE_MS = 600;
-    const quick = () => createBrowser({ desktops: machine.desktops, connector: machine.connector, toolDeadlineMs: QUICK_DEADLINE_MS });
+    const QUICK = { toolDeadlineMs: 600, frozenProbeMs: 30 };
+    const quick = (extra = {}) => createBrowser({ desktops: machine.desktops, connector: machine.connector, ...QUICK, ...extra });
+    const closed = () => chromium.sent.filter((entry) => entry.method === "Target.closeTarget").map((entry) => entry.params.targetId);
 
-    it("ends the call at its deadline, closes the lease, and tells the model", async () => {
+    it("ends the call at its deadline, closes the page and the lease, and tells the model", async () => {
       const browser = quick();
       await look(browser, "a");
       chromium.freezePage();
       const result = await look(browser, "a");
       expect(result.outcome).toBe("timeout");
       expect(result.output).toContain("did not finish in 0.6 seconds");
+      expect(result.output).toContain("froze and was closed");
+      expect(closed()).toEqual(["target-0"]);
       expect(machine.openLeases()).toBe(0);
     });
 
-    it("ends the call at once when its signal aborts, and says cancelled", async () => {
-      const browser = browserOf();
+    it("gives the next call a new page", async () => {
+      const browser = quick();
       await look(browser, "a");
       chromium.freezePage();
+      await look(browser, "a");
+      const next = await look(browser, "a");
+      expect(next.outcome).toBe("ok");
+      expect([...chromium.pages.keys()]).toEqual(["target-1"]);
+      expect(lastEvaluated(chromium)).toBe("session-target-1");
+    });
+
+    it("closes only the frozen page, and leaves the bot's other pages", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      const popup = chromium.openPopup("target-0");
+      await look(browser, "a");
+      chromium.freezePage(popup);
+      await look(browser, "a");
+      expect(closed()).toEqual([popup]);
+      expect(chromium.pages.has("target-0")).toBe(true);
+    });
+
+    it("ends the call at once when its signal aborts, says cancelled, and still closes the frozen page", async () => {
+      const browser = quick({ toolDeadlineMs: 60_000 });
+      await look(browser, "a");
+      chromium.freezePage();
+      const abort = new AbortController();
+      const started = Date.now();
+      const running = browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      abort.abort(new Error("stopped"));
+      const result = await running;
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(result.outcome).toBe("cancelled");
+      expect(result.output).toContain("cancelled");
+      expect(result.output).toContain("froze and was closed");
+      expect(machine.openLeases()).toBe(0);
+    });
+
+    it("leaves a page that still answers alone, and says the call was slow", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.stall("Page.navigate");
+      const result = await browser.execute({ botId: "a", tool: navigate, signal });
+      expect(result.outcome).toBe("timeout");
+      expect(result.output).not.toContain("froze");
+      expect(closed()).toEqual([]);
+    });
+
+    it("says cancelled without blaming a page that answers", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.stall("Page.navigate");
       const abort = new AbortController();
       const running = browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
       await new Promise((resolve) => setTimeout(resolve, 10));
       abort.abort(new Error("stopped"));
       const result = await running;
       expect(result.outcome).toBe("cancelled");
+      expect(result.output).not.toContain("froze");
+      expect(closed()).toEqual([]);
+    });
+
+    it("does not close a page under a person who has the screen", async () => {
+      const browser = quick({ personHasScreen: () => true });
+      await look(browser, "a");
+      chromium.freezePage();
+      const result = await look(browser, "a");
+      expect(result.outcome).toBe("timeout");
+      expect(result.output).toContain("owner has the screen");
+      expect(closed()).toEqual([]);
+    });
+
+    it("says so when the browser does not close the page", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      chromium.stall("Target.closeTarget");
+      const result = await look(browser, "a");
+      expect(result.outcome).toBe("timeout");
+      expect(result.output).toContain("did not close it");
       expect(machine.openLeases()).toBe(0);
     });
 
-    it("lets the bot's next call run, and another bot never waits", async () => {
+    it("lets the bot's queue move on, and another bot never waits", async () => {
       const browser = quick();
       await look(browser, "a");
       chromium.freezePage();
@@ -440,7 +525,15 @@ describe("browser", () => {
       const other = await look(browser, "b");
       expect(other.outcome).toBe("ok");
       expect((await first).outcome).toBe("timeout");
-      expect((await queued).outcome).toBe("timeout");
+      expect((await queued).outcome).toBe("ok");
+    });
+
+    it("finds a page that froze before computerd restarted, and closes it", async () => {
+      await look(quick(), "a");
+      chromium.freezePage();
+      const after = quick();
+      expect((await look(after, "a")).output).toContain("froze and was closed");
+      expect((await look(after, "a")).outcome).toBe("ok");
     });
 
     it("sends nothing after the deadline", async () => {
@@ -448,9 +541,61 @@ describe("browser", () => {
       await look(browser, "a");
       chromium.freezePage();
       await browser.execute({ botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } }, signal });
-      chromium.thawPage();
+      chromium.thaw();
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(chromium.sent.some((entry) => entry.method === "Input.insertText")).toBe(false);
+    });
+
+    it("keeps the journal's rule, so a repeat of a frozen call replays its result and touches nothing", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "journal-"));
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      const calls = createCalls({
+        journal: await openJournal({ dir }),
+        execute: ({ botId, tool, signal: callSignal }) => browser.execute({ botId, tool: tool as BrowserInvocation, signal: callSignal }),
+      });
+      const request = { callId: "run:call", botId: "a", tool: snapshot };
+      const first = await calls.call(request);
+      const sentBefore = chromium.sent.length;
+      expect(await calls.call(request)).toEqual(first);
+      expect(chromium.sent.length).toBe(sentBefore);
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("lets the idle stop run and frees the slot, on the real desktops code", async () => {
+      let clock = 0;
+      const stops: Slot[] = [];
+      const runtimeDir = await mkdtemp(join(tmpdir(), "runtime-"));
+      const desktops = createDesktops({
+        systemd: {
+          start: async () => {},
+          stop: async (slot) => {
+            stops.push(slot);
+          },
+          restartInput: async () => {},
+          liveSlots: async () => [],
+        },
+        runtimeDir,
+        now: () => clock,
+      });
+      const browser = createBrowser({ desktops, connector: machine.connector, ...QUICK });
+      await browser.execute({ botId: "a", tool: snapshot, signal });
+      const port = desktopOf(1).cdpPort;
+      const onPort = machine.chromiumOn(port);
+      onPort.freezePage();
+      const release = desktops.hold("a");
+      const running = browser.execute({ botId: "a", tool: snapshot, signal }).finally(release);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const stopsWhileRunning = stops.length;
+      clock += IDLE_STOP_MS * 2;
+      await desktops.sweep();
+      expect(stops.length).toBe(stopsWhileRunning);
+      expect((await running).output).toContain("froze and was closed");
+      clock += IDLE_STOP_MS * 2;
+      await desktops.sweep();
+      expect(stops.length).toBe(stopsWhileRunning + 1);
+      await rm(runtimeDir, { recursive: true, force: true });
     });
   });
 

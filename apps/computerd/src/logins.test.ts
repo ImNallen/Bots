@@ -669,6 +669,17 @@ describe("createLogins", () => {
       await logins.settled("a", signal());
     });
 
+    it("says that a person has the screen from before the stream opens until after it closes", async () => {
+      running(A);
+      const logins = computerd();
+      expect(logins.hasInputStream("a")).toBe(false);
+      await logins.opened("a", A);
+      expect(logins.hasInputStream("a")).toBe(true);
+      expect(logins.hasInputStream("b")).toBe(false);
+      await logins.closed("a", A);
+      expect(logins.hasInputStream("a")).toBe(false);
+    });
+
     it("stops waiting at a cancel", async () => {
       running(A);
       const logins = computerd();
