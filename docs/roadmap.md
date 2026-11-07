@@ -181,9 +181,17 @@ Bots differs on purpose in four ways. The owner can read and edit each note. No 
 1. The standing assignment. Each bot gets a title and an assignment that only its owner writes, and the model reads them on each call.
 2. The tool table, with no change in behavior. One required `effect` for each tool replaces `FREE_AT_OUTSIDE_LEVEL`.
 3. Memory. A bot saves and forgets its own notes with `memory_save` and `memory_forget`, the owner reads and edits them in the panel, and `users.about` holds what the owner writes about themselves.
-4. Read-only runs. Such a run can call `read_file`, `browser_navigate`, and `browser_snapshot`, never creates an approval, and cannot write memory.
-5. Schedules and the step's check. A Convex cron starts each scheduled run once, and the orchestrator rejects a write attempt from that run.
-6. The Activity view, which needs no table of its own.
+4. No freeze and no spin. A hostile page cannot freeze a browser tool, and the runner does not spin on a refused claim. These bugs affect chat bots today.
+5. Read-only runs in the orchestrator and Convex, with nothing starting one yet. Such a run can call `read_file`, `browser_navigate`, and `browser_snapshot`, never creates an approval, and cannot write memory.
+6. Logged-out browsing in `computerd`, and link addresses in a snapshot.
+7. Routines and the step's check. A Convex cron starts each scheduled run once, and the orchestrator rejects a write attempt from that run.
+8. The Activity view, which needs no table of its own.
+
+The owner decided these on 2026-11-07:
+
+- Routines are read-only for now.
+- A routine may open any website it finds relevant. There is no site list.
+- A routine browses logged out, in a browser context with none of the owner's logins.
 
 These are proposals, so change them if you find a better answer:
 
@@ -196,15 +204,16 @@ These are proposals, so change them if you find a better answer:
 | Where a bot's memory write happens | `runs.append` takes a memory call | The note and its tool result go in one fenced mutation, so a kill leaves both or neither |
 | The tool table's shape | One required `effect` for each tool | One field answers every consumer, and three fields could disagree |
 | A separate type for calls cleared to reach `link.call` | None | `Link.call` already takes only `ToolInvocation`, so passing it a memory call fails to compile |
-| The shape of a schedule, its thread, a site list, preemption, and Activity's summary | Decide in the schedules PR | These are the contested part, and they do not affect PRs 1 to 3 |
+| The shape of a schedule, its thread, preemption, and Activity's summary | Decide in the routines PR | These are the contested part, and they do not affect PRs 1 to 3 |
 
-Two questions need a review before the schedules PR. The first is one shared thread or a sealed thread for each scheduled run. The second is a site list on `browser_navigate` or open browsing.
+One question still needs a review before the routines PR, which is one shared thread or a sealed thread for each scheduled run.
 
 ### Progress on step 5
 
 1. Done. An owner sets a bot's name, title, and assignment in the info panel, and the title shows under the name there and in the chat header. `callModel` reads them through `bots.promptFor`, so an edit reaches the run's next model call. `VERIFY_SCENARIOS=assignment pnpm verify:agent` checks this with a scripted fake model, and it checks that another user and the service token cannot write them. Tested in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. Going back to a commit before this one needs a cleanup of stored titles and assignments, because the older schema has neither field and Convex checks every stored row at a deploy.
 2. Done. Each row of `TOOLS` names a required `effect`, one of `reads`, `changesVm`, or `changesOutside`, and `needsApproval` reads it through `toolEffect`. `FREE_AT_OUTSIDE_LEVEL` is gone, and a new tool fails the typecheck until it names an effect. A test written before the change holds every level's answer for every tool, the definitions sent to the model are byte for byte the same, and `VERIFY_SCENARIOS=A,approvals pnpm verify:agent` passes. The approvals scenario stores no key, so it needs `A`. This changes `packages/protocol`, and `deploy.sh` counts that as a change to `computerd`. So deploying this change updates and restarts `computerd` on every VM, though `computerd` behaves the same. The control VM is untested.
 3. Done. A bot saves and forgets its own notes with `memory_save` and `memory_forget`, and the owner lists, adds, edits, and deletes them in the info panel. `users.about` holds what the owner writes in Settings, and all of that owner's bots read it. A note and its tool result go in one fenced mutation. At the default level, a memory tool asks once a computer tool has a result in this run. `VERIFY_SCENARIOS=memory pnpm verify:agent` checks this with a scripted fake model and a real backend, orchestrator, and `computerd`, including a SIGKILL placed after the commit and before its reply. The UI was tested with the same fake model in a real browser at 1280 and 412 wide, in light and dark. A real model, the control VM, and a real phone are untested. This changes `packages/protocol`, so deploying it updates and restarts `computerd` on every VM, though `computerd` behaves the same. Going back to a commit before this one needs every `users.about` cleared. A real deploy of the previous commit's schema stopped on a stored `about`, and passed with it cleared and a `memories` row still stored. An older commit's code ignores those rows, and its delete of a bot leaves them behind.
+4. Done. A page with `alert()`, `confirm()`, `prompt()`, `onbeforeunload`, or `while(true){}` no longer holds a browser tool, its desktop, or the bot's queue. A dialog is answered as soon as it opens, in any page. A tool call ends at its signal or at a 60 second deadline, a page that stays hung is closed, and the model reads that it froze. The next call works on a new page. `consider` in `runner.ts` no longer asks again at once after `unavailable`, which took `runs.claim` from 555 calls a second to 0.2 under a real fence on a Mac, and a run still starts within 5 seconds of the fence ending. Unit tests cover this with a fake browser, and a real Chromium in a private container reproduced each bug before the fix and passed after it, with the real `createDesktops` and link and a faked systemd. `pnpm verify:agent` passes, in four sets that together run every scenario. `pnpm verify:browser` and `infra/proxmox/verify-desktop.sh` need a VM and have not run on this change, so real desktops under systemd, and a real take-over, are untested. This changes `computerd`, so deploying it restarts `computerd` on every VM.
 
 ## After step 3: deploy from `main`
 
@@ -241,6 +250,13 @@ These are open on purpose. Fix each one when the work reaches it.
 - A bot's forget during an owner's edit removes the row, with its edit box and the typed text. A draft in the add box goes when the panel closes.
 - A chat row calls a refused save "Saved a note" with "failed" beside it, as it does for any tool that failed. The expanded row says why.
 - The prompt dates a note in UTC, and the panel dates it in the device's time zone, so the two can differ by a day.
+- Downloads in a chat run are not blocked, so a page can put a file on a bot's computer. Step 5's logged-out browsing blocks them only in a routine.
+- A page in a chat run can log the bot into another account, because a chat bot browses logged in. A later take-over then moves that session to the owner's other bots.
+- A dialog gets no word to the model. A site whose button asks `confirm()` gets a refusal, so the click looks as if it did nothing.
+- A page that keeps its main thread busy for 5 seconds when a stop arrives counts as frozen, so a slow page can close at a stop. The model reads this, and the bot opens the address again.
+- A same-site opener of a frozen popup stays frozen behind the new page, and it uses a CPU core until its desktop stops. A bot has no tool to go back to it.
+- A dialog that opened while no socket was attached, as during a `computerd` restart, costs the next call its 60 seconds before the page closes.
+- A real site that takes more than about 30 seconds to start answering can now reach the 60 second deadline during its load. That call returns `timeout` and stops the load, where it used to return a snapshot after up to 2 minutes.
 - Approvals limit what a bot does through its tools, not what runs after a tool. Once the owner approves one shell command, that command can start a program that uses the network or the browser's CDP port with no further approval. So a prompt-injected bot can still send out anything in its workspace.
 - At the default level, opening a page runs without asking, and a URL can carry data out. Writing a file also runs without asking, because it stays in the VM.
 - An unanswered approval expires after 24 hours as a refusal. Until then, the run stays active, which holds back `computerd` updates on that VM.

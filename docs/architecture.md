@@ -183,7 +183,44 @@ A bot that comes back gets any free slot, the same profile, and a blank page. A 
 
 ### Which page a bot acts on
 
-Each browser belongs to one bot, so every page in it is that bot's. `computerd` keeps one CDP socket per bot and asks Chromium for its targets on every look. The newest page is the current one, so a popup is current until it closes. This needs no events, no window moves, and no state file. After a `computerd` restart, the list rebuilds with pages that have an opener last, so a popup stays current.
+Each browser belongs to one bot, so every page in it is that bot's. `computerd` keeps one CDP socket per bot and asks Chromium for its targets on every look. The newest page is the current one, so a popup is current until it closes. This takes no events, no window moves, and no state file. After a `computerd` restart, the list rebuilds with pages that have an opener last, so a popup stays current.
+
+### What a page can do to a browser tool
+
+A page cannot hold a browser tool, a desktop, or a bot's queue. The tool always returns, and its hold is released, so the idle stop can run and a ninth bot can take the slot.
+
+`PageCall` in `apps/computerd/src/browser.ts` is the one owner of this. Each CDP call through it ends when the call's signal aborts or at a 60 second deadline, and none starts after that. The link gives a browser tool 120 seconds, which is 60 for the tool and a 60 second margin. So a take-over's wait, a desktop's start, and closing a page fit in the margin, and the model reads what happened and not `unavailable`.
+
+A call that ended early then finds out what it left behind. It stops any loading, because Chromium holds a session's page calls during a navigation, and a server that never answers would otherwise look like a frozen page. Then it asks the page for one answer, and it waits 5 seconds.
+
+| What the page did | What the model reads | What happens to the page |
+|---|---|---|
+| It answers | `timeout` or `cancelled`, and any navigation was stopped | It stays |
+| It gives no answer | `timeout` or `cancelled`, and the page froze and was closed | A new blank page opens, and then the frozen page closes. The next call works on the new page, and an old ref gets the stale ref error |
+| It gives no answer while the owner has the screen | `timeout` or `cancelled`, and the page stayed open | It stays, because the owner may be answering it |
+| The browser does not close it in 3 seconds | `timeout` or `cancelled`, and the browser did not close it | The next call tries again. The idle stop can still run |
+
+The order of those two page steps matters. Chromium exits when its last page closes, and a test on a real browser lost the browser that way. The 5 and 3 seconds fit inside the 10 seconds that the link waits after a cancel, so a cancelled call says `cancelled` and not that the computer could not be reached.
+
+Dialogs are the one thing here that takes events. A page with an open `alert()` answers nothing, and Chromium keeps the dialog open until something answers it. So each connection uses `Target.setAutoAttach` with `waitForDebuggerOnStart`, and every page has a session with `Page.enable` before its first script runs. `computerd` refuses `alert`, `confirm`, and `prompt` as soon as they open, in any page, whether a call is running or not. It accepts `beforeunload`, so a page cannot refuse a navigation.
+
+A person who has the screen answers dialogs for themselves, or a take-over could not accept a site's `confirm()`. Page calls wait while a dialog is open, and the next call after the person leaves clears what they left.
+
+The rule that the browser holds the truth still applies. None of this keeps state on disk. After a kill, the journal answers `interrupted`, and a new `computerd` finds a frozen page at its next call, through the same deadline and the same close. A dialog that opened with no socket attached sends no event, even after `Page.enable`, so its page takes the same path. A repeat of a frozen call replays its stored result, and it does not touch the page.
+
+A page can still waste up to 60 seconds of a run for each call, and it can use a CPU core until its desktop stops. Same-site pages share a process in Chromium, so a popup that freezes also freezes its opener. The opener stays open behind the new page, and it stays frozen.
+
+We tested these on Chromium 156 in a container, with its sandbox on, using a visible Xvfb display:
+
+| Test | Result |
+|---|---|
+| `Target.closeTarget` on a page in `while(true){}`, on a page that also spins in `pagehide`, and on a page in a loop of `alert()` | Closed within 10 ms, and gone within 600 ms |
+| A dialog that opened before anything attached | No event, even after `Page.enable`. `Page.handleJavaScriptDialog` says no dialog is showing. `Target.closeTarget` still works |
+| A popup whose first script calls `alert()`, with `waitForDebuggerOnStart` | The event arrives, and the script carries on after the answer |
+| `Runtime.evaluate` during a navigation to a server that never answers | No answer until `Page.stopLoading` |
+| `Page.enable` with nothing answering a dialog | The dialog shows on the display, and a key press answers it |
+| The socket dies while a popup waits for its debugger | The opener answers again. The popup stays blank |
+| A service worker with `filter: [{ type: "page" }]` | It does not wait for a debugger |
 
 ### Where a profile comes from
 
