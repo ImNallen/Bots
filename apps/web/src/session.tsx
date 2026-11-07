@@ -46,7 +46,7 @@ function EnsuredUser({ children }: { children: (args: { email: string }) => Reac
 
   useEffect(() => {
     let cancelled = false;
-    ensureCurrent().then(
+    ensureCurrent({}).then(
       (user) => {
         if (!cancelled) {
           setSession({ kind: "ready", email: user.email });

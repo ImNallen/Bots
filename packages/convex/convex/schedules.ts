@@ -375,3 +375,16 @@ export const remove = mutation({
     await ctx.scheduler.runAfter(0, internal.schedules.purgeThread, { threadId: schedule.threadId });
   },
 });
+
+export async function followTimeZone(ctx: MutationCtx, ownerId: Id<"users">, timeZone: string, now: number): Promise<void> {
+  const routines = await ctx.db
+    .query("schedules")
+    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+    .collect();
+  for (const routine of routines) {
+    const stillAheadOnTheClock = routine.cadence.kind === "weekly" && routine.nextFireAt !== undefined && routine.nextFireAt > now;
+    if (stillAheadOnTheClock) {
+      await ctx.db.patch(routine._id, { nextFireAt: nextFireAfter(routine.cadence, timeZone, now) });
+    }
+  }
+}
