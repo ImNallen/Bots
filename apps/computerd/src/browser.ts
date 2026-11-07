@@ -15,8 +15,6 @@ const TOOL_DEADLINE_MS = 60_000;
 // seconds that the link waits after a cancel.
 const FROZEN_PROBE_MS = 5000;
 const CLOSE_PAGE_MS = 3000;
-// A leftover logged-out window ends this long after its last call, if nothing ended it first. A run calls a tool again after one model
-// call, so a live run reaches this only when a model call or a take-over lasts this long, and its next call then gets a blank page.
 const LOGGED_OUT_IDLE_MS = 10 * 60 * 1000;
 
 type PageFate = "answers" | "closed" | "keptForOwner" | "stuck";
@@ -52,9 +50,8 @@ export type Cdp = {
 
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
-// This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field. Only a logged-out page
-// shows link addresses. A logged-in page's links can hold reset tokens and signed URLs, and a chat run can click a link instead.
-const SNAPSHOT_SCRIPT = (showLinks: boolean) => `(() => {
+// This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
+const SNAPSHOT_SCRIPT = (showLinkAddresses: boolean) => `(() => {
   const MAX_TEXT = 120;
   const MAX_URL = 300;
   const MAX_LINK = 200;
@@ -67,7 +64,7 @@ const SNAPSHOT_SCRIPT = (showLinks: boolean) => `(() => {
   };
   const clean = (t) => (t ?? '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT);
   const address = (e) => {
-    if (!${showLinks} || !e.matches('a[href]')) return '';
+    if (!${showLinkAddresses} || !e.matches('a[href]')) return '';
     const href = String(e.href);
     if (!/^https?:/i.test(href)) return '';
     return ' to: ' + (href.length > MAX_LINK ? href.slice(0, MAX_LINK) + '...' : href);
@@ -121,25 +118,21 @@ const CLEAR_SCRIPT = (ref: number) => `(() => {
   else document.execCommand('selectAll');
 })()`;
 
-// One browser context's pages. A call looks up and opens pages only through its home, so a logged-out call cannot reach a page of the
-// bot's own, and a new page goes to the context that needs it.
-type PageHome = {
+type ContextPages = {
   contextId: string;
   // Oldest first. The last one is the page that the bot acts on.
   pages: string[];
   newPage: { url: "about:blank"; browserContextId?: string };
 };
 
-// A context for one key, with none of the owner's logins. Chromium ends it when this socket closes, so a computerd that dies leaves
-// no window behind, and nothing has to find an old context after a restart.
-type LoggedOut = PageHome & { key: string; idleEnd: NodeJS.Timeout | undefined };
+type LoggedOutContext = ContextPages & { key: string; idleEnd: NodeJS.Timeout | undefined };
 
 // Every page target on this browser belongs to this bot.
 type Connection = {
   cdpPort: number;
   client: Cdp;
-  own: PageHome;
-  loggedOut: LoggedOut | null;
+  own: ContextPages;
+  loggedOut: LoggedOutContext | null;
   sessions: Map<string, string>;
   heldDialogs: PageDialog[];
 };
@@ -197,7 +190,6 @@ export function nextPages(known: readonly string[], targets: readonly TargetInfo
 
 export type Browser = {
   execute: (args: { botId: string; tool: BrowserInvocation; browsing: Browsing | undefined; signal: AbortSignal }) => Promise<ToolResult>;
-  // Ends a logged-out window, if this key still has one. It never rejects and never starts a desktop.
   endBrowsing: (botId: string, key: string) => Promise<void>;
 };
 
@@ -293,22 +285,22 @@ export function createBrowser(args: {
     return connection.sessions.get(targetId) as string;
   }
 
-  async function refreshPages(client: Cdp, home: PageHome): Promise<void> {
+  async function refreshPages(client: Cdp, context: ContextPages): Promise<void> {
     const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
-    home.pages = nextPages(home.pages, targetInfos.filter((target) => target.browserContextId === home.contextId));
-    if (home.pages.length === 0) {
-      const { targetId } = await client.send("Target.createTarget", home.newPage);
-      home.pages.push(String(targetId));
+    context.pages = nextPages(context.pages, targetInfos.filter((target) => target.browserContextId === context.contextId));
+    if (context.pages.length === 0) {
+      const { targetId } = await client.send("Target.createTarget", context.newPage);
+      context.pages.push(String(targetId));
     }
   }
 
-  async function currentPage(connection: Connection, client: Cdp, home: PageHome): Promise<{ targetId: string; sessionId: string }> {
-    await refreshPages(client, home);
-    const targetId = home.pages.at(-1) as string;
+  async function currentPage(connection: Connection, client: Cdp, context: ContextPages): Promise<{ targetId: string; sessionId: string }> {
+    await refreshPages(client, context);
+    const targetId = context.pages.at(-1) as string;
     return { targetId, sessionId: await sessionFor(connection, client, targetId) };
   }
 
-  async function startLoggedOut(connection: Connection, client: Cdp, key: string): Promise<LoggedOut> {
+  async function startLoggedOut(connection: Connection, client: Cdp, key: string): Promise<LoggedOutContext> {
     // Chromium exits when its last page closes, in any context. So the bot's own page exists before this context can hold the last one.
     await refreshPages(client, connection.own);
     const { browserContextId } = (await client.send("Target.createBrowserContext", { disposeOnDetach: true })) as { browserContextId: string };
@@ -321,11 +313,10 @@ export function createBrowser(args: {
     return { key, contextId: browserContextId, pages: [], newPage: { url: "about:blank", browserContextId }, idleEnd: undefined };
   }
 
-  // False when the browser did not end it in time. Closing the socket then ends it, and the next call connects again.
-  async function endLoggedOut(botId: string, connection: Connection): Promise<boolean> {
+  async function endLoggedOut(botId: string, connection: Connection): Promise<"closed" | "stuck"> {
     const { loggedOut } = connection;
     if (loggedOut === null) {
-      return true;
+      return "closed";
     }
     clearTimeout(loggedOut.idleEnd);
     connection.loggedOut = null;
@@ -333,20 +324,22 @@ export function createBrowser(args: {
     try {
       await refreshPages(client, connection.own);
       await client.send("Target.disposeBrowserContext", { browserContextId: loggedOut.contextId });
-      return true;
+      return "closed";
     } catch (error) {
       log({ level: "warn", event: "logged-out-end-failed", botId, message: error instanceof Error ? error.message : "unknown error" });
       connections.delete(botId);
       connection.client.close();
-      return false;
+      return "stuck";
     }
   }
 
-  // A call with no key means that the run that owned a leftover window is over, because a bot has one active run.
-  async function homeFor(botId: string, connection: Connection, client: Cdp, browsing: Browsing | undefined): Promise<PageHome> {
+  async function endWindowOfAnotherRun(botId: string, connection: Connection, browsing: Browsing | undefined): Promise<void> {
     if (connection.loggedOut !== null && connection.loggedOut.key !== browsing?.key) {
       await endLoggedOut(botId, connection);
     }
+  }
+
+  async function contextFor(connection: Connection, client: Cdp, browsing: Browsing | undefined): Promise<ContextPages> {
     if (browsing === undefined) {
       return connection.own;
     }
@@ -418,9 +411,9 @@ export function createBrowser(args: {
     return point;
   }
 
-  async function act(connection: Connection, call: PageCall, home: PageHome, tool: BrowserInvocation): Promise<string> {
+  async function act(connection: Connection, call: PageCall, context: ContextPages, tool: BrowserInvocation): Promise<string> {
     const { client, ends } = call;
-    const { sessionId } = await currentPage(connection, client, home);
+    const { sessionId } = await currentPage(connection, client, context);
     switch (tool.name) {
       case "browser_navigate": {
         const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
@@ -448,23 +441,23 @@ export function createBrowser(args: {
     }
     // An action can open a popup at any time during the wait, and the next action goes to the newest page.
     // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
-    let after = await currentPage(connection, client, home);
+    let after = await currentPage(connection, client, context);
     for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
       await settle(client, after.sessionId, ends);
-      const latest = await currentPage(connection, client, home);
+      const latest = await currentPage(connection, client, context);
       if (latest.targetId === after.targetId) {
         break;
       }
       after = latest;
     }
-    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT(home === connection.loggedOut)));
+    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT(context === connection.loggedOut)));
   }
 
-  async function closeIfFrozen(botId: string, connection: Connection, home: PageHome | null): Promise<PageFate> {
+  async function closeIfFrozen(botId: string, connection: Connection, context: ContextPages | null): Promise<PageFate> {
     const { client } = connection;
-    const targetId = home?.pages.at(-1);
+    const targetId = context?.pages.at(-1);
     const sessionId = targetId === undefined ? undefined : connection.sessions.get(targetId);
-    if (home === null || targetId === undefined || sessionId === undefined) {
+    if (context === null || targetId === undefined || sessionId === undefined) {
       return "answers";
     }
     const personIsThere = personHasScreen?.(botId) === true;
@@ -480,13 +473,12 @@ export function createBrowser(args: {
     if (personIsThere) {
       return "keptForOwner";
     }
-    // A frozen logged-out page takes its whole context with it, along with any frozen opener, and the next call makes a new context.
-    if (home === connection.loggedOut) {
-      return (await endLoggedOut(botId, connection)) ? "closed" : "stuck";
+    if (context === connection.loggedOut) {
+      return await endLoggedOut(botId, connection);
     }
     // The new page comes first, because Chromium exits when its last page closes.
     const limit = AbortSignal.timeout(CLOSE_PAGE_MS);
-    const replaced = await untilEnd(limit, () => client.send("Target.createTarget", home.newPage)).then(
+    const replaced = await untilEnd(limit, () => client.send("Target.createTarget", context.newPage)).then(
       () => true,
       () => false,
     );
@@ -513,8 +505,9 @@ export function createBrowser(args: {
       clearTimeout(connection.loggedOut?.idleEnd);
       const call = startPageCall(connection.client, signal, toolDeadlineMs);
       try {
-        const home = await homeFor(botId, connection, call.client, browsing);
-        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, home, tool)}`);
+        await endWindowOfAnotherRun(botId, connection, browsing);
+        const context = await contextFor(connection, call.client, browsing);
+        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, context, tool)}`);
         return { outcome: "ok", output, truncated };
       } catch (error) {
         if (!call.ends.aborted) {

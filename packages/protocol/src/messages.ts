@@ -25,7 +25,6 @@ const botId = z.string().regex(new RegExp(`^${SAFE_ID}$`));
 const streamId = z.string().regex(new RegExp(`^${SAFE_ID}$`));
 const browsingKey = z.string().regex(new RegExp(`^${SAFE_ID}$`));
 
-// How a browser call browses. A call without it uses the bot's own pages and logins.
 export const browsing = z.strictObject({ kind: z.literal("loggedOut"), key: browsingKey });
 
 export type Browsing = z.infer<typeof browsing>;
@@ -53,8 +52,6 @@ export type StreamMode = "watch" | "control";
 
 export const orchestratorMessage = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("welcome") }),
-  // A computerd closes its link on a field or a kind it does not know, and a VM updates after its orchestrator. So only a read-only
-  // run sends `browsing` or `browsingEnd`, and a chat run's message stays what it was.
   z.strictObject({ kind: z.literal("toolCall"), callId, botId, tool: toolInvocation, browsing: browsing.optional() }),
   z.strictObject({ kind: z.literal("browsingEnd"), botId, key: browsingKey }),
   z.strictObject({ kind: z.literal("cancelTool"), callId }),

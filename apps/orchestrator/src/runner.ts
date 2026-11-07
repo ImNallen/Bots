@@ -286,12 +286,15 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
     events.push({ runId, body: stored });
   }
 
-  async function finish(state: FunctionArgs<typeof api.runs.finish>["state"]): Promise<void> {
-    // Before the mutation, so a crash between the two sends it again from the resumed run, and a window never outlives a run by a lost message.
+  function endLoggedOutWindow(): void {
     const browsing = browsingToEnd({ capability: claim.capability, runId, events: events.filter((event) => event.runId === runId).map((event) => event.body) });
     if (browsing !== undefined) {
-      deps.link.endBrowsing({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+      deps.link.sendBrowsingEnd({ ownerId: claim.ownerId, botId: claim.botId, browsing });
     }
+  }
+
+  async function finish(state: FunctionArgs<typeof api.runs.finish>["state"]): Promise<void> {
+    endLoggedOutWindow();
     await service.mutation(api.runs.finish, { runId, leaseToken, state });
     log({ level: "info", event: "run-finished", runId, state: state.kind });
   }

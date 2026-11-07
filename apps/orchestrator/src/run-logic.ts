@@ -87,15 +87,16 @@ function browsingOf(capability: RunCapability, runId: string): Browsing | undefi
   }
 }
 
-// The one place that decides how a call browses. Link.call requires the answer, so a call cannot skip this by accident.
 export function browsingForCall(args: { capability: RunCapability; runId: string; tool: ToolInvocation }): Browsing | undefined {
   return isBrowserInvocation(args.tool) ? browsingOf(args.capability, args.runId) : undefined;
 }
 
-// Only a run that reached computerd's browser has a window to end, so a run that only read files sends nothing an older computerd refuses.
+function reachedBrowser(events: readonly RunEventBody[]): boolean {
+  return events.some((event) => event.kind === "toolResult" && event.name.startsWith("browser_") && !BROUGHT_NOTHING_BACK.has(event.outcome));
+}
+
 export function browsingToEnd(args: { capability: RunCapability; runId: string; events: readonly RunEventBody[] }): Browsing | undefined {
-  const browsed = args.events.some((event) => event.kind === "toolResult" && event.name.startsWith("browser_") && !BROUGHT_NOTHING_BACK.has(event.outcome));
-  return browsed ? browsingOf(args.capability, args.runId) : undefined;
+  return reachedBrowser(args.events) ? browsingOf(args.capability, args.runId) : undefined;
 }
 
 const RUN_ENDED_EARLY = "[The previous run ended before a final reply.]";
@@ -275,7 +276,6 @@ export function systemPrompt(args: PromptArgs): string {
   ].join("\n");
 }
 
-// The shared descriptions speak of tools and logins that a read-only run does not have.
 const READ_ONLY_DESCRIPTIONS: Partial<Record<ToolName, string>> = {
   browser_navigate:
     "Open a URL in a window on this bot's screen, logged out, with none of your owner's logins. Returns a snapshot of the page. If a page needs a login, say so in your report.",

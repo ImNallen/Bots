@@ -1,6 +1,3 @@
-// Runs as root, on a machine with Chromium listening on the given CDP port, from the release's root. infra/proxmox/verify-desktop.sh
-// runs it. It uses computerd's real browser and login code against a real browser, so run it on a browser that nobody is using. Exits 0
-// only if every check passes.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,6 +9,10 @@ import { createBrowser, webSocketConnector, type Cdp, type CdpConnector } from "
 import { createLogins, type Jar } from "../apps/computerd/src/logins.ts";
 
 const CDP_PORT = Number(process.argv[2]);
+if (!Number.isInteger(CDP_PORT) || process.getuid?.() !== 0) {
+  console.error("Usage, as root, on a browser that nobody is using: node scripts/verify-logged-out.ts <CDP port>");
+  process.exit(2);
+}
 const DOWNLOADS = "/home/browser/Downloads";
 const BOT = "verifyloggedout";
 const signal = new AbortController().signal;
@@ -118,7 +119,7 @@ await logins.closed(BOT, CDP_PORT);
 check(!jarText().includes("stranger"), "a login made in a logged-out window does not reach the jar, even during a take-over");
 check((await readDefaultCookies()).every((cookie) => cookie.value === `owner${nonce}`), "the default context keeps the owner's login");
 
-// Without the deny, such a download writes to a hidden temporary name, so this reads the whole directory.
+// Chromium writes such a download to a hidden name, and with no deny that file stayed for at least 10 seconds.
 const downloads = () => (existsSync(DOWNLOADS) ? readdirSync(DOWNLOADS).length : 0);
 const filesBefore = downloads();
 await open(browser, `/file/denied-${nonce}.bin`, run("one"));

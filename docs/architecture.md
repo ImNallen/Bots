@@ -185,7 +185,7 @@ A bot that comes back gets any free slot, the same profile, and a blank page. A 
 
 Each browser belongs to one bot, so every page in it is that bot's. `computerd` keeps one CDP socket per bot and asks Chromium for its targets on every look. The newest page is the current one, so a popup is current until it closes. This takes no events, no window moves, and no state file. After a `computerd` restart, the list rebuilds with pages that have an opener last, so a popup stays current.
 
-A look reads the pages of one browser context, which `PageHome` names. A chat call looks in the default context, and a read-only run's call looks in its own, so neither can land on the other's page. [How a read-only run browses](#how-a-read-only-run-browses) explains the second one.
+A look reads the pages of one browser context, which `ContextPages` names. A chat call looks in the default context, and a read-only run's call looks in its own, so neither can land on the other's page. [How a read-only run browses](#how-a-read-only-run-browses) explains the second one.
 
 ### What a page can do to a browser tool
 
@@ -497,7 +497,7 @@ A routine may open any site, and nobody is watching it, so a page it reads must 
 
 `browsingForCall` in `apps/orchestrator/src/run-logic.ts` is the one place that decides this, and `Link.call` requires its answer. A read-only run's `browser_*` call carries `browsing: { kind: "loggedOut", key: runId }`. Its `read_file` and every chat call carry nothing, so their messages stay byte for byte what they were.
 
-In `computerd`, a `Connection` holds the bot's own `PageHome` and at most one `LoggedOut` record. A `PageHome` holds a context's id, its pages, and the exact parameters for a new page there. Every page lookup and every new page goes through a home, including the page that replaces a frozen one. So a logged-out call has no code path to a page of the bot's own. If its context cannot be made or its downloads cannot be denied, the tool fails.
+In `computerd`, a `Connection` holds the bot's own `ContextPages` and at most one `LoggedOutContext` record. `ContextPages` holds a context's id, its pages, and the exact parameters for a new page there. Every page lookup and every new page goes through it, including the page that replaces a frozen one. So a logged-out call has no code path to a page of the bot's own. If its context cannot be made or its downloads cannot be denied, the tool fails.
 
 | What ends the window | Why it holds |
 |---|---|

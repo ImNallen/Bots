@@ -44,8 +44,7 @@ export type Link = {
     lost: AbortSignal;
     cancel: AbortSignal;
   }) => Promise<LinkOutcome>;
-  // Best effort, with no answer. An absent computer has nothing to hear this, and computerd ends a leftover window by itself.
-  endBrowsing: (args: { ownerId: Id<"users">; botId: string; browsing: Browsing }) => void;
+  sendBrowsingEnd: (args: { ownerId: Id<"users">; botId: string; browsing: Browsing }) => void;
 };
 
 type Connection = {
@@ -273,6 +272,10 @@ export function startLink(args: {
 
   type CallArgs = Parameters<Link["call"]>[0];
 
+  function computerdRefusedBrowsing(call: CallArgs, closeCode: number | undefined): boolean {
+    return call.browsing !== undefined && closeCode === LINK_CLOSE.invalidMessage;
+  }
+
   // Everything below settles exactly once through `settle`, whichever of the waits below finishes first.
   function raceStep(call: CallArgs, arm: (settle: (step: Step) => void, cleanup: AbortSignal) => void): Promise<Step> {
     const cleanup = new AbortController();
@@ -321,10 +324,7 @@ export function startLink(args: {
     return raceStep(call, (settle, cleanup) => {
       const { socket } = connection;
       const onResult = (result: ToolResult) => settle({ kind: "result", result });
-      // A computerd that does not know `browsing` closes its link on it, and it would close again at every retry, for as long as the run
-      // lives. Any other drop retries, and the journal stops a call from running twice.
-      const onDrop = (closeCode: number | undefined) =>
-        settle(call.browsing !== undefined && closeCode === LINK_CLOSE.invalidMessage ? { kind: "gaveUp" } : { kind: "retry" });
+      const onDrop = (closeCode: number | undefined) => settle(computerdRefusedBrowsing(call, closeCode) ? { kind: "gaveUp" } : { kind: "retry" });
       const waiters = connection.waiters.get(call.callId) ?? new Set();
       connection.waiters.set(call.callId, waiters);
       waiters.add(onResult);
@@ -402,7 +402,7 @@ export function startLink(args: {
       dropConnection(connection);
       connection.socket.close(LINK_CLOSE.unauthorized);
     },
-    endBrowsing: ({ ownerId, botId, browsing }) => {
+    sendBrowsingEnd: ({ ownerId, botId, browsing }) => {
       const connection = connections.get(ownerId);
       if (connection !== undefined) {
         send(connection.socket, { kind: "browsingEnd", botId, key: browsing.key });

@@ -210,9 +210,9 @@ describe("link", () => {
     });
 
     it("sends browsingEnd on the open link, and nothing when no computer is there", async () => {
-      link.endBrowsing({ ownerId: OWNER, botId: "bot", browsing });
+      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
       const computer = await connectComputer();
-      link.endBrowsing({ ownerId: OWNER, botId: "bot", browsing });
+      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
       await until(() => computer.received.some((message) => message.kind === "browsingEnd"));
       expect(computer.received.filter((message) => message.kind === "browsingEnd")).toEqual([{ kind: "browsingEnd", botId: "bot", key: "run-1" }]);
       computer.socket.close();
