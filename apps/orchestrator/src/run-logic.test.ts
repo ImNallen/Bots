@@ -280,7 +280,7 @@ describe("touchedComputer", () => {
     },
   );
 
-  it.each(["denied", "invalid"] as const)("is false after a computer tool's result with outcome %s, because it brought nothing back", (outcome) => {
+  it.each(["denied", "invalid", "rejected"] as const)("is false after a computer tool's result with outcome %s, because it brought nothing back", (outcome) => {
     expect(touchedComputer([user, turn([call("a")]), body("shell", outcome)])).toBe(false);
   });
 

@@ -10,7 +10,7 @@ const POLL_MS = 5000;
 const SPIN_LIMIT = 1000;
 
 const UNAVAILABLE = { kind: "unavailable" };
-const CLAIMED = { kind: "claimed", leaseToken: "t", threadId: "thread", botId: "bot", ownerId: "owner", cancelRequested: false, nextSeq: 0 };
+const CLAIMED = { kind: "claimed", leaseToken: "t", threadId: "thread", botId: "bot", ownerId: "owner", cancelRequested: false, nextSeq: 0, capability: "full" };
 
 function world() {
   const claims: string[] = [];

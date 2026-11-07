@@ -48,6 +48,9 @@ export const send = mutation({
     if ((await ctx.db.get(thread.botId)) === null) {
       throw new ConvexError("Bot not found");
     }
+    if (thread.kind === "routine") {
+      throw new ConvexError("A routine's thread takes no messages");
+    }
     const trimmed = text.trim();
     if (trimmed === "") {
       throw new ConvexError("Message cannot be empty");

@@ -147,6 +147,7 @@ export const claim = mutation({
       threadId: run.threadId,
       botId: run.botId,
       ownerId: run.ownerId,
+      capability: run.capability,
       cancelRequested: run.cancelRequested,
       nextSeq: run.nextSeq,
     };

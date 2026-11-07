@@ -5,7 +5,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
-import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, needsApproval, waitForApproval } from "./approvals.ts";
+import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, READ_ONLY_OUTPUT, decideTool, waitForApproval } from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
@@ -196,8 +196,13 @@ async function runTool(args: {
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   const { invocation } = parsed;
-  if (needsApproval({ level, toolName: invocation.name, touchedComputer: touched })) {
-    const decision = await waitForApproval({
+  const decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, touchedComputer: touched });
+  if (decision === "reject") {
+    deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
+    return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
+  }
+  if (decision === "ask") {
+    const answer = await waitForApproval({
       request: () =>
         deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name }),
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
@@ -210,9 +215,9 @@ async function runTool(args: {
       },
     }).finally(() => slot.reclaim());
     lease.lost.throwIfAborted();
-    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision });
+    deps.log({ level: "info", event: "tool-approval", runId, toolCallId: call.id, decision: answer });
     // This call was never sent, so these results can say so with certainty.
-    switch (decision) {
+    switch (answer) {
       case "approved":
         break;
       case "aborted":
