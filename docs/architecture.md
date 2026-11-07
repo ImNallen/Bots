@@ -448,7 +448,7 @@ A long token is refused by default, and a short named list says what passes. An 
 `ORDINARY_LONG_TOKENS` has these rows:
 
 - `onlySeparators`, such as a line of dashes.
-- `words`. Every character that is not a letter or a digit separates segments. Each segment is digits, or letters in one case or camelCase with up to 4 digits at the end, and it is under 32 letters. At least 2 segments hold letters. So `state-of-the-art-end-to-end-release-note-summarizer`, `packages/convex/convex/memories.test.ts`, and `/usr/local/lib/python3.11/site-packages` pass. The case rule matters. Without it, 0.30% of 32 character base64url tokens pass, and with it 0.0105% do.
+- `words`. Every character that is not a letter or a digit separates segments. Each segment is digits, or letters in one case or camelCase with up to 4 digits at the end, and it is under 32 letters. At least 2 segments hold letters. So `state-of-the-art-end-to-end-release-note-summarizer`, `packages/convex/convex/memories.test.ts`, and `/usr/local/lib/python3.11/site-packages` pass. Without the case rule, 0.30% of 32 character base64url tokens pass, and with it 0.0105% do.
 - `uuid`, in its 8-4-4-4-12 form.
 - `gitHash`, which is exactly 40 or 64 lowercase hex characters. 32 hex characters stay refused, because that is a common token length.
 - `digits`, which the card row then judges.
