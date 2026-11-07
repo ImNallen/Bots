@@ -362,9 +362,8 @@ export function createBrowser(args: {
     if (targetId === undefined || sessionId === undefined) {
       return "answers";
     }
-    const personIsThere = personHasScreen?.(botId) === true;
     // Chromium holds a session's page calls during a navigation, so a server that never answers would look like a frozen page.
-    if (!personIsThere) {
+    if (personHasScreen?.(botId) !== true) {
       sendQuietly(client, "Page.stopLoading", {}, sessionId);
     }
     const probe = AbortSignal.timeout(frozenProbeMs);
@@ -372,7 +371,8 @@ export function createBrowser(args: {
     if (!probe.aborted) {
       return "answers";
     }
-    if (personIsThere) {
+    // A person can take the screen during the probe, so this asks again.
+    if (personHasScreen?.(botId) === true) {
       return "keptForOwner";
     }
     // The new page comes first, because Chromium exits when its last page closes.
