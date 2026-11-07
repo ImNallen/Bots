@@ -67,18 +67,31 @@ export const memoryInvocation = z.discriminatedUnion("name", [
 
 export type MemoryInvocation = z.infer<typeof memoryInvocation>;
 
-const cadenceArgs = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("weekly"),
+// One flat object, because every chat run sends this schema, and nothing shows that Mistral accepts oneOf in a tool's parameters.
+const cadenceArgs = z
+  .strictObject({
+    kind: z.enum(["weekly", "everyHours"]),
     weekdays: z
       .array(z.number().int().min(0).max(6))
       .min(1)
-      .refine((days) => new Set(days).size === days.length, "must not repeat a day"),
-    hour: z.number().int().min(0).max(23),
-    minute: z.number().int().min(0).max(59),
-  }),
-  z.strictObject({ kind: z.literal("everyHours"), hours: z.number().int().min(1).max(24) }),
-]);
+      .refine((days) => new Set(days).size === days.length, "must not repeat a day")
+      .optional()
+      .describe("For weekly. 0 is Sunday."),
+    hour: z.number().int().min(0).max(23).optional().describe("For weekly."),
+    minute: z.number().int().min(0).max(59).optional().describe("For weekly."),
+    hours: z.number().int().min(1).max(24).optional().describe("For everyHours."),
+  })
+  .transform((cadence, context) => {
+    const { kind, weekdays, hour, minute, hours } = cadence;
+    if (kind === "weekly" && weekdays !== undefined && hour !== undefined && minute !== undefined && hours === undefined) {
+      return { kind, weekdays, hour, minute };
+    }
+    if (kind === "everyHours" && hours !== undefined && weekdays === undefined && hour === undefined && minute === undefined) {
+      return { kind, hours };
+    }
+    context.addIssue({ code: "custom", message: "weekly needs weekdays, hour, and minute, and everyHours needs only hours" });
+    return z.NEVER;
+  });
 
 const scheduleProposeArgs = z.strictObject({ instruction: z.string(), cadence: cadenceArgs });
 
