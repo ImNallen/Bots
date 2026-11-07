@@ -387,10 +387,11 @@ export function createBrowser(args: {
     if (personIsThere) {
       return "keptForOwner";
     }
-    // An error here means the page is already gone, so only the limit means that the browser did not act.
+    // The new page comes first, because Chromium exits when its last page closes. An error on the close means the page is already
+    // gone, so only the limit means that the browser did not act.
     const limit = AbortSignal.timeout(CLOSE_PAGE_MS);
-    await untilEnd(limit, () => client.send("Target.closeTarget", { targetId })).catch(() => {});
     await untilEnd(limit, () => client.send("Target.createTarget", { url: "about:blank" })).catch(() => {});
+    await untilEnd(limit, () => client.send("Target.closeTarget", { targetId })).catch(() => {});
     return limit.aborted ? "stuck" : "closed";
   }
 

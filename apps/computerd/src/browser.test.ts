@@ -534,6 +534,16 @@ describe("browser", () => {
       expect(lastEvaluated(chromium)).toBe("session-target-1");
     });
 
+    it("opens the new page before it closes the frozen one, because a browser exits with its last page", async () => {
+      const browser = quick();
+      await look(browser, "a");
+      chromium.freezePage();
+      await look(browser, "a");
+      const methods = chromium.sent.map((entry) => entry.method);
+      expect(methods.lastIndexOf("Target.createTarget")).toBeLessThan(methods.lastIndexOf("Target.closeTarget"));
+      expect(methods.lastIndexOf("Target.createTarget")).toBeGreaterThanOrEqual(0);
+    });
+
     it("closes only the frozen page, and leaves the bot's other pages", async () => {
       const browser = quick();
       await look(browser, "a");
