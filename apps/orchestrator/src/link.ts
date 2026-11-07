@@ -6,6 +6,7 @@ import {
   capText,
   computerMessage,
   parseJsonMessage,
+  type Browsing,
   type OrchestratorMessage,
   type StreamMode,
   type ToolInvocation,
@@ -39,9 +40,12 @@ export type Link = {
     callId: string;
     botId: string;
     tool: ToolInvocation;
+    browsing: Browsing | undefined;
     lost: AbortSignal;
     cancel: AbortSignal;
   }) => Promise<LinkOutcome>;
+  // Best effort, with no answer. An absent computer has nothing to hear this, and computerd ends a leftover window by itself.
+  endBrowsing: (args: { ownerId: Id<"users">; botId: string; browsing: Browsing }) => void;
 };
 
 type Connection = {
@@ -335,7 +339,7 @@ export function startLink(args: {
       connection.issued.add(call.callId);
       timer(responseDeadlineMs(call.tool), () => settle({ kind: "gaveUp" }), cleanup);
       if (!call.cancel.aborted) {
-        send(socket, { kind: "toolCall", callId: call.callId, botId: call.botId, tool: call.tool });
+        send(socket, { kind: "toolCall", callId: call.callId, botId: call.botId, tool: call.tool, ...(call.browsing === undefined ? {} : { browsing: call.browsing }) });
       }
       afterCancel(
         call,
@@ -394,6 +398,12 @@ export function startLink(args: {
       }
       dropConnection(connection);
       connection.socket.close(LINK_CLOSE.unauthorized);
+    },
+    endBrowsing: ({ ownerId, botId, browsing }) => {
+      const connection = connections.get(ownerId);
+      if (connection !== undefined) {
+        send(connection.socket, { kind: "browsingEnd", botId, key: browsing.key });
+      }
     },
     async call(call) {
       for (;;) {

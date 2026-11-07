@@ -1,10 +1,12 @@
 import type { Id } from "@bots/convex/dataModel";
-import { toolDefinitions } from "@bots/protocol";
+import { toolDefinitions, type ToolInvocation } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 import type { MistralMessage } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   READ_ONLY_LIMITS,
+  browsingForCall,
+  browsingToEnd,
   modelRequest,
   nextAction,
   systemPrompt,
@@ -587,6 +589,48 @@ describe("modelRequest", () => {
     const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, events: [user] });
     expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
     expect(messages[1]).toEqual({ role: "user", content: "hi" });
+  });
+});
+
+describe("how a call browses", () => {
+  const INVOCATIONS: Record<ToolInvocation["name"], ToolInvocation> = {
+    shell: { name: "shell", args: { command: "ls", timeoutSeconds: 1 } },
+    read_file: { name: "read_file", args: { path: "a" } },
+    write_file: { name: "write_file", args: { path: "a", content: "" } },
+    browser_navigate: { name: "browser_navigate", args: { url: "https://example.com/" } },
+    browser_snapshot: { name: "browser_snapshot", args: {} },
+    browser_click: { name: "browser_click", args: { ref: 1 } },
+    browser_type: { name: "browser_type", args: { ref: 1, text: "", submit: false } },
+    browser_press: { name: "browser_press", args: { key: "Enter" } },
+  };
+  const browserTools = Object.values(INVOCATIONS).filter((tool) => tool.name.startsWith("browser_"));
+  const otherTools = Object.values(INVOCATIONS).filter((tool) => !tool.name.startsWith("browser_"));
+  const result = (name: string, outcome: Extract<RunEventBody, { kind: "toolResult" }>["outcome"]): RunEventBody => ({ kind: "toolResult", toolCallId: "a", name, outcome, output: "", truncated: false });
+
+  it.each(browserTools)("logs a read-only run out for $name, keyed by the run", (tool) => {
+    expect(browsingForCall({ capability: "readOnly", runId: "run-1", tool })).toEqual({ kind: "loggedOut", key: "run-1" });
+  });
+
+  it.each(browserTools)("leaves a full run's $name as it was", (tool) => {
+    expect(browsingForCall({ capability: "full", runId: "run-1", tool })).toBeUndefined();
+  });
+
+  it.each(otherTools)("sends no browsing with $name, so an older computerd still runs it", (tool) => {
+    expect(browsingForCall({ capability: "readOnly", runId: "run-1", tool })).toBeUndefined();
+  });
+
+  it("ends a read-only run's window once a browser call reached computerd, whatever came back", () => {
+    for (const outcome of ["ok", "error", "timeout", "interrupted", "cancelled", "unavailable"] as const) {
+      expect(browsingToEnd({ capability: "readOnly", runId: "run-1", events: [result("browser_snapshot", outcome)] })).toEqual({ kind: "loggedOut", key: "run-1" });
+    }
+  });
+
+  it("has nothing to end for a run that never reached the browser", () => {
+    expect(browsingToEnd({ capability: "readOnly", runId: "run-1", events: [result("read_file", "ok"), result("browser_click", "rejected"), result("browser_navigate", "invalid")] })).toBeUndefined();
+  });
+
+  it("has nothing to end for a full run", () => {
+    expect(browsingToEnd({ capability: "full", runId: "run-1", events: [result("browser_snapshot", "ok")] })).toBeUndefined();
   });
 });
 

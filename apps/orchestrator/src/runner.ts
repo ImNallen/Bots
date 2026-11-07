@@ -18,6 +18,8 @@ import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
+  browsingForCall,
+  browsingToEnd,
   modelRequest,
   nextAction,
   touchedComputer,
@@ -261,6 +263,7 @@ async function runTool(args: {
     callId,
     botId: claim.botId,
     tool: invocation,
+    browsing: browsingForCall({ capability: claim.capability, runId, tool: invocation }),
     lost: lease.lost,
     cancel: lease.cancel,
   });
@@ -284,6 +287,11 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   }
 
   async function finish(state: FunctionArgs<typeof api.runs.finish>["state"]): Promise<void> {
+    // Before the mutation, so a crash between the two sends it again from the resumed run, and a window never outlives a run by a lost message.
+    const browsing = browsingToEnd({ capability: claim.capability, runId, events: events.filter((event) => event.runId === runId).map((event) => event.body) });
+    if (browsing !== undefined) {
+      deps.link.endBrowsing({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+    }
     await service.mutation(api.runs.finish, { runId, leaseToken, state });
     log({ level: "info", event: "run-finished", runId, state: state.kind });
   }

@@ -1,5 +1,15 @@
 import type { Doc } from "@bots/convex/dataModel";
-import { TOOL_CALL_ID, WORKSPACE_ROOT, isComputerTool, toolDefinitions, toolEffect, type ToolName } from "@bots/protocol";
+import {
+  TOOL_CALL_ID,
+  WORKSPACE_ROOT,
+  isBrowserInvocation,
+  isComputerTool,
+  toolDefinitions,
+  toolEffect,
+  type Browsing,
+  type ToolInvocation,
+  type ToolName,
+} from "@bots/protocol";
 import type { MistralMessage } from "./mistral.ts";
 
 export type RunEventBody = Doc<"runEvents">["body"];
@@ -66,6 +76,26 @@ export function touchedComputer(events: readonly RunEventBody[]): boolean {
   return events.some(
     (event) => event.kind === "toolResult" && isComputerTool(event.name) && !BROUGHT_NOTHING_BACK.has(event.outcome),
   );
+}
+
+function browsingOf(capability: RunCapability, runId: string): Browsing | undefined {
+  switch (capability) {
+    case "full":
+      return undefined;
+    case "readOnly":
+      return { kind: "loggedOut", key: runId };
+  }
+}
+
+// The one place that decides how a call browses. Link.call requires the answer, so a call cannot skip this by accident.
+export function browsingForCall(args: { capability: RunCapability; runId: string; tool: ToolInvocation }): Browsing | undefined {
+  return isBrowserInvocation(args.tool) ? browsingOf(args.capability, args.runId) : undefined;
+}
+
+// Only a run that reached computerd's browser has a window to end, so a run that only read files sends nothing an older computerd refuses.
+export function browsingToEnd(args: { capability: RunCapability; runId: string; events: readonly RunEventBody[] }): Browsing | undefined {
+  const browsed = args.events.some((event) => event.kind === "toolResult" && event.name.startsWith("browser_") && !BROUGHT_NOTHING_BACK.has(event.outcome));
+  return browsed ? browsingOf(args.capability, args.runId) : undefined;
 }
 
 const RUN_ENDED_EARLY = "[The previous run ended before a final reply.]";
