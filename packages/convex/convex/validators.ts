@@ -6,8 +6,13 @@ export const toolCall = v.object({
   arguments: v.string(),
 });
 
+export const runTrigger = v.union(v.literal("user"), v.literal("schedule"));
+export const runCapability = v.union(v.literal("full"), v.literal("readOnly"));
+
 export const runEventBody = v.union(
   v.object({ kind: v.literal("userMessage"), text: v.string() }),
+  v.object({ kind: v.literal("scheduleFired"), scheduleId: v.id("schedules"), text: v.string() }),
+  v.object({ kind: v.literal("routineReport"), scheduleId: v.id("schedules"), runId: v.id("runs"), text: v.string() }),
   v.object({
     kind: v.literal("assistantTurn"),
     text: v.string(),
@@ -29,6 +34,7 @@ export const runEventBody = v.union(
       v.literal("invalid"),
       v.literal("cancelled"),
       v.literal("denied"),
+      v.literal("rejected"),
     ),
     output: v.string(),
     exitCode: v.optional(v.number()),
@@ -49,6 +55,7 @@ export const runState = v.union(
 );
 
 export type RunState = Infer<typeof runState>;
+export type TerminalRunState = Infer<typeof terminalRunState>;
 export type RunEventBody = Infer<typeof runEventBody>;
 
 export const noteSource = v.union(

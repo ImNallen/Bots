@@ -1,6 +1,18 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { approvalLevel, approvalState, botColor, botShape, desiredVm, noteSource, observedVm, runEventBody, runState } from "./validators.js";
+import {
+  approvalLevel,
+  approvalState,
+  botColor,
+  botShape,
+  desiredVm,
+  noteSource,
+  observedVm,
+  runCapability,
+  runEventBody,
+  runState,
+  runTrigger,
+} from "./validators.js";
 
 export default defineSchema({
   users: defineTable({
@@ -76,14 +88,28 @@ export default defineSchema({
   threads: defineTable({
     botId: v.id("bots"),
     ownerId: v.id("users"),
+    // Absent means the bot's chat. A routine's raw pages stay in its own thread, so they never load on a chat run.
+    kind: v.optional(v.literal("routine")),
+  }).index("by_bot", ["botId", "kind"]),
+
+  // Only what a run needs. Routines add when it fires.
+  schedules: defineTable({
+    ownerId: v.id("users"),
+    botId: v.id("bots"),
+    threadId: v.id("threads"),
+    instruction: v.string(),
   }).index("by_bot", ["botId"]),
 
   runs: defineTable({
     threadId: v.id("threads"),
     botId: v.id("bots"),
     ownerId: v.id("users"),
-    trigger: v.literal("user"),
-    capability: v.literal("full"),
+    trigger: runTrigger,
+    capability: runCapability,
+    // Only a routine's own runs have this, so by_schedule holds no report in the chat.
+    scheduleId: v.optional(v.id("schedules")),
+    deadlineAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
     state: runState,
     cancelRequested: v.boolean(),
     nextSeq: v.number(),
@@ -91,7 +117,11 @@ export default defineSchema({
     claimsWithoutProgress: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
-    .index("by_state", ["state.kind"]),
+    .index("by_state", ["state.kind"])
+    .index("by_schedule", ["scheduleId"])
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_trigger", ["ownerId", "trigger"])
+    .index("by_bot_state", ["botId", "state.kind"]),
 
   runEvents: defineTable({
     runId: v.id("runs"),
@@ -100,7 +130,8 @@ export default defineSchema({
     body: runEventBody,
   })
     .index("by_run_seq", ["runId", "seq"])
-    .index("by_thread", ["threadId"]),
+    .index("by_thread", ["threadId"])
+    .index("by_run_outcome", ["runId", "body.outcome"]),
 
   runStreams: defineTable({
     runId: v.id("runs"),

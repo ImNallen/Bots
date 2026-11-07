@@ -64,6 +64,7 @@ const OUTCOMES: Record<Exclude<ToolResult["outcome"], "denied">, { status: ToolS
   interrupted: { status: "failed", note: "interrupted" },
   unavailable: { status: "failed", note: "no computer answered" },
   invalid: { status: "failed", note: "invalid call" },
+  rejected: { status: "failed", note: "blocked, read-only run" },
 };
 
 export function isActive(run: Pick<TimelineRun, "state">): boolean {

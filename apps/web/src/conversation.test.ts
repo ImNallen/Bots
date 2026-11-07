@@ -125,6 +125,11 @@ describe("conversationItems", () => {
       expect(row("shell", {}, body).output).toEqual({ text: "hi", exitCode: 0, truncated: true });
     });
 
+    it("says a rejected call was blocked because the run is read-only", () => {
+      const rejected = row("shell", { command: "rm -rf /" }, result("c1", "rejected", "This run is read-only."));
+      expect(rejected).toMatchObject({ status: "failed", note: "blocked, read-only run", summary: "rm -rf /", output: { text: "This run is read-only." } });
+    });
+
     it.each(["error", "timeout", "interrupted", "unavailable", "invalid"] as const)("marks outcome %s as failed", (outcome) => {
       const failed = row("shell", {}, result("c1", outcome));
       expect(failed.status).toBe("failed");

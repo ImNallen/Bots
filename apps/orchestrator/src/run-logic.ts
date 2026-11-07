@@ -89,7 +89,8 @@ export function toMistralMessages(args: {
   const messages: MistralMessage[] = [{ role: "system", content: args.system }];
   for (const event of args.events) {
     switch (event.kind) {
-      case "userMessage": {
+      case "userMessage":
+      case "scheduleFired": {
         const previous = messages.at(-1);
         // A cancelled or failed run can end on a tool result or a user message, and the conversation must still alternate.
         if (previous?.role === "tool" || previous?.role === "user") {
