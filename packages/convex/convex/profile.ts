@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_TITLE_LENGTH = 64;
-const MAX_ASSIGNMENT_LENGTH = 8000;
+const MAX_DESCRIPTION_LENGTH = 8000;
 
 export function parseBotName(name: string): string {
   const trimmed = name.trim();
@@ -23,14 +23,14 @@ function parseOptionalText(args: { label: string; text: string; max: number }): 
   return trimmed === "" ? undefined : trimmed;
 }
 
-export function parseBotProfile(args: { name: string; title: string; assignment: string }): {
+export function parseBotProfile(args: { name: string; title: string; description: string }): {
   name: string;
   title: string | undefined;
-  assignment: string | undefined;
+  description: string | undefined;
 } {
   return {
     name: parseBotName(args.name),
     title: parseOptionalText({ label: "Title", text: args.title, max: MAX_TITLE_LENGTH }),
-    assignment: parseOptionalText({ label: "Assignment", text: args.assignment, max: MAX_ASSIGNMENT_LENGTH }),
+    description: parseOptionalText({ label: "Description", text: args.description, max: MAX_DESCRIPTION_LENGTH }),
   };
 }

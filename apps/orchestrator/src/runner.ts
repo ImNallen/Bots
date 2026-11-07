@@ -177,7 +177,7 @@ async function callModel(args: {
         botName: profile.name,
         botId: claim.botId,
         title: profile.title,
-        assignment: profile.assignment,
+        description: profile.description,
         about: profile.about,
         notes: profile.notes,
         timeZone: profile.timeZone,

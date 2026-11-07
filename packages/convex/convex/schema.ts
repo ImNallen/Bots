@@ -35,7 +35,7 @@ export default defineSchema({
     shape: v.optional(botShape),
     color: v.optional(botColor),
     title: v.optional(v.string()),
-    assignment: v.optional(v.string()),
+    description: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),
 
   memories: defineTable({

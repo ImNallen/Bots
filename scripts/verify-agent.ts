@@ -987,17 +987,17 @@ try {
     });
   });
 
-  await scenario("assignment. the owner's text reaches every model call, and only the owner can write it", async () => {
+  await scenario("description. the owner's text reaches every model call, and only the owner can write it", async () => {
     await putKey(MISTRAL_KEY);
     await second.mutation(api.users.ensureCurrent, {});
-    const chat = await newChat({ client: first, name: "assignment", level: "outside" });
+    const chat = await newChat({ client: first, name: "description", level: "outside" });
     const { botId } = chat;
-    const name = `assignment-${nonce}`;
-    const before = { botId, name, title: `Scout ${nonce}`, assignment: `Watch the ${nonce} release notes.` };
+    const name = `description-${nonce}`;
+    const before = { botId, name, title: `Scout ${nonce}`, description: `Watch the ${nonce} release notes.` };
     const systemOf = (request: FakeRequest | undefined) => String(request?.body.messages[0]?.content);
     try {
       await first.mutation(api.bots.setProfile, before);
-      const text = `assignment ${nonce}`;
+      const text = `description ${nonce}`;
       fake.script(text, ({ toolResults }) =>
         toolResults.length === 0
           ? { kind: "tools", delivery: "whole", calls: [shellCall("true")] }
@@ -1008,13 +1008,13 @@ try {
         description: "the first model call to end in a tool call that waits for approval",
         probe: async () => (await first.query(api.approvals.pendingForThread, { threadId: chat.threadId }))[0],
       });
-      await check("the first model call's system message holds the title and the assignment", () => {
+      await check("the first model call's system message holds the title and the description", () => {
         const system = systemOf(fake.requests(text)[0]);
         assert.ok(system.includes(before.title));
-        assert.ok(system.includes(before.assignment));
+        assert.ok(system.includes(before.description));
       });
 
-      const forged = { ...before, assignment: `Forged ${nonce}` };
+      const forged = { ...before, description: `Forged ${nonce}` };
       await check("another user cannot set it", async () => {
         await assertRejected(second.mutation(api.bots.setProfile, forged), /Bot not found/);
       });
@@ -1025,15 +1025,15 @@ try {
         await assertRejected(anonymous.mutation(api.bots.setProfile, forged), /Not authenticated/);
       });
       await check("a value over the limit is refused", async () => {
-        await assertRejected(first.mutation(api.bots.setProfile, { ...before, assignment: "x".repeat(8001) }), /Assignment/);
+        await assertRejected(first.mutation(api.bots.setProfile, { ...before, description: "x".repeat(8001) }), /Description/);
         await assertRejected(first.mutation(api.bots.setProfile, { ...before, title: "x".repeat(65) }), /Title/);
       });
       await check("those attempts changed nothing", async () => {
         const stored = await service.query(api.bots.promptFor, { botId });
-        assert.deepEqual(stored, { name, title: before.title, assignment: before.assignment, notes: [], routines: [] });
+        assert.deepEqual(stored, { name, title: before.title, description: before.description, notes: [], routines: [] });
       });
 
-      const after = { botId, name: `renamed-${nonce}`, title: `Lead ${nonce}`, assignment: `Summarize the ${nonce} changelog.` };
+      const after = { botId, name: `renamed-${nonce}`, title: `Lead ${nonce}`, description: `Summarize the ${nonce} changelog.` };
       await first.mutation(api.bots.setProfile, after);
       await first.mutation(api.approvals.decide, { approvalId: pending._id, decision: "approved" });
       const run = await chat.settled(runId);
@@ -1043,28 +1043,28 @@ try {
         const system = systemOf(fake.requests(text)[1]);
         assert.ok(system.includes(after.name));
         assert.ok(system.includes(after.title));
-        assert.ok(system.includes(after.assignment));
-        assert.ok(!system.includes(before.assignment));
+        assert.ok(system.includes(after.description));
+        assert.ok(!system.includes(before.description));
       });
 
-      await first.mutation(api.bots.setProfile, { botId, name, title: "   ", assignment: "\n" });
-      await check("a blank title and assignment are stored as absent", async () => {
+      await first.mutation(api.bots.setProfile, { botId, name, title: "   ", description: "\n" });
+      await check("a blank title and description are stored as absent", async () => {
         const bot = await first.query(api.bots.get, { botId });
         assert.equal(bot?.title, undefined);
-        assert.equal(bot?.assignment, undefined);
+        assert.equal(bot?.description, undefined);
       });
-      const clearedText = `assignment cleared ${nonce}`;
+      const clearedText = `description cleared ${nonce}`;
       fake.script(clearedText, () => ({ kind: "text", text: "finished" }));
       await chat.settled(await chat.send(clearedText));
-      await check("a bot with no assignment gets no assignment section", () => {
+      await check("a bot with no description gets no description section", () => {
         const system = systemOf(fake.requests(clearedText)[0]);
         assert.ok(system.includes(name));
-        assert.doesNotMatch(system, /standing assignment/i);
+        assert.doesNotMatch(system, /\[Description\]/);
       });
     } finally {
       // Convex checks every stored row against the schema at a deploy, so a row left with these fields would stop another
       // worktree on the shared backend from deploying a schema without them.
-      await first.mutation(api.bots.setProfile, { botId, name, title: "", assignment: "" });
+      await first.mutation(api.bots.setProfile, { botId, name, title: "", description: "" });
     }
 
     await first.mutation(api.bots.remove, { botId });
