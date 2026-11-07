@@ -3,6 +3,7 @@ import type { MutationCtx } from "./_generated/server.js";
 import type { TerminalRunState } from "./validators.js";
 
 export const DEADLINE_FAILURE: TerminalRunState = { kind: "failed", reason: "The routine ran past its 30 minute limit" };
+const LATE_RUNS_PER_TICK = 32;
 
 const UNANSWERED_CALL_OUTPUT =
   "The run stopped before this call reported a result, so the outcome is unknown. It may have run, and it may still be running.";
@@ -69,4 +70,19 @@ export async function endPastDeadline(ctx: MutationCtx, run: Doc<"runs">): Promi
 
 export function noRunnerHolds(run: Pick<Doc<"runs">, "state">, now: number): boolean {
   return run.state.kind === "queued" || (run.state.kind === "running" && run.state.leaseUntil < now);
+}
+
+export async function endRunsPastDeadline(ctx: MutationCtx, now: number): Promise<void> {
+  for (const kind of ["queued", "running"] as const) {
+    const late = await ctx.db
+      .query("runs")
+      .withIndex("by_state", (q) => q.eq("state.kind", kind))
+      .filter((q) => q.and(q.neq(q.field("deadlineAt"), undefined), q.lt(q.field("deadlineAt"), now)))
+      .take(LATE_RUNS_PER_TICK);
+    for (const run of late) {
+      if (noRunnerHolds(run, now)) {
+        await endPastDeadline(ctx, run);
+      }
+    }
+  }
 }

@@ -13,6 +13,7 @@ import type * as approvals from "../approvals.js";
 import type * as bots from "../bots.js";
 import type * as computers from "../computers.js";
 import type * as credentials from "../credentials.js";
+import type * as crons from "../crons.js";
 import type * as identity from "../identity.js";
 import type * as memories from "../memories.js";
 import type * as profile from "../profile.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   bots: typeof bots;
   computers: typeof computers;
   credentials: typeof credentials;
+  crons: typeof crons;
   identity: typeof identity;
   memories: typeof memories;
   profile: typeof profile;

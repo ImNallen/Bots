@@ -6,7 +6,7 @@ import { capText } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
 import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
-import { applyScheduleCreate } from "./schedules.js";
+import { EARLIER_REPORTS, applyScheduleCreate } from "./schedules.js";
 import { ensureChatThread } from "./threads.js";
 import { memoryCall, runEventBody, scheduleCreate, terminalRunState, type RunEventBody, type TerminalRunState } from "./validators.js";
 
@@ -16,7 +16,6 @@ const MAX_CLAIMS_WITHOUT_PROGRESS = 5;
 const NO_PROGRESS = `The run stopped after ${MAX_CLAIMS_WITHOUT_PROGRESS} attempts in a row failed with no progress.`;
 const NO_REPORT_REASON = "The routine ended without a report";
 const MAX_REPORT_LENGTH = 8000;
-const EARLIER_REPORTS = 3;
 
 export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
   return `${NO_PROGRESS} ${run.scheduleId === undefined ? "Send another message to try again." : "The routine tries again at its next time."}`;

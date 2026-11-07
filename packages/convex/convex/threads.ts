@@ -51,6 +51,19 @@ export async function activeRunOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<
   return null;
 }
 
+export const activeRun = query({
+  args: { botId: v.id("bots") },
+  handler: async (ctx, { botId }) => {
+    const { user } = await requireIdentity(ctx);
+    const bot = await ctx.db.get(botId);
+    if (user === null || bot === null || bot.ownerId !== user._id) {
+      return null;
+    }
+    const run = await activeRunOfBot(ctx, botId);
+    return run === null ? null : { _id: run._id, routine: run.scheduleId !== undefined, cancelRequested: run.cancelRequested };
+  },
+});
+
 export async function purgeRunBatch(ctx: MutationCtx, runId: Id<"runs">): Promise<void> {
   const details = [
     ...(await ctx.db
@@ -150,7 +163,7 @@ export function runsToShow<T extends { trigger: Doc<"runs">["trigger"] }>(newest
   return shown;
 }
 
-function publicState(state: RunState) {
+export function publicState(state: RunState) {
   switch (state.kind) {
     case "running":
       return { kind: "running" as const };

@@ -6,6 +6,7 @@ import { decideActivity, lastMessageOf } from "./activity.js";
 import { requireIdentity, requireOwnedBot, requireService } from "./identity.js";
 import { notesOf, promptNotes } from "./memories.js";
 import { parseBotName, parseBotProfile } from "./profile.js";
+import { routinesOfBot } from "./schedules.js";
 import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape, type RunEventBody } from "./validators.js";
 
@@ -252,8 +253,8 @@ export const remove = mutation({
     for (const note of await notesOf(ctx, botId)) {
       await ctx.db.delete(note._id);
     }
-    for await (const schedule of ctx.db.query("schedules").withIndex("by_bot", (q) => q.eq("botId", botId))) {
-      await ctx.db.delete(schedule._id);
+    for (const routine of await routinesOfBot(ctx, botId)) {
+      await ctx.db.delete(routine._id);
     }
     await ctx.db.delete(botId);
     await ctx.scheduler.runAfter(0, internal.bots.purge, { botId });
