@@ -10,8 +10,8 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 3 | Done, with gaps listed below | Proxmox template, reconcile loop, and network rules | Provisioning converges after being killed midway, and a script proves that a VM reaches only the internet and the orchestrator |
 | 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
 | 4b | Done, with gaps listed below | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
-| 5 | **In progress** | The standing assignment, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
-| 6 | | Friend invites | A friend goes from invite to working bot without help |
+| 5 | Done, with gaps listed below | The standing assignment, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
+| 6 | **Next** | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
 | 8 | | OAuth connectors, the independent reviewer, and the Vault | Bots use saved logins without seeing the passwords, and bots no longer have passwordless `sudo` |
 
@@ -150,7 +150,7 @@ The owner decided these on 2026-11-06, after trying a prototype:
 
 This is a proposal, so change it if you find a better answer:
 
-- Add screens that Grok Bot lacks where Bots needs them. Reviews say it has no way to inspect or edit individual memories, for example.
+- Add screens that Grok Bot lacks where Bots needs them. The owner changed this for memory on 2026-11-07, as [Later: hide memory's details](#later-hide-memorys-details) says.
 
 ### Progress on the redesign
 
@@ -219,12 +219,25 @@ A review on 2026-11-07 settled the thread. A routine's raw pages go in its own t
 7. Done in code, with a scripted fake model. A real model on the control VM still has to run the check. The owner asks a bot for something that recurs, the bot calls `schedule_propose`, and the owner approves a card, at every approval level. The card's words come from `describeCadence`, and `runs.append` reads the approval row from Convex. A Convex cron fires each due routine once as a read-only run, and its report appears in the chat. The info panel lists a bot's routines, with when, the next run, recent runs, and the last missed run, and it has Pause, Resume, Test now, and Delete. Settings holds the time zone. The composer stays open during a routine, and a message sent then stops the routine and goes when it has stopped. `VERIFY_SCENARIOS=A,schedule pnpm verify:agent` checks this with a real backend, a real orchestrator, and a real `computerd`, including the real cron, all 8 forbidden tools in one turn with a SIGKILL between the turn and its results, a kill on each side of the mutation that creates a routine, each repro behind the design, and cleanup in `finally`. It failed before the feature and passes after, and `pnpm verify:agent` passes in seven sets that together run every scenario. The UI was tested in a real browser at 1280 and 412 wide, in light and dark, with the same fake model. The composer's refusal when a fire wins the race was tested in a pure function and against the backend, and not in a browser. Docker's `computerd` has no desktop, so a routine in these tests reads files and no real page. A real model, the control VM, a real page through a routine, and a real phone are untested. So nothing has shown how a real model uses `schedule_propose`. Its schema is one flat object with no `oneOf`, because every chat run's request carries it, and nothing shows that Mistral accepts `oneOf` there. This changes `packages/protocol`, so deploying it restarts `computerd` on every VM. Going back to a commit before this one needs every `schedules` row deleted, and `timeZone` cleared from every user, because the older schema has neither `cadence` nor `timeZone` and Convex checks every stored row at a deploy.
 8. Done in code, with a scripted fake model. `/activity`, reached from the sidebar, lists an owner's routines and 50 newest runs across all bots, from one query, `activity.page`, with no table and no counter of its own. A routine shows its bot, instruction, schedule, next run or that it is paused, and its last missed run. A run shows its bot, whether it was a chat or a routine, its state, a failure's reason, when it started, its last text as plain text cut to two lines, and "Blocked an attempt to change something" when it stored a `rejected` result. A chat row opens the chat, and a routine's row opens the panel at its routines. `VERIFY_SCENARIOS=A,activity pnpm verify:agent` checks this with a real backend, orchestrator, and `computerd`, including a real rejected call, a stopped run, failed runs, 50 runs with events near 1 MiB, 50 rejected calls with the longest name a model can send, another user, and a query with no sign-in. It failed before the feature and passes after, and removing either read limit made the backend refuse the query for too many bytes read. `pnpm verify:agent` passes in eight sets that together run every scenario. The page was tested in a real browser at 1280 and 412 wide, in light and dark, with the same fake model, and the back action there stands in for a back gesture. A real model, the control VM, a real page through a routine, and a real phone are untested. This changes neither the schema nor `packages/protocol`, so deploying it restarts nothing on a VM, and going back to a commit before this one needs no cleanup.
 
-The code for step 5 is done. These things are left before the step's row can say done:
+Step 5 was accepted on 2026-11-07, after these checks on the real system:
 
-1. The owner deploys this stack to the control VM.
-2. A real model runs the step's check on the control VM. The orchestrator must reject a write attempt from a scheduled run, and Mistral must accept a history that holds a call to a tool it was not offered.
-3. `infra/proxmox/verify-desktop.sh` runs its new logged-out step on a real VM. That step has never run.
-4. The owner tries a real routine, in the chat and in Activity, and accepts the step.
+- The stack went to the control VM at `1bfb6d0`. A Convex export from just before that deploy is at `/root/backups/bots-before-step5-2026-11-07.zip` on that VM.
+- `pnpm verify:template` ran a real chat through a real Mistral model, with a real shell tool on VM 201 and the new `computerd`. So Mistral accepts the new tool definitions.
+- `infra/proxmox/verify-desktop.sh 201` passed all 247 checks, including the logged-out step and the reboot.
+- The owner tried a real routine and reported that it works.
+
+The step's check itself, that the orchestrator rejects a write attempt from a scheduled run, has only run with a scripted fake model, because a real model has no reason to attempt one. So nothing shows that Mistral accepts a history that holds a call to a tool it was not offered. `pnpm verify:browser`, `pnpm verify:screen`, and `pnpm verify:takeover` have not run since this stack.
+
+### Later: hide memory's details
+
+The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand.
+
+When that work starts, these things need an answer. They are proposals, so change them if you find a better answer:
+
+- Which other details go with it. The owner named memory "and such", and the panel's routines and profile, the chat's tool rows, and Activity are candidates. A tool row in the chat is how the owner sees a save happen today.
+- A bot cannot change or forget a note whose source is the owner, and it refuses the owner's own request to. So the rule needs to change, or the owner's existing notes need a path. A page must not gain that power, so a change to an owner's note should show a question card.
+- The panel is the only view of notes that does not pass through the model. A planted note can tell a bot to leave itself out of an answer, so "what do you remember?" alone cannot show it. A `memory_list` tool whose chat row shows the stored rows, not the model's words, would keep one honest view with no screen of its own.
+- Rows stay the store, with their source and run, so an injected save can still be traced. Only the screen goes.
 
 ## After step 3: deploy from `main`
 
