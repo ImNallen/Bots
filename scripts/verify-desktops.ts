@@ -54,7 +54,7 @@ const now = (): number => Date.now() + clockOffset;
 const desktops = createDesktops({ systemd: counted, runtimeDir: RUNTIME_DIR, now });
 const browser = createBrowser({ desktops });
 
-const browse = (botId: string, tool: Parameters<typeof browser.execute>[0]["tool"]) => browser.execute({ botId, tool, signal });
+const browse = (botId: string, tool: Parameters<typeof browser.execute>[0]["tool"]) => browser.execute({ botId, tool, browsing: undefined, signal });
 const refOf = (output: string, label: string): number => Number(new RegExp(`\\[(\\d+)\\] [^\\n]*${label}`).exec(output)?.[1]);
 
 let startedAt = performance.now();
@@ -102,7 +102,7 @@ const popupPage = pageWith("the opener", `<button onclick="const w = window.open
 const opener = await browse(BOTS[0], { name: "browser_navigate", args: { url: popupPage } });
 const popup = await browse(BOTS[0], { name: "browser_click", args: { ref: refOf(opener.output, "open a popup") } });
 check(popup.output.includes("Title: the popup"), "a popup becomes the page the bot acts on", popup.output);
-const afterRestart = await createBrowser({ desktops }).execute({ botId: BOTS[0], tool: { name: "browser_snapshot", args: {} }, signal });
+const afterRestart = await createBrowser({ desktops }).execute({ botId: BOTS[0], tool: { name: "browser_snapshot", args: {} }, browsing: undefined, signal });
 check(afterRestart.output.includes("Title: the popup"), "a popup stays current across a computerd restart, because Chromium says who opened it", afterRestart.output);
 const closePopup = await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("closing", "<script>setTimeout(() => window.close(), 200)</script>") } });
 check(closePopup.outcome === "ok", "the popup navigates", closePopup.output);
@@ -136,7 +136,7 @@ const recovered = createDesktops({ systemd: counted, runtimeDir: RUNTIME_DIR, no
 const again = await recovered.acquire(BOTS[1]);
 check(again.slot === (leases.get(BOTS[1]) as DesktopLease).slot, "a new instance over the same state finds the same slot", String(again.slot));
 again.release();
-const sameScreen = await createBrowser({ desktops: recovered }).execute({ botId: BOTS[1], tool: { name: "browser_snapshot", args: {} }, signal });
+const sameScreen = await createBrowser({ desktops: recovered }).execute({ botId: BOTS[1], tool: { name: "browser_snapshot", args: {} }, browsing: undefined, signal });
 check(sameScreen.output.includes("typed by a person"), "a new instance over the same state finds the same page", sameScreen.output);
 
 (leases.get(BOTS[1]) as DesktopLease).release();

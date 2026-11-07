@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BrowserInvocation } from "@bots/protocol";
+import type { BrowserInvocation, Browsing } from "@bots/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBrowser, nextPages, type CdpConnector, type CdpEvent } from "./browser.ts";
 import { createCalls } from "./calls.ts";
@@ -10,8 +10,23 @@ import { openJournal } from "./journal.ts";
 
 type Sent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
+const DEFAULT_CONTEXT = "default-context";
+
 function fakeChromium() {
-  const pages = new Map<string, { openerId?: string }>([["target-0", {}]]);
+  const pages = new Map<string, { openerId?: string; browserContextId?: string }>([["target-0", {}]]);
+  const contexts = new Map<string, { disposeOnDetach: boolean }>();
+  let nextContext = 1;
+  let exited = false;
+  let socketsClosed = 0;
+  const disposeContext = (browserContextId: string) => {
+    contexts.delete(browserContextId);
+    for (const [targetId, page] of pages) {
+      if (page.browserContextId === browserContextId) {
+        pages.delete(targetId);
+      }
+    }
+    exited ||= pages.size === 0;
+  };
   const sent: Sent[] = [];
   const closeListeners: Array<() => void> = [];
   const eventListeners: Array<(event: CdpEvent) => void> = [];
@@ -25,13 +40,25 @@ function fakeChromium() {
 
   return {
     pages,
+    contexts,
     sent,
+    exited: () => exited,
+    socketsClosed: () => socketsClosed,
     openPopup: (openerId: string) => {
       const targetId = `target-${nextTarget++}`;
-      pages.set(targetId, { openerId });
+      const browserContextId = pages.get(openerId)?.browserContextId;
+      pages.set(targetId, { openerId, ...(browserContextId === undefined ? {} : { browserContextId }) });
       return targetId;
     },
     closeSocket: () => closeListeners.splice(0).forEach((listener) => listener()),
+    dropSocket: () => {
+      closeListeners.splice(0).forEach((listener) => listener());
+      for (const [browserContextId, context] of contexts) {
+        if (context.disposeOnDetach) {
+          disposeContext(browserContextId);
+        }
+      }
+    },
     emit: (method: string, params: Record<string, unknown>, sessionId?: string) => eventListeners.forEach((listener) => listener({ method, params, sessionId })),
     onSend: (hook: (method: string) => void) => {
       sendHook = hook;
@@ -54,7 +81,15 @@ function fakeChromium() {
     },
     client: {
       identity: "browser",
-      close: () => {},
+      close: () => {
+        socketsClosed += 1;
+        closeListeners.splice(0).forEach((listener) => listener());
+        for (const [browserContextId, context] of contexts) {
+          if (context.disposeOnDetach) {
+            disposeContext(browserContextId);
+          }
+        }
+      },
       onEvent: (listener: (event: CdpEvent) => void) => {
         eventListeners.push(listener);
       },
@@ -78,12 +113,28 @@ function fakeChromium() {
             return {
               targetInfos: [
                 { targetId: "omnibox", type: "browser_ui" },
-                ...[...pages].map(([targetId, page]) => ({ targetId, type: "page", ...page })),
+                ...[...pages].map(([targetId, page]) => ({ targetId, type: "page", browserContextId: DEFAULT_CONTEXT, ...page })),
               ],
             };
+          case "Target.getBrowserContexts":
+            return { browserContextIds: [...contexts.keys()], defaultBrowserContextId: DEFAULT_CONTEXT };
+          case "Target.createBrowserContext": {
+            const browserContextId = `context-${nextContext++}`;
+            contexts.set(browserContextId, { disposeOnDetach: params.disposeOnDetach === true });
+            return { browserContextId };
+          }
+          case "Target.disposeBrowserContext":
+            if (!contexts.has(String(params.browserContextId))) {
+              throw new Error("Failed to find context");
+            }
+            disposeContext(String(params.browserContextId));
+            return {};
           case "Target.createTarget": {
+            if (params.browserContextId !== undefined && !contexts.has(String(params.browserContextId))) {
+              throw new Error("Failed to find browser context");
+            }
             const targetId = `target-${nextTarget++}`;
-            pages.set(targetId, {});
+            pages.set(targetId, params.browserContextId === undefined ? {} : { browserContextId: String(params.browserContextId) });
             return { targetId };
           }
           case "Target.closeTarget":
@@ -188,7 +239,7 @@ function browserOf() {
   return createBrowser({ desktops: machine.desktops, connector: machine.connector });
 }
 
-const look = (browser: ReturnType<typeof browserOf>, botId: string) => browser.execute({ botId, tool: snapshot, signal });
+const look = (browser: ReturnType<typeof browserOf>, botId: string) => browser.execute({ browsing: undefined, botId, tool: snapshot, signal });
 const lastEvaluated = (target: FakeChromium) =>
   target.sent.filter((entry) => entry.method === "Runtime.evaluate").at(-1)?.sessionId;
 
@@ -196,8 +247,8 @@ describe("browser", () => {
   it("sends each bot's commands only to that bot's browser", async () => {
     const browser = browserOf();
     await Promise.all([
-      browser.execute({ botId: "a", tool: { name: "browser_navigate", args: { url: "https://a.example/" } }, signal }),
-      browser.execute({ botId: "b", tool: { name: "browser_navigate", args: { url: "https://b.example/" } }, signal }),
+      browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_navigate", args: { url: "https://a.example/" } }, signal }),
+      browser.execute({ browsing: undefined, botId: "b", tool: { name: "browser_navigate", args: { url: "https://b.example/" } }, signal }),
     ]);
     const navigated = (target: FakeChromium) =>
       target.sent.filter((entry) => entry.method === "Page.navigate").map((entry) => entry.params.url);
@@ -207,7 +258,7 @@ describe("browser", () => {
 
   it("acts on the blank page a browser starts with, and opens no other", async () => {
     const browser = browserOf();
-    await browser.execute({ botId: "a", tool: navigate, signal });
+    await browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal });
     await look(browser, "a");
     expect([...chromium.pages.keys()]).toEqual(["target-0"]);
     expect(lastEvaluated(chromium)).toBe("session-target-0");
@@ -225,7 +276,7 @@ describe("browser", () => {
     await look(browser, "a");
     expect(machine.openLeases()).toBe(0);
     chromium.setLocate(null);
-    await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
     expect(machine.openLeases()).toBe(0);
   });
 
@@ -266,8 +317,8 @@ describe("browser", () => {
   it("sends a bot's typing only to that bot's page", async () => {
     const browser = browserOf();
     await Promise.all([
-      browser.execute({ botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "for a", submit: false } }, signal }),
-      browser.execute({ botId: "b", tool: { name: "browser_type", args: { ref: 1, text: "for b", submit: false } }, signal }),
+      browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "for a", submit: false } }, signal }),
+      browser.execute({ browsing: undefined, botId: "b", tool: { name: "browser_type", args: { ref: 1, text: "for b", submit: false } }, signal }),
     ]);
     const typed = (target: FakeChromium) => target.sent.filter((entry) => entry.method === "Input.insertText").map((entry) => entry.params.text);
     expect(typed(machine.chromiumOfBot("a"))).toEqual(["for a"]);
@@ -276,7 +327,7 @@ describe("browser", () => {
 
   it("reports a stale ref as an error that tells the bot what to do", async () => {
     chromium.setLocate(null);
-    const result = await browserOf().execute({ botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
     expect(result.outcome).toBe("error");
     expect(result.output).toContain("take a new snapshot");
   });
@@ -288,7 +339,7 @@ describe("browser", () => {
     chromium.pages.clear();
     chromium.pages.set("target-new", {});
     chromium.setLocate(null);
-    const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 3 } }, signal });
+    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 3 } }, signal });
     expect(result.outcome).toBe("error");
     expect(result.output).toContain("take a new snapshot");
     expect(chromium.sent.some((entry) => entry.method === "Input.dispatchMouseEvent")).toBe(false);
@@ -296,21 +347,21 @@ describe("browser", () => {
 
   it("reports a computer with no browser as an error", async () => {
     machine.failAcquire(new Error("this computer has no running browser"));
-    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: navigate, signal });
     expect(result).toMatchObject({ outcome: "error", truncated: false });
     expect(result.output).toContain("no running browser");
   });
 
   it("reports a desktop whose browser does not answer as an error, and closes the lease", async () => {
     machine.failConnect(new Error("this computer has no running browser"));
-    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: navigate, signal });
     expect(result.output).toContain("no running browser");
     expect(machine.openLeases()).toBe(0);
   });
 
   it("reports every screen in use in words a bot can act on", async () => {
     machine.failAcquire(new Error("every screen on this computer is in use, so try again in a few minutes"));
-    const result = await browserOf().execute({ botId: "a", tool: navigate, signal });
+    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: navigate, signal });
     expect(result.output).toContain("try again in a few minutes");
   });
 
@@ -346,7 +397,7 @@ describe("browser", () => {
       { name: "browser_press", args: { key: "Enter" } },
       { name: "browser_navigate", args: { url: "https://example.com/" } },
     ])("sends nothing to the page for $name", async (tool) => {
-      const result = await browserOf().execute({ botId: "a", tool, signal: cancelled() });
+      const result = await browserOf().execute({ browsing: undefined, botId: "a", tool, signal: cancelled() });
       expect(result.outcome).toBe("cancelled");
       expect(inputSent()).toEqual([]);
       expect(chromium.sent.filter((entry) => entry.method === "Page.navigate")).toEqual([]);
@@ -365,7 +416,7 @@ describe("browser", () => {
           },
         },
       });
-      const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal: abort.signal });
+      const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal: abort.signal });
       expect(result.outcome).toBe("cancelled");
       expect(inputSent()).toEqual([]);
       expect(machine.openLeases()).toBe(0);
@@ -378,7 +429,7 @@ describe("browser", () => {
         desktops: machine.desktops,
         takeoverSettled: async () => abort.abort(new Error("stopped")),
       });
-      const result = await browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      const result = await browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal: abort.signal });
       expect(result.outcome).toBe("cancelled");
       expect(machine.acquires()).toBe(0);
     });
@@ -390,7 +441,7 @@ describe("browser", () => {
         desktops: machine.desktops,
         takeoverSettled: () => new Promise((resolve) => (read = resolve)),
       });
-      const running = browser.execute({ botId: "a", tool: navigate, signal });
+      const running = browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal });
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(machine.acquires()).toBe(0);
       read();
@@ -402,8 +453,9 @@ describe("browser", () => {
       await look(browser, "a");
       chromium.sent.length = 0;
       const abort = new AbortController();
-      const earlier = browser.execute({ botId: "a", tool: snapshot, signal });
+      const earlier = browser.execute({ browsing: undefined, botId: "a", tool: snapshot, signal });
       const queued = browser.execute({
+        browsing: undefined,
         botId: "a",
         tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
         signal: abort.signal,
@@ -424,6 +476,7 @@ describe("browser", () => {
         }
       });
       const result = await browser.execute({
+        browsing: undefined,
         botId: "a",
         tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
         signal: abort.signal,
@@ -440,8 +493,7 @@ describe("browser", () => {
 
     it("watches every page from the moment the connection opens", async () => {
       await look(browserOf(), "a");
-      expect(chromium.sent[0]).toMatchObject({
-        method: "Target.setAutoAttach",
+      expect(chromium.sent.find((entry) => entry.method === "Target.setAutoAttach")).toMatchObject({
         params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] },
       });
     });
@@ -496,7 +548,7 @@ describe("browser", () => {
       const browser = createBrowser({ desktops: machine.desktops, connector: machine.connector });
       chromium.stall("Target.setAutoAttach");
       const abort = new AbortController();
-      const running = browser.execute({ botId: "a", tool: snapshot, signal: abort.signal });
+      const running = browser.execute({ browsing: undefined, botId: "a", tool: snapshot, signal: abort.signal });
       await new Promise((resolve) => setTimeout(resolve, 10));
       abort.abort(new Error("stopped"));
       expect((await running).outcome).toBe("cancelled");
@@ -559,7 +611,7 @@ describe("browser", () => {
       chromium.freezePage();
       const abort = new AbortController();
       const started = Date.now();
-      const running = browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      const running = browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal: abort.signal });
       await new Promise((resolve) => setTimeout(resolve, 10));
       abort.abort(new Error("stopped"));
       const result = await running;
@@ -574,7 +626,7 @@ describe("browser", () => {
       const browser = quick();
       await look(browser, "a");
       chromium.stallNavigation();
-      const result = await browser.execute({ botId: "a", tool: navigate, signal });
+      const result = await browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal });
       expect(result.outcome).toBe("timeout");
       expect(result.output).not.toContain("froze");
       expect(chromium.sent.some((entry) => entry.method === "Page.stopLoading")).toBe(true);
@@ -587,7 +639,7 @@ describe("browser", () => {
       await look(browser, "a");
       chromium.stallNavigation();
       const abort = new AbortController();
-      const running = browser.execute({ botId: "a", tool: navigate, signal: abort.signal });
+      const running = browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal: abort.signal });
       await new Promise((resolve) => setTimeout(resolve, 10));
       abort.abort(new Error("stopped"));
       const result = await running;
@@ -661,7 +713,7 @@ describe("browser", () => {
       const browser = quick();
       await look(browser, "a");
       chromium.freezePage();
-      await browser.execute({ botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } }, signal });
+      await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } }, signal });
       chromium.thaw();
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(chromium.sent.some((entry) => entry.method === "Input.insertText")).toBe(false);
@@ -674,7 +726,7 @@ describe("browser", () => {
       chromium.freezePage();
       const calls = createCalls({
         journal: await openJournal({ dir }),
-        execute: ({ botId, tool, signal: callSignal }) => browser.execute({ botId, tool: tool as BrowserInvocation, signal: callSignal }),
+        execute: ({ botId, tool, signal: callSignal }) => browser.execute({ browsing: undefined, botId, tool: tool as BrowserInvocation, signal: callSignal }),
       });
       const request = { callId: "run:call", botId: "a", tool: snapshot };
       const first = await calls.call(request);
@@ -701,12 +753,12 @@ describe("browser", () => {
         now: () => clock,
       });
       const browser = createBrowser({ desktops, connector: machine.connector, ...QUICK });
-      await browser.execute({ botId: "a", tool: snapshot, signal });
+      await browser.execute({ browsing: undefined, botId: "a", tool: snapshot, signal });
       const port = desktopOf(1).cdpPort;
       const onPort = machine.chromiumOn(port);
       onPort.freezePage();
       const release = desktops.hold("a");
-      const running = browser.execute({ botId: "a", tool: snapshot, signal }).finally(release);
+      const running = browser.execute({ browsing: undefined, botId: "a", tool: snapshot, signal }).finally(release);
       await new Promise((resolve) => setTimeout(resolve, 50));
       const stopsWhileRunning = stops.length;
       clock += IDLE_STOP_MS * 2;
@@ -720,13 +772,264 @@ describe("browser", () => {
     });
   });
 
+  describe("a logged-out call", () => {
+    const loggedOut: Browsing = { kind: "loggedOut", key: "run-1" };
+    const QUICK = { toolDeadlineMs: 600, frozenProbeMs: 30 };
+    const quick = (extra = {}) => createBrowser({ desktops: machine.desktops, connector: machine.connector, ...QUICK, ...extra });
+    const contextOf = (targetId: string) => chromium.pages.get(targetId)?.browserContextId;
+    const sentOn = (method: string) => chromium.sent.filter((entry) => entry.method === method);
+    const navigatedOn = () => sentOn("Page.navigate").map((entry) => entry.sessionId);
+    const browse = (browser: ReturnType<typeof createBrowser>, browsing: Browsing | undefined, tool: BrowserInvocation = snapshot, botId = "a") => browser.execute({ botId, tool, browsing, signal });
+
+    it("opens its page in a new context with downloads denied, and leaves the bot's own page alone", async () => {
+      const browser = browserOf();
+      const result = await browse(browser, loggedOut, navigate);
+      expect(result.outcome).toBe("ok");
+      expect(sentOn("Target.createBrowserContext")[0]?.params).toEqual({ disposeOnDetach: true });
+      const [context] = chromium.contexts.keys();
+      expect(sentOn("Browser.setDownloadBehavior")[0]?.params).toEqual({ behavior: "deny", browserContextId: context });
+      const page = [...chromium.pages.keys()].find((targetId) => contextOf(targetId) === context);
+      expect(navigatedOn()).toEqual([`session-${page}`]);
+      expect(chromium.sent.some((entry) => entry.sessionId === "session-target-0")).toBe(false);
+    });
+
+    it("denies downloads before it opens a page", async () => {
+      await browse(browserOf(), loggedOut);
+      const methods = chromium.sent.map((entry) => entry.method);
+      expect(methods.indexOf("Browser.setDownloadBehavior")).toBeLessThan(methods.indexOf("Target.createTarget"));
+    });
+
+    it("keeps its context and page for the same key", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut, navigate);
+      const session = lastEvaluated(chromium);
+      await browse(browser, loggedOut);
+      expect(lastEvaluated(chromium)).toBe(session);
+      expect(sentOn("Target.createBrowserContext")).toHaveLength(1);
+    });
+
+    it("follows a popup that a logged-out page opens, and never one of the bot's own", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut);
+      const [page] = [...chromium.pages.keys()].filter((targetId) => contextOf(targetId) !== undefined);
+      const popup = chromium.openPopup(page as string);
+      chromium.openPopup("target-0");
+      await browse(browser, loggedOut);
+      expect(contextOf(popup)).toBe(contextOf(page as string));
+      expect(lastEvaluated(chromium)).toBe(`session-${popup}`);
+    });
+
+    it("leaves a chat call on the bot's own page, and ends the window that a finished run left", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut, navigate);
+      await browse(browser, undefined);
+      expect(lastEvaluated(chromium)).toBe("session-target-0");
+      expect(chromium.contexts.size).toBe(0);
+      expect([...chromium.pages.keys()]).toEqual(["target-0"]);
+    });
+
+    it("does not take another context's page for the bot's own after computerd restarts", async () => {
+      chromium.contexts.set("context-old", { disposeOnDetach: false });
+      chromium.pages.set("target-old", { browserContextId: "context-old" });
+      await browse(browserOf(), undefined);
+      expect(lastEvaluated(chromium)).toBe("session-target-0");
+    });
+
+    it("ends the first context when a call for another key arrives", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut);
+      const [first] = chromium.contexts.keys();
+      await browse(browser, { kind: "loggedOut", key: "run-2" });
+      expect(chromium.contexts.has(first as string)).toBe(false);
+      expect(chromium.contexts.size).toBe(1);
+    });
+
+    it("ends only the window of the key that endBrowsing names", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut);
+      await browser.endBrowsing("a", "run-other");
+      expect(chromium.contexts.size).toBe(1);
+      await browser.endBrowsing("a", "run-1");
+      expect(chromium.contexts.size).toBe(0);
+      expect(chromium.exited()).toBe(false);
+    });
+
+    it("starts no desktop to end a window that is not there, and ending twice is safe", async () => {
+      const browser = browserOf();
+      await browser.endBrowsing("a", "run-1");
+      expect(machine.acquires()).toBe(0);
+      await browse(browser, loggedOut);
+      await browser.endBrowsing("a", "run-1");
+      await browser.endBrowsing("a", "run-1");
+      expect(sentOn("Target.disposeBrowserContext")).toHaveLength(1);
+    });
+
+    it("waits its turn behind a running call before it ends the window", async () => {
+      const browser = browserOf();
+      const running = browse(browser, loggedOut, navigate);
+      await browser.endBrowsing("a", "run-1");
+      expect((await running).outcome).toBe("ok");
+      expect(chromium.contexts.size).toBe(0);
+    });
+
+    it("opens a page of the bot's own first, because a browser exits with its last page", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut);
+      chromium.pages.delete("target-0");
+      await browser.endBrowsing("a", "run-1");
+      expect(chromium.exited()).toBe(false);
+      expect([...chromium.pages.values()].some((page) => page.browserContextId === undefined)).toBe(true);
+    });
+
+    it.each(["Target.createBrowserContext", "Browser.setDownloadBehavior", "Target.createTarget"])("fails closed when %s fails, and never browses in the default context", async (method) => {
+      const browser = browserOf();
+      await browse(browser, undefined);
+      chromium.sent.length = 0;
+      chromium.failNext(method);
+      const result = await browse(browser, loggedOut, navigate);
+      expect(result.outcome).toBe("error");
+      expect(navigatedOn()).toEqual([]);
+      expect(chromium.sent.some((entry) => entry.sessionId === "session-target-0")).toBe(false);
+    });
+
+    it("does not keep a context whose downloads it could not deny", async () => {
+      const browser = browserOf();
+      chromium.failNext("Browser.setDownloadBehavior");
+      await browse(browser, loggedOut);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(chromium.contexts.size).toBe(0);
+    });
+
+    it("refuses a browser that does not name its default context", async () => {
+      const original = chromium.client.send;
+      chromium.client.send = async (method, params, sessionId) => (method === "Target.getBrowserContexts" ? { browserContextIds: [] } : original(method, params, sessionId));
+      const result = await browse(browserOf(), loggedOut, navigate);
+      expect(result.outcome).toBe("error");
+      expect(result.output).toContain("default context");
+      expect(navigatedOn()).toEqual([]);
+    });
+
+    describe("a page that freezes", () => {
+      const frozenPage = async (browser: ReturnType<typeof quick>) => {
+        await browse(browser, loggedOut);
+        const page = [...chromium.pages.keys()].find((targetId) => contextOf(targetId) !== undefined) as string;
+        chromium.freezePage(page);
+        chromium.sent.length = 0;
+        return page;
+      };
+
+      it("ends the whole context, tells the model, and opens nothing in the default context", async () => {
+        const browser = quick();
+        const page = await frozenPage(browser);
+        const result = await browse(browser, loggedOut);
+        expect(result.outcome).toBe("timeout");
+        expect(result.output).toContain("froze and was closed");
+        expect(chromium.pages.has(page)).toBe(false);
+        expect(chromium.contexts.size).toBe(0);
+        expect([...chromium.pages.keys()]).toEqual(["target-0"]);
+        expect(sentOn("Target.createTarget")).toEqual([]);
+        expect(machine.openLeases()).toBe(0);
+      });
+
+      it("gives the next call a blank page in a new context, never the bot's own page", async () => {
+        const browser = quick();
+        await frozenPage(browser);
+        await browse(browser, loggedOut);
+        chromium.sent.length = 0;
+        expect((await browse(browser, loggedOut, navigate)).outcome).toBe("ok");
+        const [context] = chromium.contexts.keys();
+        expect(sentOn("Target.createTarget")[0]?.params).toEqual({ url: "about:blank", browserContextId: context });
+        expect(chromium.sent.some((entry) => entry.sessionId === "session-target-0")).toBe(false);
+      });
+
+      it("stays open while a person has the screen", async () => {
+        const browser = quick({ personHasScreen: () => true });
+        await frozenPage(browser);
+        const result = await browse(browser, loggedOut);
+        expect(result.output).toContain("owner has the screen");
+        expect(chromium.contexts.size).toBe(1);
+      });
+
+      it("drops the socket when the browser does not end the context, and the next call connects again", async () => {
+        const browser = quick();
+        await frozenPage(browser);
+        chromium.failNext("Target.disposeBrowserContext");
+        const result = await browse(browser, loggedOut);
+        expect(result.output).toContain("did not close it");
+        expect(chromium.socketsClosed()).toBe(1);
+        expect(chromium.contexts.size).toBe(0);
+        const connects = machine.connects();
+        expect((await browse(browser, loggedOut)).outcome).toBe("ok");
+        expect(machine.connects()).toBe(connects + 1);
+      });
+    });
+
+    it("ends a window that no call used for the idle limit", async () => {
+      const browser = createBrowser({ desktops: machine.desktops, connector: machine.connector, loggedOutIdleMs: 20 });
+      await browse(browser, loggedOut);
+      expect(chromium.contexts.size).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(chromium.contexts.size).toBe(0);
+      expect(machine.openLeases()).toBe(0);
+    });
+
+    it("counts the idle limit from the last call", async () => {
+      const browser = createBrowser({ desktops: machine.desktops, connector: machine.connector, loggedOutIdleMs: 60 });
+      await browse(browser, loggedOut);
+      for (let round = 0; round < 3; round += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await browse(browser, loggedOut);
+      }
+      expect(sentOn("Target.createBrowserContext")).toHaveLength(1);
+      expect(chromium.contexts.size).toBe(1);
+    });
+
+    it("makes a new context for the same key after computerd restarts, because the old one ended with its socket", async () => {
+      await browse(browserOf(), loggedOut, navigate);
+      chromium.dropSocket();
+      expect(chromium.contexts.size).toBe(0);
+      const result = await browse(browserOf(), loggedOut);
+      expect(result.outcome).toBe("ok");
+      expect(chromium.contexts.size).toBe(1);
+      expect(sentOn("Target.createBrowserContext")).toHaveLength(2);
+    });
+
+    it("makes a new context when the browser restarted under the same key", async () => {
+      const browser = browserOf();
+      await browse(browser, loggedOut);
+      chromium.dropSocket();
+      chromium.pages.clear();
+      chromium.pages.set("target-new", {});
+      expect((await browse(browser, loggedOut)).outcome).toBe("ok");
+      expect(machine.connects()).toBe(2);
+      expect(chromium.contexts.size).toBe(1);
+    });
+
+    it("keeps the journal's rule, so a repeat replays its result and makes no context", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "journal-"));
+      const browser = browserOf();
+      const calls = createCalls({
+        journal: await openJournal({ dir }),
+        execute: ({ botId, tool, browsing, signal: callSignal }) => browser.execute({ botId, tool: tool as BrowserInvocation, browsing, signal: callSignal }),
+      });
+      const request = { callId: "run-1:call", botId: "a", tool: navigate, browsing: loggedOut };
+      const first = await calls.call(request);
+      await browser.endBrowsing("a", "run-1");
+      chromium.sent.length = 0;
+      expect(await calls.call(request)).toEqual(first);
+      expect(chromium.sent).toEqual([]);
+      expect(chromium.contexts.size).toBe(0);
+      await rm(dir, { recursive: true, force: true });
+    });
+  });
+
   it("keeps one bot's steps in order, and another bot does not wait", async () => {
     const browser = browserOf();
     await look(browser, "a");
     const order: string[] = [];
-    const first = browser.execute({ botId: "a", tool: navigate, signal }).then(() => order.push("a first"));
-    const second = browser.execute({ botId: "a", tool: snapshot, signal }).then(() => order.push("a second"));
-    const other = browser.execute({ botId: "b", tool: snapshot, signal }).then(() => order.push("b"));
+    const first = browser.execute({ browsing: undefined, botId: "a", tool: navigate, signal }).then(() => order.push("a first"));
+    const second = browser.execute({ browsing: undefined, botId: "a", tool: snapshot, signal }).then(() => order.push("a second"));
+    const other = browser.execute({ browsing: undefined, botId: "b", tool: snapshot, signal }).then(() => order.push("b"));
     await Promise.all([first, second, other]);
     expect(order.indexOf("a first")).toBeLessThan(order.indexOf("a second"));
     expect(order.indexOf("b")).toBeLessThan(order.indexOf("a second"));
@@ -744,14 +1047,14 @@ describe("browser", () => {
         }, 50);
       }
     });
-    const result = await browser.execute({ botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal });
+    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal });
     expect(result.outcome).toBe("ok");
     expect(popup).toMatch(/^target-/);
     expect(result.output).toContain(`session-${popup}`);
   });
 
   it("returns a snapshot that names the screen", async () => {
-    const result = await browserOf().execute({ botId: "b", tool: navigate, signal });
+    const result = await browserOf().execute({ browsing: undefined, botId: "b", tool: navigate, signal });
     expect(result.outcome).toBe("ok");
     expect(result.output).toMatch(/^Screen 2\n/);
   });
