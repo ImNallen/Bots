@@ -701,4 +701,4 @@ Bots copies these ideas:
 - Dots: an Activity view, take-over, read-only background research, four approval levels, and a separate review model that the agent cannot turn off.
 - OpenBot: one gateway that decides on and records every tool call, and fails closed.
 
-Grok Bot and Dots do not let users inspect or edit individual memories, according to reviews. Bots stores memory as rows that users can read, edit, and delete.
+Grok Bot and Dots do not let users inspect or edit individual memories, according to reviews. Bots stores memory as rows, and today the owner can read, edit, and delete them in the bot's panel. The owner decided on 2026-11-07 that this screen is for now, and that a later, simpler UI will have people ask the bot instead. [The roadmap](roadmap.md) has what that needs.
