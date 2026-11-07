@@ -9,22 +9,60 @@ const MAX_NOTE_LENGTH = 500;
 const MAX_ABOUT_LENGTH = 2000;
 const MAX_DESCRIPTION_LENGTH = 8000;
 
-const TOKEN_RUN_WITHOUT_SLASH_OR_DOT = /[A-Za-z0-9_+=-]{32,}/;
+const found = (pattern: RegExp) => (text: string) => pattern.test(text);
 
-const SECRET_SHAPES: readonly RegExp[] = [
-  /-----BEGIN [A-Z0-9 ]+-----/,
-  /\b(?:sk|rk|ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|hf|npm|tskey|dop_v1|shpat)[-_][A-Za-z0-9_-]{16,}/,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
-  /\bAIza[0-9A-Za-z_-]{30,}/,
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-  /\b(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)\s*[:=]\s*\S+/i,
-  /\/\/[^\s/:@]+:[^\s/@]+@/,
-  /\b\d{13,19}\b|\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}\b|\b\d{4}[ -]\d{6}[ -]\d{4,5}\b/,
-  TOKEN_RUN_WITHOUT_SLASH_OR_DOT,
-];
+const SECRET_NAME = /(?:password|passwd|passphrase|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key)/;
+
+// These are the layouts of real cards. A date range or a list of numbers also holds 13 to 19 digits, and one in ten of those would pass Luhn.
+const CARD_DIGITS = /\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,7}\b|\b\d{4}[ -]\d{4}[ -]\d{5}\b|\b\d{4}[ -]\d{6}[ -]\d{4,5}\b|\b\d{13,19}\b/g;
+
+function passesLuhn(digits: string): boolean {
+  const sum = [...digits].reverse().reduce((total, character, index) => {
+    const digit = Number(character);
+    return total + (index % 2 === 0 ? digit : digit > 4 ? digit * 2 - 9 : digit * 2);
+  }, 0);
+  return sum % 10 === 0;
+}
+
+function holdsCardNumber(text: string): boolean {
+  return (text.match(CARD_DIGITS) ?? []).some((digits) => passesLuhn(digits.replace(/[ -]/g, "")));
+}
+
+// A scheme stops at 31 characters, so a key of 32 or more stays in the text even with `://` right after it.
+const URL_UP_TO_ITS_QUERY = /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s?#]*/gi;
+
+function holdsMixedCaseKey(text: string): boolean {
+  const runs = text.replace(URL_UP_TO_ITS_QUERY, " ").match(/[A-Za-z0-9]{32,}/g) ?? [];
+  return runs.some((run) => /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run));
+}
+
+export const SECRET_SHAPES = {
+  pemHeader: found(/-----BEGIN [A-Z0-9 ]+-----/),
+  openAiStyleKey: found(/\b[sr]k-[A-Za-z0-9_-]{16,}/),
+  stripeKey: found(/\b[sr]k_[A-Za-z0-9_-]{16,}/),
+  githubToken: found(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_-]{16,}/),
+  gitlabToken: found(/\bglpat-[A-Za-z0-9_-]{16,}/),
+  slackToken: found(/\bxox[abprs]-[A-Za-z0-9_-]{16,}/),
+  huggingFaceToken: found(/\bhf_[A-Za-z0-9_-]{16,}/),
+  npmToken: found(/\bnpm_[A-Za-z0-9_-]{16,}/),
+  tailscaleKey: found(/\btskey-[A-Za-z0-9_-]{16,}/),
+  digitalOceanToken: found(/\bdop_v1_[A-Za-z0-9_-]{16,}/),
+  shopifyToken: found(/\bshpat_[A-Za-z0-9_-]{16,}/),
+  awsAccessKey: found(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/),
+  googleApiKey: found(/\bAIza[0-9A-Za-z_-]{30,}/),
+  jwt: found(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/),
+  pairWithEquals: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*=\s*\S+`, "i")),
+  pairWithColon: found(new RegExp(String.raw`\b${SECRET_NAME.source}\s*:\s*\S+[ \t]*$`, "im")),
+  urlPassword: found(/\/\/[^\s/:@]+:[^\s/@]+@/),
+  urlQuerySecret: found(/[?&#](?:token|key|api_key|apikey|secret|password|access_token|auth|sig|signature)=[^\s&#]{16,}/i),
+  slackWebhook: found(/\bhooks\.slack\.com\/services\/[A-Za-z0-9]/i),
+  discordWebhook: found(/\bdiscord(?:app)?\.com\/api\/webhooks\/[0-9]/i),
+  cardNumber: holdsCardNumber,
+  mixedCaseKey: holdsMixedCaseKey,
+} satisfies Record<string, (text: string) => boolean>;
 
 export function looksLikeSecret(text: string): boolean {
-  return SECRET_SHAPES.some((shape) => shape.test(text));
+  return Object.values(SECRET_SHAPES).some((holds) => holds(text));
 }
 
 const EMOJI_JOINER = /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/u;

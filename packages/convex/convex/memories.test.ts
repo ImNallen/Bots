@@ -1,6 +1,6 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
-import { DESCRIPTION_PROBLEMS, looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseDescription, parseNote, textProblem } from "./memories.js";
+import { DESCRIPTION_PROBLEMS, looksLikeSecret, NOTE_PROBLEMS, parseAbout, parseDescription, parseNote, SECRET_SHAPES, textProblem } from "./memories.js";
 
 const note = (text: string, otherNotes = 0) => parseNote({ text, otherNotes });
 const textOfLength = (length: number) => "word ".repeat(length).slice(0, length).replace(/ $/, "x");
@@ -135,48 +135,126 @@ describe("NOTE_PROBLEMS", () => {
 });
 
 // Keys are built at run time, because GitHub's secret scanner flags a full key shape in this public repository, even a fake one.
-describe("looksLikeSecret", () => {
-  it.each([
-    ["a PEM header", "-----BEGIN OPENSSH PRIVATE KEY-----"],
-    ["a Mistral-style bare key", "aB3".repeat(11)],
-    ["an OpenAI-style key", `use sk-proj-${"a1".repeat(10)}`],
-    ["a Stripe key", `sk_live_${"a1".repeat(8)}`],
-    ["a GitHub token", `ghp_${"a1".repeat(18)}`],
-    ["a GitLab token", `glpat-${"a1".repeat(10)}`],
-    ["a Slack token", `xoxb-${"1".repeat(12)}-abcdefgh`],
-    ["an AWS access key", `AKIA${"A1".repeat(8)}`],
-    ["a Google key", `AIza${"a1".repeat(17)}`],
-    ["a JWT", ["eyJh", "eyJz", "abc123"].join(".")],
-    ["a password pair", "password=hunter2"],
-    ["a password pair with a colon and a space", "My Password: hunter2"],
-    ["an API key pair", "api key = abc123"],
-    ["a token pair", "token:abc"],
-    ["a URL with a password", "https://ada:hunter2@example.com/"],
-    ["a card number with spaces", "4242 4242 4242 4242"],
-    ["a card number with hyphens", "4242-4242-4242-4242"],
-    ["an unbroken card number", "4242424242424242"],
-    ["an American Express number", "3782 822463 10005"],
-    ["a 32 character hex token", "0123456789abcdef0123456789abcdef"],
-    ["a 32 character token inside a sentence", "the value is abcdefghijklmnopqrstuvwxyz012345 today"],
-    ["a token in a URL's query", "https://example.com/cb?key=abcdefghijklmnopqrstuvwxyz012345"],
-  ])("refuses %s", (_label, text) => {
-    expect(looksLikeSecret(text)).toBe(true);
+const MIXED_KEY = "aB3".repeat(11);
+const LOWER_KEY = "a1b2".repeat(8);
+const DOCUMENT_ID = "1Bx9".repeat(11);
+const value = (length: number) => "v".repeat(length);
+
+describe("SECRET_SHAPES", () => {
+  const refused: [keyof typeof SECRET_SHAPES, string, string][] = [
+    ["pemHeader", "a PEM header", ["-----BEGIN", "OPENSSH PRIVATE KEY-----"].join(" ")],
+    ["pemHeader", "a PEM header inside a sentence", `Here it is: ${["-----BEGIN", "RSA PRIVATE KEY-----"].join(" ")}`],
+    ["openAiStyleKey", "an OpenAI-style key", `use sk-proj-${"a1".repeat(10)}`],
+    ["openAiStyleKey", "a bare OpenAI-style key", `sk-${"a1b2".repeat(6)}`],
+    ["stripeKey", "a Stripe secret key", `sk_live_${"a1".repeat(8)}`],
+    ["stripeKey", "a Stripe restricted key", `rk_test_${"a1".repeat(8)}`],
+    ["githubToken", "a GitHub token", `ghp_${"a1".repeat(18)}`],
+    ["githubToken", "a GitHub fine-grained token", `github_pat_${"a1".repeat(18)}`],
+    ["gitlabToken", "a GitLab token", `glpat-${"a1".repeat(10)}`],
+    ["slackToken", "a Slack token", `xoxb-${"1".repeat(12)}-abcdefgh`],
+    ["huggingFaceToken", "a Hugging Face token", `hf_${"a1".repeat(17)}`],
+    ["npmToken", "an npm token", `npm_${"a1".repeat(18)}`],
+    ["tailscaleKey", "a Tailscale key", `tskey-auth-${"a1".repeat(10)}`],
+    ["digitalOceanToken", "a DigitalOcean token", `dop_v1_${"a1".repeat(16)}`],
+    ["shopifyToken", "a Shopify token", `shpat_${"a1".repeat(16)}`],
+    ["awsAccessKey", "an AWS access key", `AKIA${"A1".repeat(8)}`],
+    ["googleApiKey", "a Google key", `AIza${"a1".repeat(17)}`],
+    ["jwt", "a JWT", ["eyJh", "eyJz", "abc123"].join(".")],
+    ["pairWithEquals", "a password pair", "password=hunter2"],
+    ["pairWithEquals", "an API key pair with spaces", "api key = abc123"],
+    ["pairWithEquals", "a pair with more words after it", "token=abc is what the site gave me"],
+    ["pairWithColon", "a password pair with a colon and a space", "My Password: hunter2"],
+    ["pairWithColon", "a token pair with no space", "token:abc"],
+    ["pairWithColon", "a pair on one line of several", "Hello.\nPassword: hunter2\nThanks."],
+    ["pairWithColon", "a pair whose value is on the next line", "Password:\nhunter2"],
+    ["pairWithColon", "a pair with spaces after its value", "secret: hunter2  "],
+    ["urlPassword", "a URL with a password", "https://ada:hunter2@example.com/"],
+    ...["token", "key", "api_key", "apikey", "secret", "password", "access_token", "auth", "sig", "signature"].flatMap(
+      (name): [keyof typeof SECRET_SHAPES, string, string][] => [
+        ["urlQuerySecret", `a query parameter named ${name}`, `https://example.com/cb?${name}=${value(16)}`],
+        ["urlQuerySecret", `a later query parameter named ${name.toUpperCase()}`, `https://example.com/cb?page=2&${name.toUpperCase()}=${value(40)}&sort=new`],
+      ],
+    ),
+    ["urlQuerySecret", "a 32 character value in a URL's query", `https://example.com/cb?key=${LOWER_KEY}`],
+    ["slackWebhook", "a Slack webhook", `https://hooks.slack.com/services/${["T01", "B02", "c3".repeat(12)].join("/")}`],
+    ["discordWebhook", "a Discord webhook", `https://discord.com/api/webhooks/${"1".repeat(18)}/${"c3".repeat(30)}`],
+    ["cardNumber", "a card number with spaces", "4242 4242 4242 4242"],
+    ["cardNumber", "a card number with hyphens", "4242-4242-4242-4242"],
+    ["cardNumber", "an unbroken card number", "4242424242424242"],
+    ["cardNumber", "an American Express number", "3782 822463 10005"],
+    ["cardNumber", "a 13 digit card number", "4222222222222"],
+    ["cardNumber", "a 13 digit card number with spaces", "4222 2222 22222"],
+    ["cardNumber", "a card number and its security code", "4242 4242 4242 4242 123"],
+    ["cardNumber", "a card number in a sentence", "Charge 4242-4242-4242-4242 today."],
+    ["mixedCaseKey", "a bare mixed-case key", MIXED_KEY],
+    ["mixedCaseKey", "a mixed-case key of exactly 32 characters", MIXED_KEY.slice(0, 32)],
+    ["mixedCaseKey", "a mixed-case key inside a sentence", `the value is ${MIXED_KEY} today`],
+    ["mixedCaseKey", "a mixed-case key after a URL and a space", `https://x/ ${MIXED_KEY}`],
+    ["mixedCaseKey", "a mixed-case key before a URL", `${MIXED_KEY} https://x/`],
+    ["mixedCaseKey", "a mixed-case key in a URL's query", `https://x/page?q=${MIXED_KEY}`],
+    ["mixedCaseKey", "a mixed-case key in a URL's fragment", `https://x/page#${MIXED_KEY}`],
+    ["mixedCaseKey", "a mixed-case key right before ://", `${MIXED_KEY}://x`],
+  ];
+
+  it("has a refused example for every shape", () => {
+    expect(new Set(refused.map(([shape]) => shape))).toEqual(new Set(Object.keys(SECRET_SHAPES)));
   });
 
+  it.each(refused)("%s finds %s", (shape, _label, text) => {
+    expect(SECRET_SHAPES[shape](text)).toBe(true);
+    expect(looksLikeSecret(text)).toBe(true);
+    expect(textProblem(text, 8000)).toBe("secret");
+  });
+});
+
+describe("looksLikeSecret on ordinary text", () => {
   it.each([
     ["an ordinary sentence", "Ada prefers short answers, and she is out every Friday."],
     ["a short id", "The order is abc123, ticket BOT-42."],
     ["a 7 character git hash", "It broke in 039d8d6."],
-    ["a 31 character unbroken run", "abcdefghijklmnopqrstuvwxyz01234"],
     ["a URL with a long path", "Release notes live at https://github.com/ImNallen/Bots/releases/tag/v1.2.3"],
-    ["a date range", "Away 2026-11-06 2026-11-07"],
-    ["a phone-length number", "Gate code 12345678"],
-    ["the word password with no value", "Never ask for my password."],
-    ["the word token in a sentence", "The token count matters to me."],
+    ["a URL with a kebab-case path", "https://docs.example.com/guides/how-to-configure-release-notes-for-teams"],
+    ["a Google Docs URL", `The plan is in https://docs.google.com/document/d/${DOCUMENT_ID}/edit`],
+    ["a markdown link to a Google Doc", `[the plan](https://docs.google.com/document/d/${DOCUMENT_ID}/edit)`],
+    ["an s3 path with a long file name", "s3://bots-reports/2026/11/07/daily-report-final-version-two-reviewed.pdf"],
+    ["a URL with an ordinary long query", "https://grafana.example.com/d/abc/overview?orgId=1&from=now-24h&to=now&var-service=orchestrator"],
+    ["a mention of Slack's webhook address with no path", "Slack webhooks start with hooks.slack.com/services/ as a rule."],
+    ["a mention of Discord's webhook address with no path", "Discord webhooks start with discord.com/api/webhooks/ as a rule."],
+    ["a short value in a query parameter that needs 16 characters", `https://example.com/cb?key=${value(15)}`],
+    ["a long value in a query parameter with an ordinary name", `https://example.com/cb?monkey=${value(40)}`],
+    ["a git commit hash", "4129c345".repeat(5)],
+    ["a UUID", "550e8400-e29b-41d4-a716-446655440000"],
+    ["an image digest", `sha256:${"e9c084e8".repeat(8)}`],
+    ["a Convex id", `My main bot is ${"j97dr5mq".repeat(4)}.`],
+    ["a run of 32 lowercase letters and digits, a gap the docs record", LOWER_KEY],
+    ["a 31 character mixed-case run", MIXED_KEY.slice(0, 31)],
+    ["a long run of letters in two cases and no digit", "aB".repeat(20)],
+    ["a long run of uppercase letters and digits", "A1".repeat(20)],
+    ["a long run of lowercase letters", "a".repeat(40)],
+    ["a markdown rule of 40 dashes", "-".repeat(40)],
+    ["a long kebab-case phrase", "state-of-the-art-end-to-end-release-note-summarizer"],
+    ["a long snake_case name", "verify_agent_description_scenario_long_name"],
+    ["a package name that starts like a Hugging Face token", "hf-transformers-tokenizer-fast-loader"],
+    ["a package name that starts like an npm token", "npm-check-updates-with-a-long-name"],
     ["sk- in a word", "A task-tracker is fine."],
     ["a short sk- word", "sk-learn is the library I use."],
+    ["a date range", "Away 2026-11-06 2026-11-07"],
+    ["a date range whose digits pass Luhn", "Away 2026-11-06 2026-11-18"],
+    ["a phone-length number", "Gate code 12345678"],
+    ["a phone number with spaces", "Call +46 70 123 45 67 if it breaks."],
+    ["a 13 digit timestamp that fails Luhn", "1794067200000"],
+    ["a card-shaped number that fails Luhn", "4242 4242 4242 4241"],
+    ["the word password with no value", "Never ask for my password."],
+    ["the word token in a sentence", "The token count matters to me."],
+    ["a colon after the word secret, with more words", "The secret: be brief."],
+    ["a colon after API key, with more words", "Rotate the API key: ask the owner first."],
+    ["a colon after password, with more words", "I help reset a password: open the admin console."],
+    ["a colon after the words token budget", "Token budget: 150000"],
+    ["a colon with nothing after it", "The password:"],
+    ["a colon and a value with more words, a gap the docs record", "My password: hunter2 and more"],
   ])("allows %s", (_label, text) => {
     expect(looksLikeSecret(text)).toBe(false);
+    expect(textProblem(text, 8000)).toBeNull();
   });
 });
 
