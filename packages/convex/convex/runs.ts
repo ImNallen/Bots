@@ -1,13 +1,14 @@
 import { paginationOptsValidator } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { capText } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
 import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
+import { applyScheduleCreate } from "./schedules.js";
 import { ensureChatThread } from "./threads.js";
-import { memoryCall, runEventBody, terminalRunState, type TerminalRunState } from "./validators.js";
+import { memoryCall, runEventBody, scheduleCreate, terminalRunState, type RunEventBody, type TerminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
@@ -22,6 +23,7 @@ export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
 }
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
+const appendBody = v.union(runEventBody, memoryCall, scheduleCreate);
 
 async function requireLease(
   ctx: MutationCtx,
@@ -75,6 +77,20 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
 
 function endedByThisClaim(run: Doc<"runs">) {
   return { kind: "ended" as const, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
+}
+
+type AppendBody = Infer<typeof appendBody>;
+
+async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody): Promise<RunEventBody> {
+  switch (body.kind) {
+    case "memorySave":
+    case "memoryForget":
+      return await applyMemoryCall(ctx, run, body);
+    case "scheduleCreate":
+      return await applyScheduleCreate(ctx, run, body);
+    default:
+      return body;
+  }
 }
 
 export const listQueued = query({
@@ -172,14 +188,14 @@ export const heartbeat = mutation({
 });
 
 export const append = mutation({
-  args: { ...fence, expectedSeq: v.number(), body: v.union(runEventBody, memoryCall) },
+  args: { ...fence, expectedSeq: v.number(), body: appendBody },
   handler: async (ctx, { runId, leaseToken, expectedSeq, body }) => {
     await requireService(ctx);
     const run = await requireLease(ctx, { runId, leaseToken });
     if (run.nextSeq !== expectedSeq) {
       throw new ConvexError(`Expected seq ${run.nextSeq}, got ${expectedSeq}`);
     }
-    const stored = body.kind === "memorySave" || body.kind === "memoryForget" ? await applyMemoryCall(ctx, run, body) : body;
+    const stored = await storedBodyOf(ctx, run, body);
     await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body: stored });
     await ctx.db.patch(runId, { nextSeq: expectedSeq + 1 });
     await deleteStream(ctx, runId);

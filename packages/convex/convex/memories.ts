@@ -32,9 +32,9 @@ const REFUSED_CHARACTERS: readonly RegExp[] = [
   /[\u2028\u2029]/,
 ];
 
-type TextProblem = "tooLong" | "characters" | "secret";
+export type TextProblem = "tooLong" | "characters" | "secret";
 
-function textProblem(text: string, max: number): TextProblem | null {
+export function textProblem(text: string, max: number): TextProblem | null {
   if (text.length > max) {
     return "tooLong";
   }

@@ -1,6 +1,6 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, makeCallId, parseToolCall } from "@bots/protocol";
+import { isMemoryInvocation, isScheduleInvocation, makeCallId, parseToolCall } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
@@ -246,6 +246,9 @@ async function runTool(args: {
     return invocation.name === "memory_save"
       ? { kind: "memorySave", toolCallId: call.id, text: invocation.args.text }
       : { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
+  }
+  if (isScheduleInvocation(invocation)) {
+    return { kind: "scheduleCreate", toolCallId: call.id, ...invocation.args };
   }
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),

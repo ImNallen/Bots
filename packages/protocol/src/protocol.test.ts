@@ -197,6 +197,7 @@ describe("parseToolCall", () => {
       "browser_press",
       "memory_save",
       "memory_forget",
+      "schedule_propose",
     ]);
     for (const tool of toolDefinitions) {
       expect(tool.function.parameters).toMatchObject({ type: "object" });
@@ -227,6 +228,7 @@ describe("toolEffect", () => {
       browser_press: "changesOutside",
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
+      schedule_propose: "changesSchedule",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);
@@ -260,7 +262,13 @@ describe("memory tools", () => {
     expect(isMemoryInvocation({ name: "read_file", args: { path: "a" } })).toBe(false);
   });
 
-  it("counts every published tool but the memory tools as a computer tool, and no unknown name", () => {
+  it("stays off the link's wire type, so a computerd closes the link on a routine call", () => {
+    const propose = { name: "schedule_propose", args: { instruction: "a", cadence: { kind: "everyHours", hours: 1 } } };
+    expect(toolInvocation.safeParse(propose).success).toBe(false);
+    expect(isComputerTool("schedule_propose")).toBe(false);
+  });
+
+  it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
     const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
     expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press"]);
     expect(isComputerTool("constructor")).toBe(false);

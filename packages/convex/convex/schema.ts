@@ -5,6 +5,7 @@ import {
   approvalState,
   botColor,
   botShape,
+  cadence,
   desiredVm,
   noteSource,
   observedVm,
@@ -20,6 +21,7 @@ export default defineSchema({
     email: v.string(),
     displayName: v.string(),
     about: v.optional(v.string()),
+    timeZone: v.optional(v.string()),
   }).index("by_auth_subject", ["authSubject"]),
 
   bots: defineTable({
@@ -96,7 +98,16 @@ export default defineSchema({
     botId: v.id("bots"),
     threadId: v.id("threads"),
     instruction: v.string(),
-  }).index("by_bot", ["botId"]),
+    cadence,
+    // Absent means paused.
+    nextFireAt: v.optional(v.number()),
+    pausedBecause: v.optional(v.string()),
+    resumedAt: v.optional(v.number()),
+    lastMissed: v.optional(v.object({ at: v.number(), reason: v.string() })),
+  })
+    .index("by_bot", ["botId"])
+    .index("by_owner", ["ownerId"])
+    .index("by_next_fire", ["nextFireAt"]),
 
   runs: defineTable({
     threadId: v.id("threads"),
@@ -118,7 +129,8 @@ export default defineSchema({
     .index("by_schedule", ["scheduleId"])
     .index("by_owner", ["ownerId"])
     .index("by_owner_trigger", ["ownerId", "trigger"])
-    .index("by_bot_state", ["botId", "state.kind"]),
+    .index("by_bot_state", ["botId", "state.kind"])
+    .index("by_bot_ended", ["botId", "endedAt"]),
 
   runEvents: defineTable({
     runId: v.id("runs"),

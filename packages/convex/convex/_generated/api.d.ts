@@ -18,6 +18,7 @@ import type * as memories from "../memories.js";
 import type * as profile from "../profile.js";
 import type * as runEnd from "../runEnd.js";
 import type * as runs from "../runs.js";
+import type * as scheduleChecks from "../scheduleChecks.js";
 import type * as scheduleTime from "../scheduleTime.js";
 import type * as schedules from "../schedules.js";
 import type * as threads from "../threads.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   profile: typeof profile;
   runEnd: typeof runEnd;
   runs: typeof runs;
+  scheduleChecks: typeof scheduleChecks;
   scheduleTime: typeof scheduleTime;
   schedules: typeof schedules;
   threads: typeof threads;

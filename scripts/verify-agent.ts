@@ -1613,9 +1613,9 @@ try {
       assert.ok(result.kind === "ok", `convex run ${fn} failed`);
       return JSON.parse(result.stdout) as T;
     };
-    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<Routine>("schedules:createForCheck", { botId, instruction });
+    const newRoutine = (botId: Id<"bots">, instruction: string) => adminRun<Routine>("scheduleChecks:createForCheck", { botId, instruction });
     const fire = (routine: Routine, deadlineAt?: number) =>
-      adminRun<Id<"runs">>("schedules:fireForCheck", { scheduleId: routine.scheduleId, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
+      adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: routine.scheduleId, ...(deadlineAt === undefined ? {} : { deadlineAt }) });
     const call = (name: string, args: object): FakeToolCall => ({ name, arguments: JSON.stringify(args) });
     const readCall = (path: string) => call("read_file", { path });
     const tools = (...calls: FakeToolCall[]): Reply => ({ kind: "tools", delivery: "whole", calls });
@@ -1669,7 +1669,7 @@ try {
     try {
       await check("neither a user's token nor the service token can reach what makes a read-only run", async () => {
         for (const client of [first, second, service, anonymous]) {
-          for (const name of ["schedules:createForCheck", "schedules:fireForCheck"]) {
+          for (const name of ["scheduleChecks:createForCheck", "scheduleChecks:fireForCheck"]) {
             await assertRejected(client.mutation(makeFunctionReference<"mutation">(name), {}), /Could not find public function/);
           }
         }

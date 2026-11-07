@@ -31,6 +31,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   browser_press: "Pressing a key",
   memory_save: "Saving a note",
   memory_forget: "Forgetting a note",
+  schedule_propose: "Proposing a routine",
 };
 
 export function isToolName(tool: string): tool is ToolName {
