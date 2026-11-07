@@ -206,7 +206,7 @@ These are proposals, so change them if you find a better answer:
 | A separate type for calls cleared to reach `link.call` | None | `Link.call` already takes only `ToolInvocation`, so passing it a memory call fails to compile |
 | The shape of a schedule, its thread, preemption, and Activity's summary | Decide in the routines PR | These are the contested part, and they do not affect PRs 1 to 3 |
 
-One question still needs a review before the routines PR, which is one shared thread or a sealed thread for each scheduled run.
+A review on 2026-11-07 settled the thread. A routine's raw pages go in its own thread, and only its final report reaches the chat. In one shared thread, an hourly routine pushed the owner's own messages off the page in about a day, and one month of runs made each run load 121 MB of old pages. The prototype behind those numbers is not in this repository.
 
 ### Progress on step 5
 
