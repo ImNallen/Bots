@@ -1206,6 +1206,12 @@ button.tool:hover {
   border-radius: 13px;
 }
 
+.composer-note {
+  padding-inline: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Screen. Dark in both themes, like the desktop it frames. */
 .screen {
   position: fixed;
