@@ -5,7 +5,15 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Link } from "./link.ts";
 import type { LogFields } from "./log.ts";
-import { DENIED_OUTPUT, EXPIRED_OUTPUT, NOT_SENT_CANCELLED_OUTPUT, READ_ONLY_OUTPUT, decideTool, waitForApproval } from "./approvals.ts";
+import {
+  DENIED_OUTPUT,
+  EXPIRED_OUTPUT,
+  FINAL_CALL_OUTPUT,
+  NOT_SENT_CANCELLED_OUTPUT,
+  READ_ONLY_OUTPUT,
+  decideTool,
+  waitForApproval,
+} from "./approvals.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult } from "./mistral.ts";
 import {
@@ -280,8 +288,8 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   for (;;) {
     lease.lost.throwIfAborted();
     const runEvents = events.filter((event) => event.runId === runId).map((event) => event.body);
-    const action = nextAction(runEvents);
-    if (lease.cancel.aborted && action.kind !== "runTool") {
+    const action = nextAction(runEvents, claim.capability);
+    if (lease.cancel.aborted && action.kind !== "runTool" && action.kind !== "rejectCall") {
       await finish({ kind: "cancelled" });
       return;
     }
@@ -295,10 +303,21 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
       case "runTool":
         await append(await runTool({ deps, runId, claim, lease, call: action.call, touched: touchedComputer(runEvents) }));
         break;
+      case "rejectCall":
+        log({ level: "info", event: "tool-rejected", runId, toolCallId: action.call.id });
+        await append({
+          kind: "toolResult",
+          toolCallId: action.call.id,
+          name: action.call.name,
+          outcome: "rejected",
+          output: FINAL_CALL_OUTPUT,
+          truncated: false,
+        });
+        break;
       case "callModel": {
         let result: CompletionResult;
         try {
-          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: false, reports: [] };
+          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: action.final, reports: [] };
           result = await callModel({ deps, runId, claim, lease, events, run });
         } catch (error) {
           if (lease.lost.aborted || !lease.cancel.aborted) {

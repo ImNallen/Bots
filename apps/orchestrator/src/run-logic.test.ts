@@ -1,7 +1,9 @@
+import type { Id } from "@bots/convex/dataModel";
 import { toolDefinitions } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 import {
   MAX_ASSISTANT_TURNS,
+  READ_ONLY_LIMITS,
   modelRequest,
   nextAction,
   systemPrompt,
@@ -31,36 +33,46 @@ function turn(toolCalls: ToolCall[] = [], text = ""): RunEventBody {
   };
 }
 
+function turnWithPrompt(promptTokens: number, toolCalls: ToolCall[]): RunEventBody {
+  return { kind: "assistantTurn", text: "", toolCalls, usage: { promptTokens, completionTokens: 1 }, model: "m" };
+}
+
 function result(toolCallId: string, outcome: "ok" | "interrupted" = "ok"): RunEventBody {
   return { kind: "toolResult", toolCallId, name: "shell", outcome, output: "out", exitCode: 0, truncated: false };
 }
 
+function rejected(toolCallId: string): RunEventBody {
+  return { kind: "toolResult", toolCallId, name: "shell", outcome: "rejected", output: "no", truncated: false };
+}
+
 describe("nextAction", () => {
+  const next = (events: RunEventBody[]) => nextAction(events, "full");
+
   it("calls the model when only the user has spoken", () => {
-    expect(nextAction([user])).toEqual({ kind: "callModel" });
+    expect(next([user])).toEqual({ kind: "callModel", final: false });
   });
 
   it("runs a tool that an assistant turn lists and no result answers", () => {
-    expect(nextAction([user, turn([call("a")])])).toEqual({ kind: "runTool", call: call("a") });
+    expect(next([user, turn([call("a")])])).toEqual({ kind: "runTool", call: call("a") });
   });
 
   it("runs several calls from one turn one at a time, in order", () => {
     const events = [user, turn([call("a"), call("b")])];
-    expect(nextAction(events)).toEqual({ kind: "runTool", call: call("a") });
-    expect(nextAction([...events, result("a")])).toEqual({ kind: "runTool", call: call("b") });
-    expect(nextAction([...events, result("a"), result("b")])).toEqual({ kind: "callModel" });
+    expect(next(events)).toEqual({ kind: "runTool", call: call("a") });
+    expect(next([...events, result("a")])).toEqual({ kind: "runTool", call: call("b") });
+    expect(next([...events, result("a"), result("b")])).toEqual({ kind: "callModel", final: false });
   });
 
   it("treats any recorded outcome as answered, so an interrupted call never runs again", () => {
-    expect(nextAction([user, turn([call("a")]), result("a", "interrupted")])).toEqual({ kind: "callModel" });
+    expect(next([user, turn([call("a")]), result("a", "interrupted")])).toEqual({ kind: "callModel", final: false });
   });
 
   it("finishes when the last turn has no tool calls", () => {
-    expect(nextAction([user, turn([call("a")]), result("a"), turn([], "done")])).toEqual({ kind: "finish" });
+    expect(next([user, turn([call("a")]), result("a"), turn([], "done")])).toEqual({ kind: "finish" });
   });
 
   it("finishes on an empty turn instead of calling the model forever", () => {
-    expect(nextAction([user, turn()])).toEqual({ kind: "finish" });
+    expect(next([user, turn()])).toEqual({ kind: "finish" });
   });
 
   function turnsWithResults(count: number): RunEventBody[] {
@@ -69,14 +81,149 @@ describe("nextAction", () => {
 
   it("fails at the step limit only after the last call has its result", () => {
     const atLimit = [user, ...turnsWithResults(MAX_ASSISTANT_TURNS)];
-    expect(nextAction(atLimit)).toEqual({ kind: "fail", reason: "step-limit" });
-    expect(nextAction(atLimit.slice(0, -1))).toMatchObject({ kind: "runTool" });
-    expect(nextAction([user, ...turnsWithResults(MAX_ASSISTANT_TURNS - 1)])).toEqual({ kind: "callModel" });
+    expect(next(atLimit)).toEqual({ kind: "fail", reason: "step-limit" });
+    expect(next(atLimit.slice(0, -1))).toMatchObject({ kind: "runTool" });
+    expect(next([user, ...turnsWithResults(MAX_ASSISTANT_TURNS - 1)])).toEqual({ kind: "callModel", final: false });
   });
 
   it("lets the fortieth turn finish the run", () => {
     const events = [user, ...turnsWithResults(MAX_ASSISTANT_TURNS - 1), turn([], "done")];
-    expect(nextAction(events)).toEqual({ kind: "finish" });
+    expect(next(events)).toEqual({ kind: "finish" });
+  });
+
+  it("gives a full run none of the read-only limits", () => {
+    const large = turnWithPrompt(READ_ONLY_LIMITS.promptTokens, [call("big")]);
+    const manyTurns = [user, ...turnsWithResults(READ_ONLY_LIMITS.turns + 5)];
+    const manyRefusals = [user, turn([call("a"), call("b"), call("c")]), rejected("a"), rejected("b"), rejected("c")];
+    for (const events of [manyTurns, manyRefusals, [user, large, result("big")]]) {
+      expect(next(events)).toEqual({ kind: "callModel", final: false });
+    }
+  });
+
+  describe("for a read-only run", () => {
+    const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+    const readOnly = (events: RunEventBody[]) => nextAction(events, "readOnly");
+    const research = (count: number) => [fired, ...turnsWithResults(count)];
+    const FINAL = { kind: "callModel", final: true };
+    const NOT_FINAL = { kind: "callModel", final: false };
+
+    it("calls the model first, with tools", () => {
+      expect(readOnly([fired])).toEqual(NOT_FINAL);
+    });
+
+    it("makes the 12th turn the final call, so a run has 12 turns", () => {
+      expect(READ_ONLY_LIMITS.turns).toBe(12);
+      expect(readOnly(research(10))).toEqual(NOT_FINAL);
+      expect(readOnly(research(11))).toEqual(FINAL);
+    });
+
+    it("makes the next call final when the newest prompt reaches 150,000 tokens", () => {
+      expect(READ_ONLY_LIMITS.promptTokens).toBe(150_000);
+      expect(readOnly([fired, turnWithPrompt(149_999, [call("a")]), result("a")])).toEqual(NOT_FINAL);
+      expect(readOnly([fired, turnWithPrompt(150_000, [call("a")]), result("a")])).toEqual(FINAL);
+    });
+
+    it("reads the newest prompt and not a sum, because each prompt repeats the one before", () => {
+      const events = [fired, turnWithPrompt(100_000, [call("a")]), result("a"), turnWithPrompt(100_000, [call("b")]), result("b")];
+      expect(readOnly(events)).toEqual(NOT_FINAL);
+    });
+
+    it("makes the next call final after 3 rejected calls, and not after 2", () => {
+      expect(READ_ONLY_LIMITS.rejectedCalls).toBe(3);
+      const two = [fired, turn([call("a"), call("b")]), rejected("a"), rejected("b")];
+      expect(readOnly(two)).toEqual(NOT_FINAL);
+      const three = [fired, turn([call("a"), call("b"), call("c")]), rejected("a"), rejected("b"), rejected("c")];
+      expect(readOnly(three)).toEqual(FINAL);
+    });
+
+    it("answers every call of a turn before a limit takes effect", () => {
+      const turnOfFour = turn([call("a"), call("b"), call("c"), call("d")]);
+      expect(readOnly([fired, turnOfFour, rejected("a"), rejected("b"), rejected("c")])).toEqual({ kind: "runTool", call: call("d") });
+    });
+
+    it("counts only rejected calls toward that limit", () => {
+      const events = [fired, turn([call("a"), call("b"), call("c")]), result("a"), result("b", "interrupted"), result("c")];
+      expect(readOnly(events)).toEqual(NOT_FINAL);
+    });
+
+    it("finishes when a final call returns text", () => {
+      expect(readOnly([...research(11), turn([], "My report.")])).toEqual({ kind: "finish" });
+    });
+
+    it("rejects what a final call still asks for, one at a time, and then finishes", () => {
+      const events = [...research(11), turn([call("x"), call("y")], "My report.")];
+      expect(readOnly(events)).toEqual({ kind: "rejectCall", call: call("x") });
+      expect(readOnly([...events, rejected("x")])).toEqual({ kind: "rejectCall", call: call("y") });
+      expect(readOnly([...events, rejected("x"), rejected("y")])).toEqual({ kind: "finish" });
+    });
+
+    it("treats the turn after a limit as the final call, whatever it asks for", () => {
+      const events = [fired, turn([call("a"), call("b"), call("c")]), rejected("a"), rejected("b"), rejected("c"), turn([call("d")], "One more.")];
+      expect(readOnly(events)).toEqual({ kind: "rejectCall", call: call("d") });
+    });
+
+    it("does not treat a run under every limit as finished by a tool turn", () => {
+      expect(readOnly([fired, turn([call("a")]), result("a"), turn([call("b")])])).toEqual({ kind: "runTool", call: call("b") });
+    });
+
+    // A model that never stops asking. Each pass decides from a copy of the stored events, as a restarted runner does.
+    function drive(modelTurn: (args: { final: boolean; index: number }) => RunEventBody, outcome: (id: string) => RunEventBody) {
+      const events: RunEventBody[] = [fired];
+      const finals: boolean[] = [];
+      for (;;) {
+        const action = nextAction(structuredClone(events), "readOnly");
+        switch (action.kind) {
+          case "callModel":
+            finals.push(action.final);
+            events.push(modelTurn({ final: action.final, index: finals.length }));
+            break;
+          case "runTool":
+            events.push(outcome(action.call.id));
+            break;
+          case "rejectCall":
+            events.push(rejected(action.call.id));
+            break;
+          case "fail":
+            throw new Error("a read-only run must not fail at a limit");
+          case "finish":
+            return { events, finals };
+        }
+      }
+    }
+    const stubborn = (prompt: number) => (args: { final: boolean; index: number }) =>
+      args.final ? turn([], `Report after ${args.index} turns.`) : turnWithPrompt(prompt, [call(`c${args.index}`)]);
+    const lastText = (events: RunEventBody[]) => {
+      const last = events.filter((event) => event.kind === "assistantTurn").at(-1);
+      return last?.text;
+    };
+
+    it("gets a final call at the turn limit, and then ends with a report", () => {
+      const { events, finals } = drive(stubborn(1), result);
+      expect(finals).toEqual([...Array.from({ length: 11 }, () => false), true]);
+      expect(lastText(events)).toBe("Report after 12 turns.");
+    });
+
+    it("gets a final call at the token limit, and then ends with a report", () => {
+      const { events, finals } = drive(stubborn(150_000), result);
+      expect(finals).toEqual([false, true]);
+      expect(lastText(events)).toBe("Report after 2 turns.");
+    });
+
+    it("gets a final call at the rejection limit, and then ends with a report", () => {
+      const { events, finals } = drive(stubborn(1), rejected);
+      expect(finals).toEqual([false, false, false, true]);
+      expect(lastText(events)).toBe("Report after 4 turns.");
+    });
+
+    it("ends with the final call's text when that call still asks for a tool", () => {
+      const { events, finals } = drive(
+        (args) => (args.final ? turn([call("last")], "Report anyway.") : turnWithPrompt(150_000, [call(`c${args.index}`)])),
+        result,
+      );
+      expect(finals).toEqual([false, true]);
+      expect(events.at(-1)).toMatchObject({ kind: "toolResult", toolCallId: "last", outcome: "rejected" });
+      expect(lastText(events)).toBe("Report anyway.");
+    });
   });
 });
 

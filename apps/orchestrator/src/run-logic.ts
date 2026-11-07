@@ -3,37 +3,58 @@ import { TOOL_CALL_ID, WORKSPACE_ROOT, isComputerTool, toolDefinitions, toolEffe
 import type { MistralMessage } from "./mistral.ts";
 
 export type RunEventBody = Doc<"runEvents">["body"];
+export type RunCapability = Doc<"runs">["capability"];
 type AssistantTurn = Extract<RunEventBody, { kind: "assistantTurn" }>;
 type ToolResultBody = Extract<RunEventBody, { kind: "toolResult" }>;
 export type ToolCall = AssistantTurn["toolCalls"][number];
 
 export const MAX_ASSISTANT_TURNS = 40;
+export const READ_ONLY_LIMITS = { turns: 12, promptTokens: 150_000, rejectedCalls: 3 };
 
 export type NextAction =
-  | { kind: "callModel" }
+  | { kind: "callModel"; final: boolean }
   | { kind: "runTool"; call: ToolCall }
+  | { kind: "rejectCall"; call: ToolCall }
   | { kind: "finish" }
   | { kind: "fail"; reason: "step-limit" };
 
-export function nextAction(events: readonly RunEventBody[]): NextAction {
+// The last of a run's turns is its final call, so research stops one turn short of the limit.
+function researchIsOver(events: readonly RunEventBody[]): boolean {
+  const turns = events.filter((event) => event.kind === "assistantTurn");
+  const rejected = events.filter((event) => event.kind === "toolResult" && event.outcome === "rejected");
+  return (
+    turns.length >= READ_ONLY_LIMITS.turns - 1 ||
+    (turns.at(-1)?.usage.promptTokens ?? 0) >= READ_ONLY_LIMITS.promptTokens ||
+    rejected.length >= READ_ONLY_LIMITS.rejectedCalls
+  );
+}
+
+export function nextAction(events: readonly RunEventBody[], capability: RunCapability): NextAction {
   const turns = events.filter((event) => event.kind === "assistantTurn");
   const answered = new Set(
     events.filter((event) => event.kind === "toolResult").map((event) => event.toolCallId),
   );
+  const lastTurn = turns.at(-1);
+  // A turn is the final call if research was over before it. Only stored events say so, so a restart decides the same way.
+  const lastWasFinal = capability === "readOnly" && lastTurn !== undefined && researchIsOver(events.slice(0, events.indexOf(lastTurn)));
   for (const turn of turns) {
     const pending = turn.toolCalls.find((call) => !answered.has(call.id));
     if (pending !== undefined) {
-      return { kind: "runTool", call: pending };
+      return lastWasFinal && turn === lastTurn ? { kind: "rejectCall", call: pending } : { kind: "runTool", call: pending };
     }
   }
-  const lastTurn = turns.at(-1);
   if (lastTurn === undefined) {
-    return { kind: "callModel" };
+    return { kind: "callModel", final: false };
   }
-  if (lastTurn.toolCalls.length === 0) {
+  if (lastTurn.toolCalls.length === 0 || lastWasFinal) {
     return { kind: "finish" };
   }
-  return turns.length >= MAX_ASSISTANT_TURNS ? { kind: "fail", reason: "step-limit" } : { kind: "callModel" };
+  switch (capability) {
+    case "full":
+      return turns.length >= MAX_ASSISTANT_TURNS ? { kind: "fail", reason: "step-limit" } : { kind: "callModel", final: false };
+    case "readOnly":
+      return { kind: "callModel", final: researchIsOver(events) };
+  }
 }
 
 const BROUGHT_NOTHING_BACK: ReadonlySet<ToolResultBody["outcome"]> = new Set(["denied", "invalid", "rejected"]);

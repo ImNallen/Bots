@@ -1,8 +1,8 @@
-import type { Doc, Id } from "@bots/convex/dataModel";
+import type { Id } from "@bots/convex/dataModel";
 import { toolEffect, type ToolEffect, type ToolName } from "@bots/protocol";
+import type { RunCapability } from "./run-logic.ts";
 
 export type ApprovalLevel = "everything" | "outside" | "shell" | "nothing";
-export type RunCapability = Doc<"runs">["capability"];
 export type ToolDecision = "run" | "ask" | "reject";
 
 const POLL_MS = 2000;
@@ -18,6 +18,7 @@ export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
 export const EXPIRED_OUTPUT = "The user did not answer in time, so this call did not run.";
 export const NOT_SENT_CANCELLED_OUTPUT = "The run was cancelled while this call waited for approval, so it did not run.";
 export const READ_ONLY_OUTPUT = "This run is read-only, so this call did not run. Do not try to reach the same result another way.";
+export const FINAL_CALL_OUTPUT = "This run has reached its limit and had to write its report, so this call did not run.";
 
 function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }): boolean {
   switch (args.level) {
