@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideFire, instructionProblem, runToPurge, type FireDecision } from "./schedules.js";
+import { actOnDue, decideFire, instructionProblem, runToPurge, type FireDecision } from "./schedules.js";
 import type { RunState } from "./validators.js";
 
 const NOW = 1_000_000_000;
@@ -68,28 +68,60 @@ describe("decideFire", () => {
   });
 });
 
+describe("actOnDue", () => {
+  const act = async (due: readonly ("wait" | "act")[], limit: number) => {
+    const seen: number[] = [];
+    await actOnDue(
+      [...due.keys()],
+      async (index) => {
+        seen.push(index);
+        return due[index] === "wait" ? "waited" : "acted";
+      },
+      limit,
+    );
+    return seen;
+  };
+
+  it("reaches a routine behind more waiting routines than the limit", async () => {
+    const seen = await act([...Array.from({ length: 32 }, () => "wait" as const), "act"], 32);
+    expect(seen.at(-1)).toBe(32);
+  });
+
+  it("stops once it has acted on the limit", async () => {
+    expect(await act(["act", "wait", "act", "act"], 2)).toEqual([0, 1, 2]);
+  });
+});
+
 describe("runToPurge", () => {
-  const runs = (...states: RunState[]) => states.map((state, index) => ({ state, index }));
+  const NOW = 10 * 24 * 60 * 60 * 1000;
+  const OLD = 0;
+  const runs = (...states: RunState[]) => states.map((state, index) => ({ state, index, _creationTime: OLD }));
   const many = (count: number, state: RunState) => Array.from({ length: count }, () => state);
 
   it("keeps the newest 20 runs", () => {
-    expect(runToPurge(runs(...many(20, DONE)))).toBeNull();
-    expect(runToPurge(runs(...many(21, DONE)))?.index).toBe(20);
-    expect(runToPurge(runs(...many(21, FAILED)))?.index).toBe(20);
+    expect(runToPurge(runs(...many(20, DONE)), NOW)).toBeNull();
+    expect(runToPurge(runs(...many(21, DONE)), NOW)?.index).toBe(20);
+    expect(runToPurge(runs(...many(21, FAILED)), NOW)?.index).toBe(20);
   });
 
   it("keeps the newest 3 finished runs past the 20, because a routine reads its earlier reports from them", () => {
     const failedThenDone = runs(...many(20, FAILED), DONE, DONE, DONE, DONE);
-    expect(runToPurge(failedThenDone)?.index).toBe(23);
-    expect(runToPurge(failedThenDone.slice(0, 23))).toBeNull();
+    expect(runToPurge(failedThenDone, NOW)?.index).toBe(23);
+    expect(runToPurge(failedThenDone.slice(0, 23), NOW)).toBeNull();
   });
 
   it("counts finished runs inside the 20 toward those 3", () => {
-    expect(runToPurge(runs(DONE, DONE, DONE, ...many(17, FAILED), DONE))?.index).toBe(20);
+    expect(runToPurge(runs(DONE, DONE, DONE, ...many(17, FAILED), DONE), NOW)?.index).toBe(20);
+  });
+
+  it("keeps every run from the last 24 hours, because the daily limit counts them", () => {
+    const today = many(49, DONE).map((state, index) => ({ state, index, _creationTime: NOW - 1000 }));
+    expect(runToPurge(today, NOW)).toBeNull();
+    expect(runToPurge(today, NOW + 24 * 60 * 60 * 1000)?.index).toBe(20);
   });
 
   it("purges a failed run past the 20 even when finished runs are older", () => {
-    expect(runToPurge(runs(...many(20, FAILED), FAILED, DONE))?.index).toBe(20);
+    expect(runToPurge(runs(...many(20, FAILED), FAILED, DONE), NOW)?.index).toBe(20);
   });
 });
 

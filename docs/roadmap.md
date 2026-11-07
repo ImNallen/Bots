@@ -231,6 +231,7 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
+- Deleting a routine removes its runs, so they stop counting toward the limit of 48 scheduled runs a day.
 - Unsaved text in the panel's profile section survives closing the panel, and it goes on a reload or a move to another bot. It stays in that page only, so a second tab can save over the same field.
 - The profile's fields, About you, and a note's box are read-only while a save is in flight, so an edit cannot be lost to the save's end. On a lost connection they stay read-only until the save finishes, with the text still on screen.
 - On a computer the info panel takes no history entry, and on a phone closing it goes back in history. So a window narrowed below 760 wide with the panel open leaves the bot when the panel closes.
