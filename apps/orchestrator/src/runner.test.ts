@@ -7,7 +7,6 @@ import { startRunner } from "./runner.ts";
 import type { Service } from "./service.ts";
 
 const POLL_MS = 5000;
-// A runner that spins must fail these tests, not hang them, so the fake stops answering here.
 const SPIN_LIMIT = 1000;
 
 const UNAVAILABLE = { kind: "unavailable" };
@@ -24,7 +23,6 @@ function world() {
       claims.push(args.runId);
       return claims.length > SPIN_LIMIT ? new Promise(() => {}) : answer(args.runId);
     },
-    // Any other query is the claimed run's first step, and failing it ends that attempt.
     query: (fn: never) =>
       getFunctionName(fn) === getFunctionName(api.runs.listClaimable) ? Promise.resolve(polled) : Promise.reject(new Error("the attempt ends here")),
     subscribe: (_fn: never, _args: never, onUpdate: (ids: string[]) => void) => {

@@ -39,7 +39,6 @@ function fakeChromium() {
     setLocate: (value: { x: number; y: number } | null) => {
       locateResult = value;
     },
-    // A page's main thread that never yields answers nothing on its session. The browser process still answers.
     freezePage: (targetId = "target-0") => {
       frozen.add(`session-${targetId}`);
     },
@@ -50,7 +49,6 @@ function fakeChromium() {
     stall: (method: string) => {
       stalled.add(method);
     },
-    // Chromium holds a session's page calls until a navigation commits or stops.
     stallNavigation: () => {
       navigating = true;
     },

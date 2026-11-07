@@ -315,8 +315,6 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
   const { service, log, ownerScope } = args;
   const active = new Set<Id<"runs">>();
   const waiting = new Set<Id<"runs">>();
-  // Asking again at once would spin for as long as the refusal lasts, up to a minute under an update fence. So a run stays here
-  // from its claim until the claim is won, or until the next poll or list change.
   const refused = new Set<Id<"runs">>();
   let queued: Id<"runs">[] = [];
   const deps: RunnerDeps = {

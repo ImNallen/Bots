@@ -16,7 +16,6 @@ const TOOL_DEADLINE_MS = 60_000;
 const FROZEN_PROBE_MS = 5000;
 const CLOSE_PAGE_MS = 3000;
 
-// What a call that ended early left behind. A page that is gone counts as answering, because nothing is left to free.
 type PageFate = "answers" | "closed" | "keptForOwner" | "stuck";
 
 const PAGE_FATE_OUTPUT: Record<PageFate, string> = {
@@ -118,7 +117,6 @@ type Connection = {
   // Oldest first. The last one is the page that the bot acts on.
   pages: string[];
   sessions: Map<string, string>;
-  // Dialogs that opened while a person had the screen. A dialog stays with the person, and anything left over goes at the next call.
   heldDialogs: PageDialog[];
 };
 
@@ -134,8 +132,6 @@ function answerDialog(client: Cdp, dialog: PageDialog): void {
   sendQuietly(client, "Page.handleJavaScriptDialog", { accept: dialog.accept }, dialog.sessionId);
 }
 
-// Settles with the work, or rejects when `ends` aborts, whichever comes first. A page that never answers leaves its reply waiting
-// in the connection, which is a small cost for each frozen call.
 function untilEnd<T>(ends: AbortSignal, start: () => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     if (ends.aborted) {
@@ -150,8 +146,7 @@ function untilEnd<T>(ends: AbortSignal, start: () => Promise<T>): Promise<T> {
   });
 }
 
-// One tool call's time on a page. Every CDP call through `client` ends when `ends` aborts, and none starts after it. So a tool needs
-// no abort checks of its own, and it cannot wait on a page that does not answer.
+// Every CDP call through `client` ends when `ends` aborts, and none starts after it.
 type PageCall = { client: Cdp; ends: AbortSignal };
 
 function startPageCall(client: Cdp, signal: AbortSignal, deadlineMs: number): PageCall {
@@ -184,7 +179,6 @@ export function createBrowser(args: {
   desktops: Pick<Desktops, "acquire">;
   connector?: CdpConnector;
   takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
-  // A person who is typing on the screen answers for the page, so nothing closes it under them.
   personHasScreen?: (botId: string) => boolean;
   toolDeadlineMs?: number;
   frozenProbeMs?: number;
@@ -209,7 +203,7 @@ export function createBrowser(args: {
       }
     });
     // Each new page, popups too, waits for this socket before its first script, so no dialog can open before Page.enable. A dialog
-    // that opened with no socket here sends no event, even after Page.enable, so that page goes the way of any frozen page.
+    // that opened with no socket here sends no event, even after Page.enable.
     const limit = AbortSignal.any([signal, AbortSignal.timeout(CDP_CONNECT_TIMEOUT_MS)]);
     try {
       await untilEnd(limit, () => client.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] }));
@@ -221,8 +215,6 @@ export function createBrowser(args: {
     return connection;
   }
 
-  // Nothing here waits for an answer, because a frozen page never gives one, and the tool's next step finds that out for itself.
-  // CDP keeps the order on one session, so Page.enable comes before the page runs.
   function adoptSession(connection: Connection, targetId: string, sessionId: string): void {
     if (connection.sessions.has(targetId)) {
       return;
@@ -243,7 +235,6 @@ export function createBrowser(args: {
       }
     }
     if (event.method === "Page.javascriptDialogOpening" && event.sessionId !== undefined) {
-      // Leaving is what a bot asked for when it navigates, and refusing is the safe answer to anything a page asks.
       const dialog = { sessionId: event.sessionId, accept: event.params.type === "beforeunload" };
       if (personHasScreen?.(botId) === true) {
         connection.heldDialogs.push(dialog);
@@ -263,7 +254,6 @@ export function createBrowser(args: {
     return connection.sessions.get(targetId) as string;
   }
 
-  // Asking on every look means that which page is current needs no events, and nothing is lost across a restart.
   async function currentPage(connection: Connection, client: Cdp): Promise<{ targetId: string; sessionId: string }> {
     const { targetInfos } = (await client.send("Target.getTargets")) as { targetInfos: TargetInfo[] };
     connection.pages = nextPages(connection.pages, targetInfos);
@@ -365,9 +355,7 @@ export function createBrowser(args: {
     return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT));
   }
 
-  // A new blank page goes on top, so the next call works at once even if a same-site opener shares the frozen process. Its refs are
-  // gone, so an old click gets the stale ref error. The browser holds all of this, so a restart of computerd finds the same pages.
-  async function settlePage(botId: string, connection: Connection): Promise<PageFate> {
+  async function closeIfFrozen(botId: string, connection: Connection): Promise<PageFate> {
     const { client } = connection;
     const targetId = connection.pages.at(-1);
     const sessionId = targetId === undefined ? undefined : connection.sessions.get(targetId);
@@ -421,7 +409,7 @@ export function createBrowser(args: {
         if (!call.ends.aborted) {
           throw error;
         }
-        const fate = await settlePage(botId, connection);
+        const fate = await closeIfFrozen(botId, connection);
         log({ level: "info", event: "browser-call-ended-early", botId, tool: tool.name, cancelled: signal.aborted, fate });
         const page = PAGE_FATE_OUTPUT[fate];
         return signal.aborted
