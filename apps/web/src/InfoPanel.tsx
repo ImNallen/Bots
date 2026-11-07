@@ -72,7 +72,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
         <label className="profile-field">
           <span>Assignment</span>
           <textarea
-            className="field profile-assignment"
+            className="field profile-textarea"
             rows={6}
             placeholder="What it should do in every conversation"
             readOnly={saving}

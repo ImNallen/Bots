@@ -55,7 +55,7 @@ function NoteForm(props: {
       <label className="profile-field">
         <span>{label}</span>
         <textarea
-          className="field profile-assignment"
+          className="field profile-textarea"
           rows={rows}
           readOnly={save.kind === "pending"}
           value={text}

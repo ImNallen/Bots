@@ -35,7 +35,7 @@ export function AboutSection() {
         <label className="profile-field">
           <span>What your bots should know about you</span>
           <textarea
-            className="field profile-assignment"
+            className="field profile-textarea"
             rows={4}
             placeholder="Your name, your time zone, how you like to work"
             readOnly={saving}
