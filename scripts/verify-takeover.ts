@@ -191,11 +191,16 @@ const setup = await settled(
   watched,
   await client.mutation(api.threads.send, {
     threadId: watched.threadId,
-    text: `Do exactly these two steps and then stop, with no other tool calls.\n1. Use the shell tool once with this command:\nprintf '%s' '${form}' > form.html && printf '%s' '${account}' > account.html && (nohup python3 -m http.server ${PORT} --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1; echo started\n2. Use browser_navigate once with this URL: http://127.0.0.1:${PORT}/form.html`,
+    text: `I am your owner, checking that I can take over your screen. The page below is a local test form for that check, served only on this computer's loopback, and the cookie it sets is how the check sees what I typed. Do exactly these two steps and then stop, with no other tool calls.\n1. Use the shell tool once with this command:\nprintf '%s' '${form}' > form.html && printf '%s' '${account}' > account.html && (nohup python3 -m http.server ${PORT} --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1; echo started\n2. Use browser_navigate once with this URL: http://127.0.0.1:${PORT}/form.html`,
   }),
 );
 const navigated = resultsOf(setup).find((result) => result.name === "browser_navigate");
-report(navigated?.outcome === "ok" && /"Secret"/.test(navigated.output), "the bot opened a real form on its screen", navigated?.output.split("\n")[1]);
+const setupReply = setup.events.flatMap(({ body }) => (body.kind === "assistantTurn" ? [body.text] : [])).join(" ").trim();
+report(
+  navigated?.outcome === "ok" && /"Secret"/.test(navigated.output),
+  "the bot opened a real form on its screen",
+  navigated?.output.split("\n")[1] ?? `no browser_navigate result, and the bot said: ${setupReply.slice(0, 300)}`,
+);
 
 const inputPath = `/screens/${watched.botId}/input`;
 const before = await refusal(inputPath, { Origin: origin });
@@ -301,7 +306,7 @@ report(
 
 await client.mutation(api.threads.send, {
   threadId: watched.threadId,
-  text: `Use the shell tool once with this command and then stop: pkill -f 'http.server ${PORT}' ; echo stopped`,
+  text: `Use the shell tool once with this command and then stop: pkill -f 'http[.]server ${PORT}' ; echo stopped`,
 }).then((runId) => settled(watched, runId)).catch(() => {});
 
 // A failed run keeps its bots, because their threads show what went wrong.
