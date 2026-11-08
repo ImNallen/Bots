@@ -410,7 +410,7 @@ describe("a result with a picture of the screen", () => {
   const view = (marks: number, base64: string): ScreenView => ({
     width: 1280,
     height: 800,
-    windows: [{ app: "Chromium", pid: 7, kind: "frame", title: "\u0000".repeat(120) }],
+    windows: [{ app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title: "\u0000".repeat(120) }],
     active: 0,
     marks: Array.from({ length: marks }, (_, index) => mark(index + 1)),
     unlisted: 0,
@@ -451,7 +451,7 @@ describe("a result with a picture of the screen", () => {
 
 describe("desktop input", () => {
   const aim = {
-    window: { app: "Chromium", pid: 7, kind: "frame", title: "a" },
+    window: { app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title: "a" },
     element: { role: "button", name: "Sign in", states: [], box: { x: 1, y: 2, w: 3, h: 4 } },
   };
 

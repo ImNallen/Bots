@@ -725,7 +725,7 @@ describe("modelRequest", () => {
   });
 });
 
-const WINDOW = { app: "Chromium", pid: 7, kind: "frame" as const, title: "t" };
+const WINDOW = { app: "Chromium", pid: 7, kind: "frame" as const, path: "/org/a11y/atspi/accessible/1", title: "t" };
 const ELEMENT = { role: "button", name: "Go", states: [], box: { x: 0, y: 0, w: 1, h: 1 } };
 
 describe("how a call browses", () => {

@@ -4263,7 +4263,7 @@ try {
       assert.ok(result.kind === "ok", `convex run ${fn} failed`);
       return JSON.parse(result.stdout) as T;
     };
-    const view = (title: string) => JSON.stringify({ width: 1280, height: 800, windows: [{ app: "Chromium", pid: 7, kind: "frame", title }], active: 0, marks: [], unlisted: 0, silent: [] });
+    const view = (title: string) => JSON.stringify({ width: 1280, height: 800, windows: [{ app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title }], active: 0, marks: [], unlisted: 0, silent: [] });
     const look = (toolCallId: string, title: string, bytes: number[]) => ({
       kind: "toolResult" as const,
       toolCallId,
