@@ -13,7 +13,7 @@ Control VM, the only machine on the tailnet
 	^
 	|  computerd connects outbound over an isolated network
 User VMs, one per user
-	computerd          shell, files, browser, screens
+	computerd          shell, files, browser, desktop, screens
 	/workspace/<botId>
 ```
 
@@ -142,15 +142,15 @@ A user has no SSH, and a bot cannot help once `computerd` is down. So if a VM st
 
 ## How each bot's desktop runs
 
-Each active bot on a VM has a real Linux desktop: its own X display, Xfce, its own Chromium, and a view-only stream. `computerd` starts a desktop when a bot or a viewer first needs it, and stops it after an hour with no use.
+Each active bot on a VM has a real Linux desktop: its own X display, its own session bus, Xfce, its own Chromium, and a view-only stream. `computerd` starts a desktop when a bot or a viewer first needs it, and stops it after an hour with no use.
 
 The first design put every bot in one wide display with one shared browser, because Chromium locks a profile to one process, and that process stays on one display. A copy of a profile for each bot removes that limit. A test on a real VM then showed that a browser per bot works, so `computerd` no longer moves popups between regions, keeps a page list on disk, or streams a cropped part of a screen. [The roadmap](roadmap.md) has that test's results.
 
 ### systemd owns every process
 
-A desktop is six files in `apps/computerd/desktop`, and a slot number from 1 to 8 is the unit's instance. `computerd` starts one name, `computerd-desktop@N.target`, and stops one name, `computerd-xvfb@N.service`. It also restarts `computerd-input@N.service` for a take-over. Everything binds to the display, so a stop returns only after Chromium has exited and its profile and ports are free. A test with a browser that ignored SIGTERM saw that stop take 10 seconds, which is `TimeoutStopSec`.
+A desktop is seven unit files in `apps/computerd/desktop`, and a slot number from 1 to 8 is the unit's instance. `computerd` starts one name, `computerd-desktop@N.target`, and stops one name, `computerd-xvfb@N.service`. It also restarts `computerd-input@N.service` for a take-over. Everything binds to the display, so a stop returns only after Chromium has exited and its profile and ports are free. A test with a browser that ignored SIGTERM saw that stop take 10 seconds, which is `TimeoutStopSec`.
 
-A desktop's processes sit in their own cgroups, outside `computerd.service`, so an update that restarts `computerd` does not touch them. `computerd` needs root for three exact commands, which the sudoers file names, and `desktop-files.test.ts` fails the build if those drift from the code.
+A desktop's processes sit in their own cgroups, outside `computerd.service`, so an update that restarts `computerd` does not touch them. `computerd` needs root for three exact commands, and it runs one more, the desktop helper, as `browser`. The sudoers file names all four, and `desktop-files.test.ts` fails the build if they drift from the code.
 
 `computerd` runs `systemctl start` on every browser tool call. Starting is safe on a running desktop, and it brings back a part that is down, so `computerd` has no other health check. It takes about 10 ms on a real VM. A person's input runs no `sudo`, because each event goes straight to `x11vnc`.
 
@@ -161,6 +161,7 @@ A desktop's processes sit in their own cgroups, outside `computerd.service`, so 
 | `x11vnc` | Restarts it after 2 seconds | The viewer's stream ends, and "Try again" works. The bot notices nothing |
 | The input stream's `x11vnc` | Restarts nothing | The take-over ends and the viewer goes back to watching. The next take-over starts a new one |
 | Xfce | Restarts it after 2 seconds | The panel blinks. CDP is untouched |
+| The session bus | Restarts it after 2 seconds. Xfce and Chromium end with it and restart too | A running step fails, and the page is gone, as when Chromium dies. The next look lists Chromium and the panel again |
 | Xvfb | Stops the whole desktop, and restarts nothing | A running step fails, and the page is gone. The next use starts the whole desktop on the same profile |
 | The VM reboots | Starts no desktop, because the units have no `[Install]` | The next use starts a desktop on the bot's profile, on a blank page |
 
@@ -341,6 +342,68 @@ A VM updates after its orchestrator, and an older `computerd` closes its link on
 
 Tailscale sends a user's identity with every request, whichever page caused it, and a browser lets any site open a WebSocket. So the orchestrator also requires the request's `Origin` to match its own host, on both the stream and the input. Without this check, any site that a user visits could watch that user's screens or type into them.
 
+### How a bot uses its desktop
+
+The `browser_*` tools drive a page through CDP, and CDP cannot reach Chromium's own buttons, menus, and address bar, a native dialog such as a file chooser, or another app. The desktop tools reach all of them. `desktop_look` returns a picture of the bot's screen with a numbered box on each thing it can act on, and a text list of those marks. `desktop_click`, `desktop_type`, `desktop_key`, and `desktop_scroll` act on a mark from the newest look, and each returns a new look.
+
+The tools name marks, not points. `mistral-large-4` hit 26% to 51% of targets when it gave pixel coordinates on 1280x800 screenshots of real sites, and its answers changed between identical requests. Numbered boxes took that to 79% to 85%. Most misses were small labels it misread, and the text list next to the picture removes the need to read them.
+
+#### Where the marks come from
+
+The boxes come from each app's accessibility tree, through AT-SPI. Every desktop has one session bus, `computerd-bus@N`, at `/run/computerd-bus-N/bus`. Xfce and Chromium use it, Chromium runs with `ACCESSIBILITY_ENABLED=1` and `--force-renderer-accessibility`, and the accessibility launcher starts on demand from that bus. So one reader on that bus sees the panel, Chromium's own UI, Chromium's pages, Thunar, and the terminal, each with boxes that matched the screenshot to the pixel on a real VM.
+
+The reader is `apps/computerd/desktop/hand.py`. `computerd` runs one for each desktop call, as `browser` through one exact sudoers line, because a session bus admits only its own user. It speaks one JSON object per line: `capture` walks the tree and grabs the screen with Pillow, `render` draws the numbered boxes and encodes PNG, or JPEG when a PNG passes 384 KiB, `input` sends `xdotool` steps, and `settle` waits until two grabs 150 ms apart differ in under 0.2% of their pixels. libatspi ends its whole process when it cannot reach the accessibility bus, so the walk runs in a child that the helper can lose. A launcher from a bus that restarted leaves its old address on the display, so Xfce and Chromium start the new bus's launcher before they start, and the helper asks the bus for the address itself. A cancel reaches the helper through sudo, and the helper kills `xdotool`, so typing stops within a second.
+
+The helper has no policy. `apps/computerd/src/marks.ts` parses its capture with a strict schema, because `browser` also renders web pages, and decides the rest:
+
+- It lists the panel and the windows of the active window's process. AT-SPI also reports windows that others cover, such as a terminal under Chromium, so the other apps are left out. A window that the panel's buttons reach is named, so the bot can switch to it.
+- It drops a node whose center lies under the panel, under a popup or the active window of the same process, or under an open menu of its own window that it is not part of. GTK opens a menu bar's menu inside the window, and Chromium opens its menu as a window of its own, and both cases are recorded fixtures.
+- A modal dialog that is active hides the rest of its process. With no active window, only the panel is listed.
+- It stops at 200 marks and counts the rest.
+
+Chromium's own file chooser has no accessibility tree. The GTK portal, `xdg-desktop-portal-gtk`, is installed, so Chromium opens the chooser as its own GTK app, which has one.
+
+The tests in `marks.test.ts` run on captures that the helper made on a real VM: Chromium over Thunar and a terminal, Chromium's menu over a page, Thunar's open File menu, a file chooser, the terminal active, the desktop shown, a page with 2,000 links, and a dialog with no tree.
+
+#### How an action stays what the owner approved
+
+A mark means the element that the run's newest look numbered, and only the orchestrator can say what that was. Before any card, `aimDesktopInput` in `apps/orchestrator/src/desktop.ts` resolves the mark against the run's stored look and gives the call its aim: the element's role, name, and box, and its window's app, process, and kind. A call with no look, or with a mark that the newest look does not have, is invalid and never asks. The model's arguments cannot carry an aim, and the link's schema requires one, so a desktop input that nobody aimed cannot be sent.
+
+The card says what will happen in words, such as `Click entry "Address and search bar" in Chromium`, shows typed text in full, and shows the look with that element outlined. A role and a name alone do not identify an unnamed icon, and the owner is approving an action on their own logged-in desktop.
+
+`computerd` captures the screen again before it acts. It acts only on an element with the same app, process, window kind, role, and name, whose center is within 24 px of where the look showed it. A key, and typing with no mark, need the same active window, and typing needs the element that had the focus to have it still. Otherwise it sends nothing and answers `error` with a new look. While a person has the screen, it also sends nothing. So an approval that waited, a dialog that opened, or a page that moved cannot redirect what the owner approved.
+
+#### Where a picture lives
+
+A run keeps only its newest look, in a `screens` row: the view as JSON and the picture's bytes. `runs.append` writes it under the run's lease and sequence fence, and the `toolResult` event keeps only the short output, such as `Clicked button "Sign in" in Chromium.`. `endRun` deletes the row, and so does the purge. A routine never keeps one. So no picture of the owner's logged-in pages outlives its run, and storage grows only with active runs. The limits on the picture and the marks put a row under about 600 KB.
+
+Before each model call of a chat run, the runner reads that row. The newest look's tool message carries its text and its picture, and every older desktop result says that its marks no longer work. A request therefore holds one picture, which cost about 1,400 prompt tokens in an earlier probe, however long the history is. That probe also showed that `mistral-large-4` accepts a picture inside a tool message. A previous run's looks replay as text only, because their rows are gone.
+
+The link's frame is 2 MiB. `fitToLink` drops the picture, and then marks, before a result can pass it, because a frame over the limit would close the link and the resent call would get the same answer from the journal at every reconnect. The journal keeps no picture, so a repeated call gets its marks and no picture.
+
+#### A `computerd` from before the desktop tools
+
+`computerd` names its tools in `hello`, and the link never sends a call for a tool that the connected `computerd` did not name. That call answers `error` at once and says that the computer runs an older `computerd`. A `computerd` that names no tools is older than this field, and it gets the eight tools that every `computerd` had then. A real build of the commit before the announcement, 1b71c76, connected to the new link on 2026-11-08. Its `desktop_look` answered in 0 ms, the link closed no socket, and a `read_file` on the same link worked. A VM updates only when its owner has no run, so this lasts until that run ends. The rule covers every later tool, too.
+
+An orchestrator from before this field closes a `hello` that has one. So the orchestrator deploys first, and a rollback of it past this change closes every new `computerd`'s link until the repair path reinstalls `computerd` at the deployed commit, after 2 minutes with no connection.
+
+A desktop that was running before an update keeps its old units until its next start, so it has no bus at the fixed path. Its looks have a picture and no marks, and they say so. The idle stop restarts it within an hour.
+
+#### What the desktop tools measured
+
+On VM 950 on 2026-11-08, with Debian 13, Xvfb at 1280x800, and the helper started through sudo:
+
+| Test | Result |
+|---|---|
+| A capture of an idle desktop | 182 ms |
+| A look at a page with a form | 167 ms, with a 31 KB PNG |
+| A look at a page with 2,000 links | 1,457 ms, 200 marks and the rest counted, with a 353 KB PNG |
+| A look while the page spins in `while (true)` | 160 ms. Chromium still answered from its own tree |
+| A click, with its settle and the new look | 842 ms |
+| Chromium on the Wikipedia page for Linux | 318 MB anonymous memory with accessibility on, 322 MB after a look, and 251 MB with it off |
+| Typing `héllo wörld ✓ 日本` into a field | Reached the page as typed |
+| A kill of the session bus | Chromium and the panel came back in the tree |
+
 ## How approvals work
 
 The orchestrator decides on every tool call before it sends the call to a computer. A VM is untrusted, and it never takes part in this decision. Each bot has one level:
@@ -348,11 +411,23 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Level | What asks first |
 |---|---|
 | Everything | Every tool |
-| Outside, the default | Shell commands and browser actions that change something, a memory tool or `description_set` once a computer tool has a result in this run, and a routine's proposal |
-| Shell | Shell commands, and a routine's proposal |
+| Outside, the default | Shell commands, desktop input, browser actions that change something, a memory tool or `description_set` once a computer tool has a result in this run, and a routine's proposal |
+| Shell | Anything that can run a program, which is shell commands and desktop input, and a routine's proposal |
 | Nothing | Only a routine's proposal |
 
-Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. At the default level, a tool that reads or that changes only the VM runs without asking, and a tool that changes something outside asks. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A proposal asks at every level, as [How a routine fires](#how-a-routine-fires) explains. A new effect fails the typecheck until `needsApproval` gives its answer.
+Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. `ASKS` in `apps/orchestrator/src/approvals.ts` gives one answer for each level and effect, and a new effect or level fails the typecheck until it has a row there.
+
+| Effect | Tools | Everything | Outside | Shell | Nothing | Read-only run |
+|---|---|---|---|---|---|---|
+| `reads` | `read_file`, `browser_navigate`, `browser_snapshot` | ask | run | run | run | run |
+| `readsScreen` | `desktop_look` | ask | run | run | run | reject |
+| `changesVm` | `write_file` | ask | run | run | run | reject |
+| `changesOutside` | `browser_click`, `browser_type`, `browser_press` | ask | ask | run | run | reject |
+| `controlsComputer` | `shell`, `desktop_click`, `desktop_type`, `desktop_key`, `desktop_scroll` | ask | ask | ask | run | reject |
+| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | ask | after a computer tool | run | run | reject |
+| `changesSchedule` | `schedule_propose` | ask | ask | ask | ask | reject |
+
+`controlsComputer` means that the call can make the VM do anything its user can. A click can press a launcher on the panel, and typing into a terminal runs a command, so desktop input asks at the Shell level, as `shell` does. The Shell level used to name the `shell` tool, and it now names this effect. A look is a read, but the desktop shows the owner's logged-in pages, so it has an effect of its own that a routine never gets. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A proposal asks at every level, as [How a routine fires](#how-a-routine-fires) explains.
 
 A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
 
@@ -473,7 +548,9 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, `memory_save`, `memory_forget`, `description_set`, `schedule_propose` |
+| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_propose` |
+
+A routine browses logged out, and the desktop shows the owner's logged-in Chromium, so a look at it would hand a routine those pages. `desktop_look` therefore has the effect `readsScreen`, which is not `reads`, and a read-only run rejects it before it loads any screen.
 
 A rejected call stores the outcome `rejected`. `denied` tells the model that a person refused, and no person was asked.
 
