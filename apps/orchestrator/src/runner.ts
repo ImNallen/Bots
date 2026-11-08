@@ -1,9 +1,19 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, isScheduleInvocation, makeCallId, parseToolCall, screenView } from "@bots/protocol";
+import {
+  isDesktopInputRequest,
+  isMemoryInvocation,
+  isScheduleInvocation,
+  makeCallId,
+  parseToolCall,
+  screenView,
+  type Box,
+  type ModelInvocation,
+  type ToolInvocation,
+} from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import { shownScreen, type StoredScreen } from "./desktop.ts";
+import { aimDesktopInput, approvalDetail, shownScreen, type StoredScreen } from "./desktop.ts";
 import type { Link, LinkOutcome } from "./link.ts";
 import type { LogFields } from "./log.ts";
 import {
@@ -151,6 +161,34 @@ async function loadScreen(service: Service, runId: Id<"runs">): Promise<StoredSc
 
 type ToolResultBase = { kind: "toolResult"; toolCallId: string; name: string };
 
+// What a valid call becomes before any approval. A memory or routine call is stored by Convex. A computer call goes to the link,
+// and a desktop input goes there with the aim that the owner approves.
+type Prepared =
+  | { kind: "invalid"; reason: string }
+  | { kind: "stored"; body: AppendBody }
+  | { kind: "computer"; tool: ToolInvocation; detail: { subject?: string; box?: Box } };
+
+async function prepareCall(invocation: ModelInvocation, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
+  if (isMemoryInvocation(invocation)) {
+    switch (invocation.name) {
+      case "memory_save":
+        return { kind: "stored", body: { kind: "memorySave", toolCallId, text: invocation.args.text } };
+      case "memory_forget":
+        return { kind: "stored", body: { kind: "memoryForget", toolCallId, noteId: invocation.args.id } };
+      case "description_set":
+        return { kind: "stored", body: { kind: "descriptionSet", toolCallId, text: invocation.args.text } };
+    }
+  }
+  if (isScheduleInvocation(invocation)) {
+    return { kind: "stored", body: { kind: "scheduleCreate", toolCallId, ...invocation.args } };
+  }
+  if (!isDesktopInputRequest(invocation)) {
+    return { kind: "computer", tool: invocation, detail: {} };
+  }
+  const aimed = aimDesktopInput({ request: invocation, screen: await screen() });
+  return aimed.kind === "invalid" ? aimed : { kind: "computer", tool: aimed.tool, detail: approvalDetail(aimed.tool) };
+}
+
 // A look's screen goes to the run's screens row, and the event keeps only the short output.
 export function toAppendBody(base: ToolResultBase, result: LinkOutcome): AppendBody {
   if (result.outcome === "unavailable") {
@@ -263,10 +301,16 @@ async function runTool(args: {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
     return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
   }
+  const prepared = await prepareCall(invocation, call.id, () => loadScreen(deps.service, runId));
+  if (prepared.kind === "invalid") {
+    deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
+    return { ...base, outcome: "invalid", output: prepared.reason, truncated: false };
+  }
   if (decision === "ask") {
+    const detail = prepared.kind === "computer" ? prepared.detail : {};
     const answer = await waitForApproval({
       request: () =>
-        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name }),
+        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name, ...detail }),
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
       expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
       now: Date.now,
@@ -290,19 +334,10 @@ async function runTool(args: {
         return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
     }
   }
-  if (isMemoryInvocation(invocation)) {
-    switch (invocation.name) {
-      case "memory_save":
-        return { kind: "memorySave", toolCallId: call.id, text: invocation.args.text };
-      case "memory_forget":
-        return { kind: "memoryForget", toolCallId: call.id, noteId: invocation.args.id };
-      case "description_set":
-        return { kind: "descriptionSet", toolCallId: call.id, text: invocation.args.text };
-    }
+  if (prepared.kind === "stored") {
+    return prepared.body;
   }
-  if (isScheduleInvocation(invocation)) {
-    return { kind: "scheduleCreate", toolCallId: call.id, ...invocation.args };
-  }
+  const { tool } = prepared;
   await waitWhileTakenOver({
     until: () => deps.service.query(api.bots.takeoverUntil, { botId: claim.botId }),
     now: Date.now,
@@ -314,13 +349,13 @@ async function runTool(args: {
   }).finally(() => slot.reclaim());
   lease.lost.throwIfAborted();
   const callId = makeCallId({ runId, toolCallId: call.id });
-  deps.log({ level: "info", event: "tool-dispatch", callId, tool: invocation.name });
+  deps.log({ level: "info", event: "tool-dispatch", callId, tool: tool.name });
   const result = await deps.link.call({
     ownerId: claim.ownerId,
     callId,
     botId: claim.botId,
-    tool: invocation,
-    browsing: browsingForCall({ capability: claim.capability, runId, tool: invocation }),
+    tool,
+    browsing: browsingForCall({ capability: claim.capability, runId, tool }),
     lost: lease.lost,
     cancel: lease.cancel,
   });

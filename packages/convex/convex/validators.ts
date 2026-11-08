@@ -49,6 +49,7 @@ export const runEventBody = v.union(
   v.object(toolResultFields),
 );
 
+export const screenBox = v.object({ x: v.number(), y: v.number(), w: v.number(), h: v.number() });
 export const screenImageBytes = v.object({ mediaType: v.union(v.literal("image/png"), v.literal("image/jpeg")), bytes: v.bytes() });
 // view is a @bots/protocol screenView without its image, as JSON. Only the orchestrator reads it, through that schema.
 export const keptScreen = v.object({ view: v.string(), image: v.optional(screenImageBytes) });

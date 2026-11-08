@@ -3,9 +3,10 @@
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type ToolResult } from "../packages/protocol/src/index.ts";
+import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type DesktopInputRequest, type ToolResult } from "../packages/protocol/src/index.ts";
 import { createBrowser } from "../apps/computerd/src/browser.ts";
 import { createDesktop } from "../apps/computerd/src/desktop.ts";
+import { aimDesktopInput } from "../apps/orchestrator/src/desktop.ts";
 import { createDesktops, createSystemd, IDLE_STOP_MS, streamPort, type DesktopLease, type Slot, type Systemd } from "../apps/computerd/src/desktops.ts";
 
 const FRAMES = process.argv[2];
@@ -186,6 +187,100 @@ check(frozen.outcome === "ok" && frozenMs < 30_000, "a look still answers while 
 check(frozen.screen?.image !== undefined, "it still has its picture");
 check(frozen.screen?.windows.some((window) => window.app === "Chromium" && window.title.startsWith("frozen")) === true, "it still names the frozen page's window", JSON.stringify(frozen.screen?.windows));
 await savePicture(frozen, "frozen");
+await browse(BOTS[0], { name: "browser_navigate", args: { url: "about:blank" } });
+
+// Each input is aimed by the orchestrator's own code, from the newest look, as a run would aim it.
+let newest: ToolResult = await lookAt(BOTS[0]);
+const titleOf = async (): Promise<string> => /^Title: (.*)$/m.exec((await browse(BOTS[0], { name: "browser_snapshot", args: {} })).output)?.[1] ?? "";
+const markOf = (role: string, name: string): number => marked(newest, role, name)?.mark ?? 0;
+async function act(request: DesktopInputRequest, on = desktop): Promise<ToolResult> {
+  const { image: _image, ...view } = newest.screen ?? { width: 1, height: 1, windows: [], active: null, marks: [], unlisted: 0, silent: [] };
+  const aimed = aimDesktopInput({ request, screen: { toolCallId: "look", view, image: null } });
+  if (aimed.kind === "invalid") {
+    return { outcome: "error", output: aimed.reason, truncated: false };
+  }
+  const result = await on.execute({ botId: BOTS[0], tool: aimed.tool, signal });
+  if (result.screen !== undefined) {
+    newest = result;
+  }
+  return result;
+}
+const relook = async () => {
+  newest = await lookAt(BOTS[0]);
+};
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("press me", `<button onclick="document.title = 'pressed'">Press me</button><input aria-label="Say" oninput="document.title = this.value">`) } });
+await relook();
+startedAt = performance.now();
+const pressed = await act({ name: "desktop_click", args: { mark: markOf("button", "Press me"), button: "left" } });
+measure("a click through the helper, with its settle and the new look", startedAt);
+check(pressed.outcome === "ok" && (await titleOf()) === "pressed", "a click on a page button's mark lands on that button", pressed.output);
+check(pressed.output === 'Clicked button "Press me" in Chromium.', "the click's result names what it clicked, not its mark", pressed.output);
+
+const typed = await act({ name: "desktop_type", args: { mark: markOf("entry", "Say"), text: "héllo wörld ✓ 日本", replace: false, submit: false } });
+const typedTitle = await titleOf();
+check(typed.outcome === "ok" && typedTitle === "héllo wörld ✓ 日本", "typing reaches a page field, with accents, a symbol, and CJK", `${typed.output} title ${JSON.stringify(typedTitle)}`);
+
+const opened = await act({ name: "desktop_type", args: { mark: markOf("entry", "Address and search bar"), text: "data:text/html,<title>typed in the address bar</title>", replace: true, submit: true } });
+check(opened.outcome === "ok" && (await titleOf()) === "typed in the address bar", "the address bar takes a URL that the desktop typed, which CDP cannot do", opened.output);
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("keys", `<input aria-label="First" autofocus><input aria-label="Second" onfocus="document.title = 'second has focus'">`) } });
+await relook();
+await act({ name: "desktop_click", args: { mark: markOf("entry", "First"), button: "left" } });
+const tabbed = await act({ name: "desktop_key", args: { keys: "Tab" as never, times: 1 } });
+check(tabbed.outcome === "ok" && (await titleOf()) === "second has focus", "a key goes to the active window", tabbed.output);
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("scroll", `<div onscroll="document.title = 'scrolled'" style="height:300px;overflow:auto" role="list" aria-label="Rows">${Array.from({ length: 200 }, (_, index) => `<a href="#r${index}" style="display:block">row ${index}</a>`).join("")}</div>`) } });
+await relook();
+const scrolled = await act({ name: "desktop_scroll", args: { mark: markOf("link", "row 1"), direction: "down", amount: 5 } });
+check(scrolled.outcome === "ok" && (await titleOf()) === "scrolled", "the wheel scrolls what is under a mark", scrolled.output);
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("first page", `<button onclick="document.title = 'clicked by a stale aim'">Go on</button>`) } });
+await relook();
+const staleMark = markOf("button", "Go on");
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("second page", `<div style="height:200px"></div><button onclick="document.title = 'clicked by a stale aim'">Go on</button>`) } });
+const staleClick = await act({ name: "desktop_click", args: { mark: staleMark, button: "left" } });
+check(staleClick.outcome === "error" && staleClick.output.includes("is not where the last look showed it") && staleClick.screen !== undefined, "an aim from an older screen clicks nothing and answers with a new look", staleClick.output);
+check((await titleOf()) === "second page", "the page records no click from the stale aim");
+
+await relook();
+const takenOver = createDesktop({ desktops, personHasScreen: () => true });
+const refused = await act({ name: "desktop_click", args: { mark: markOf("button", "Go on"), button: "left" } }, takenOver);
+check(refused.outcome === "error" && refused.output.includes("Your owner has the screen") && (await titleOf()) === "second page", "while a person has the screen, a click is refused and the page records nothing", refused.output);
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("pick a file", `<input type="file" aria-label="Upload" style="width:400px;height:60px">`) } });
+await relook();
+const upload = newest.screen?.marks.find((mark) => newest.screen?.windows[mark.win]?.app === "Chromium" && mark.role === "button" && /Upload|Choose/i.test(mark.name));
+await act({ name: "desktop_click", args: { mark: upload?.mark ?? 0, button: "left" } });
+await new Promise((done) => setTimeout(done, 1500));
+await relook();
+const chooser = newest.screen?.active === null || newest.screen === undefined ? undefined : newest.screen.windows[newest.screen.active];
+const chooserApps = new Set(newest.screen?.marks.map((mark) => newest.screen?.windows[mark.win]?.app));
+check(chooser?.kind === "dialog" && !chooserApps.has("Chromium"), "a file chooser is the active window, and the look lists none of the page under it", `${JSON.stringify(chooser)} ${[...chooserApps].join()}`);
+await savePicture(newest, "file-chooser");
+// The chooser opens taller than the screen, so its Cancel and Select buttons are off it and have no marks. Keys still reach it.
+check(marked(newest, "button", "Cancel") === undefined, "the chooser's Cancel button is off the screen, so it has no mark, which the known gaps record");
+const cancelled = await act({ name: "desktop_key", args: { keys: "Escape" as never, times: 1 } });
+const afterChooser = cancelled.screen?.active === null || cancelled.screen === undefined ? undefined : cancelled.screen.windows[cancelled.screen.active];
+check(cancelled.outcome === "ok" && afterChooser?.app === "Chromium", "Escape closes the chooser, and Chromium is active again", `${cancelled.output} ${JSON.stringify(afterChooser)}`);
+
+await relook();
+await act({ name: "desktop_click", args: { mark: markOf("toggle button", "Applications"), button: "left" } });
+const terminalItem = newest.screen?.marks.find((mark) => mark.role.endsWith("menu item") && /Terminal Emulator/.test(mark.name));
+await act({ name: "desktop_click", args: { mark: terminalItem?.mark ?? 0, button: "left" } });
+await new Promise((done) => setTimeout(done, 2500));
+await relook();
+const terminal = newest.screen?.active === null || newest.screen === undefined ? undefined : newest.screen.windows[newest.screen.active];
+const terminalApps = new Set(newest.screen?.marks.map((mark) => newest.screen?.windows[mark.win]?.app));
+check(terminal?.app === "xfce4-terminal" && !terminalApps.has("Chromium") && newest.screen?.marks.some((mark) => mark.role === "terminal") === true, "the panel's menu opens a terminal, and the look lists it and none of Chromium behind it", `${JSON.stringify(terminal)} ${[...terminalApps].join()}`);
+await savePicture(newest, "terminal");
+const back = newest.screen?.marks.find((mark) => newest.screen?.windows[mark.win]?.kind === "panel" && mark.role === "toggle button" && mark.name.startsWith("pick a file"));
+const backToChromium = await act({ name: "desktop_click", args: { mark: back?.mark ?? 0, button: "left" } });
+const returnedApps = new Set(backToChromium.screen?.marks.map((mark) => backToChromium.screen?.windows[mark.win]?.app));
+check(backToChromium.outcome === "ok" && returnedApps.has("Chromium") && !returnedApps.has("xfce4-terminal"), "Chromium's panel button brings it back, and the look drops the terminal", [...returnedApps].join());
+await relook();
+await act({ name: "desktop_click", args: { mark: newest.screen?.marks.find((mark) => newest.screen?.windows[mark.win]?.kind === "panel" && mark.name.startsWith("Terminal"))?.mark ?? 0, button: "left" } });
+await act({ name: "desktop_type", args: { text: "exit", replace: false, submit: true } });
 await browse(BOTS[0], { name: "browser_navigate", args: { url: "about:blank" } });
 
 (leases.get(BOTS[1]) as DesktopLease).release();

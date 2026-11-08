@@ -987,6 +987,38 @@ try {
     });
   });
 
+  await scenario("desktop. the real computerd takes the desktop tools, and a mark needs a look", async () => {
+    const chat = await newChat({ client: first, name: "desktop", level: "everything" });
+    const text = `desktop ${nonce}`;
+    fake.script(text, ({ toolResults }) =>
+      toolResults.length === 0
+        ? { kind: "tools", delivery: "whole", calls: [{ name: "desktop_click", arguments: JSON.stringify({ mark: 3 }) }] }
+        : { kind: "text", text: "done" },
+    );
+    const clicked = await chat.settled(await chat.send(text));
+    await check("a click before any look is invalid, and no card asks about it, even at Everything", async () => {
+      assert.equal(resultsOf(clicked)[0]?.outcome, "invalid");
+      assert.match(resultsOf(clicked)[0]?.output ?? "", /Call desktop_look first/);
+      assert.deepEqual(await first.query(api.approvals.pendingForThread, { threadId: chat.threadId }), []);
+    });
+    await first.mutation(api.bots.setApprovalLevel, { botId: chat.botId, level: "nothing" });
+    const lookText = `desktop look ${nonce}`;
+    fake.script(lookText, ({ toolResults }) =>
+      toolResults.length === 0 ? { kind: "tools", delivery: "whole", calls: [{ name: "desktop_look", arguments: "{}" }] } : { kind: "text", text: "done" },
+    );
+    const looked = await chat.settled(await chat.send(lookText));
+    await check("the container's computerd names desktop_look in its hello, so the link sends it, and a computer with no desktop says so", () => {
+      assert.equal(resultsOf(looked)[0]?.outcome, "error");
+      assert.match(resultsOf(looked)[0]?.output ?? "", /no running browser/);
+      assert.doesNotMatch(resultsOf(looked)[0]?.output ?? "", /older computerd/);
+    });
+    await check("the next model call replays the failed look with the line that only the newest look shows", () => {
+      const request = fake.requests(lookText)[1];
+      const tool = request?.body.messages.find((message) => message.role === "tool");
+      assert.match(JSON.stringify(tool?.content), /Only the newest look/);
+    });
+  });
+
   await scenario("description. it reaches every model call, its owner and the bot can write it, and a bot's write is one mutation", async () => {
     await putKey(MISTRAL_KEY);
     await second.mutation(api.users.ensureCurrent, {});

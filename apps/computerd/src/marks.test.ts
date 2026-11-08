@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { MAX_MARKS, type ScreenView } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
-import { capture, centerOf, selectMarks, type Capture } from "./marks.ts";
+import type { AimedInvocation, KeyCombo } from "@bots/protocol";
+import { capture, centerOf, inputPlan, locate, selectMarks, summaryOf, type Capture } from "./marks.ts";
 
 // Captures that hand.py made on a real VM, with Xfce, Chromium, Thunar, and a terminal on one display.
 function recorded(name: string): Capture {
@@ -124,5 +125,88 @@ describe("selectMarks on captures from a real desktop", () => {
     const captured = recorded("chromium-over-others");
     const node = { ...captured.nodes[0], name: "x".repeat(121) };
     expect(capture.safeParse({ ...captured, nodes: [node] }).success).toBe(false);
+  });
+});
+
+describe("locate, on a fresh capture from a real desktop", () => {
+  const chromium = { app: "Chromium", pid: 5092, kind: "frame" as const, title: "anything, because a title is not part of a window's identity" };
+  const signIn = { role: "button", name: "Sign in", states: [], box: { x: 464, y: 438, w: 352, h: 40 } };
+  const click = (aim: { window: typeof chromium; element: typeof signIn }): AimedInvocation => ({ name: "desktop_click", args: { mark: 1, button: "left" }, aim });
+  const key = (window: typeof chromium | null): AimedInvocation => ({ name: "desktop_key", args: { keys: "ctrl+l" as KeyCombo, times: 1 }, aim: { window } });
+  const shifted = (dy: number) => ({ ...signIn, box: { ...signIn.box, y: signIn.box.y + dy } });
+  const now = recorded("chromium-over-others");
+
+  it("finds the approved element at its center", () => {
+    expect(locate(now, click({ window: chromium, element: signIn }))).toMatchObject({ kind: "at", x: 640, y: 458 });
+  });
+
+  it("follows an element that moved up to 24 px, and refuses one that moved further", () => {
+    expect(locate(now, click({ window: chromium, element: shifted(-24) }))).toMatchObject({ kind: "at", x: 640, y: 458 });
+    expect(locate(now, click({ window: chromium, element: shifted(-25) })).kind).toBe("stale");
+  });
+
+  it("refuses an element that was renamed, or that another app or process shows", () => {
+    expect(locate(now, click({ window: chromium, element: { ...signIn, name: "Sign up" } })).kind).toBe("stale");
+    expect(locate(now, click({ window: { ...chromium, app: "thunar" }, element: signIn })).kind).toBe("stale");
+    expect(locate(now, click({ window: { ...chromium, pid: 1 }, element: signIn })).kind).toBe("stale");
+  });
+
+  it("never finds an element that another window now covers", () => {
+    const thunarBack = { role: "button", name: "Back", states: [], box: { x: 9, y: 85, w: 37, h: 35 } };
+    expect(locate(recorded("terminal-active"), click({ window: chromium, element: signIn })).kind).toBe("stale");
+    expect(locate(now, click({ window: { ...chromium, app: "thunar", pid: 5258, title: "File System - Thunar" }, element: thunarBack })).kind).toBe("stale");
+  });
+
+  it("sends a key only to the window the look showed as active", () => {
+    expect(locate(now, key(chromium))).toMatchObject({ kind: "focus", window: { app: "Chromium" } });
+    expect(locate(recorded("terminal-active"), key(chromium))).toMatchObject({ kind: "stale", why: expect.stringContaining("xfce4-terminal") });
+    expect(locate(recorded("file-chooser"), key(chromium)).kind).toBe("stale");
+    expect(locate(recorded("inaccessible-dialog"), key(null))).toMatchObject({ kind: "focus", window: null });
+  });
+
+  it("types where the focus is only while the focused field still has it", () => {
+    const username = { role: "entry", name: "Username or email address", value: "", states: ["focused" as const], box: { x: 464, y: 301, w: 352, h: 40 } };
+    const type = (element: typeof username | null): AimedInvocation => ({ name: "desktop_type", args: { text: "ada", replace: false, submit: false }, aim: { window: chromium, element } });
+    expect(locate(now, type(username)).kind).toBe("focus");
+    expect(locate(now, type({ ...username, name: "Password" })).kind).toBe("stale");
+    expect(locate(now, type(null)).kind).toBe("focus");
+  });
+});
+
+describe("inputPlan and summaryOf", () => {
+  const window = { app: "Chromium", pid: 7, kind: "frame" as const, title: "t" };
+  const element = { role: "entry", name: "Address and search bar", states: [], box: { x: 0, y: 0, w: 10, h: 10 } };
+  const at = { kind: "at" as const, x: 5, y: 6, element, window };
+  const focus = { kind: "focus" as const, window };
+
+  it("clicks, double-clicks, and right-clicks at the element's center", () => {
+    const click = (button: "left" | "double" | "right"): AimedInvocation => ({ name: "desktop_click", args: { mark: 1, button }, aim: { window, element } });
+    expect(inputPlan(click("left"), at)).toEqual([{ kind: "move", x: 5, y: 6 }, { kind: "click", button: 1, count: 1 }]);
+    expect(inputPlan(click("double"), at)).toEqual([{ kind: "move", x: 5, y: 6 }, { kind: "click", button: 1, count: 2 }]);
+    expect(inputPlan(click("right"), at)).toEqual([{ kind: "move", x: 5, y: 6 }, { kind: "click", button: 3, count: 1 }]);
+    expect(summaryOf(click("double"), at)).toBe('Double-clicked entry "Address and search bar" in Chromium.');
+  });
+
+  it("clicks a mark before typing, selects all to replace, and presses Enter to submit", () => {
+    const typed: AimedInvocation = { name: "desktop_type", args: { mark: 1, text: "example.com", replace: true, submit: true }, aim: { window, element } };
+    expect(inputPlan(typed, at)).toEqual([
+      { kind: "move", x: 5, y: 6 },
+      { kind: "click", button: 1, count: 1 },
+      { kind: "key", combo: "ctrl+a", times: 1 },
+      { kind: "type", text: "example.com" },
+      { kind: "key", combo: "Return", times: 1 },
+    ]);
+    expect(summaryOf(typed, at)).toBe('Replaced the text and typed 11 characters into entry "Address and search bar" in Chromium, then pressed Enter.');
+  });
+
+  it("types where the focus is with no mark, presses keys, and turns the wheel", () => {
+    const typed: AimedInvocation = { name: "desktop_type", args: { text: "ls", replace: false, submit: false }, aim: { window, element: null } };
+    expect(inputPlan(typed, focus)).toEqual([{ kind: "type", text: "ls" }]);
+    expect(summaryOf(typed, focus)).toBe("Typed 2 characters where the keyboard focus is in Chromium.");
+    const pressed: AimedInvocation = { name: "desktop_key", args: { keys: "Tab" as KeyCombo, times: 3 }, aim: { window } };
+    expect(inputPlan(pressed, focus)).toEqual([{ kind: "key", combo: "Tab", times: 3 }]);
+    expect(summaryOf(pressed, focus)).toBe("Pressed Tab 3 times in Chromium.");
+    const scrolled: AimedInvocation = { name: "desktop_scroll", args: { mark: 1, direction: "down", amount: 3 }, aim: { window, element } };
+    expect(inputPlan(scrolled, at)).toEqual([{ kind: "move", x: 5, y: 6 }, { kind: "wheel", button: 5, count: 3 }]);
   });
 });

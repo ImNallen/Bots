@@ -4,6 +4,7 @@ import json
 import os
 import select
 import signal
+import subprocess
 import sys
 import time
 
@@ -17,7 +18,7 @@ os.environ["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={BUS}"
 # computerd ends this process at its own deadline. This alarm also ends it when computerd dies first.
 signal.alarm(30)
 
-from PIL import ImageDraw, ImageFont, ImageGrab  # noqa: E402
+from PIL import ImageChops, ImageDraw, ImageFont, ImageGrab  # noqa: E402
 
 STATES = ["focused", "focusable", "checked", "pressed", "selected", "expanded", "enabled", "active", "modal", "editable"]
 VALUE_ROLES = {"entry", "text", "combo box", "spin button", "slider"}
@@ -199,6 +200,62 @@ def walk_desktop(tree, roles, max_nodes, app_deadline):
             entry["silent"] = True
 
 
+typing = None
+
+
+# sudo passes computerd's SIGTERM on to this process, and a cancel must also stop typing that is under way.
+def stop(signum, frame_):
+    if typing is not None and typing.poll() is None:
+        typing.kill()
+    os._exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, stop)
+
+
+def xdotool(*args):
+    global typing
+    typing = subprocess.Popen(["xdotool", *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if typing.wait(timeout=25) != 0:
+        raise RuntimeError(f"xdotool {args[0]} failed")
+
+
+def send_input(request):
+    for step in request["steps"]:
+        kind = step["kind"]
+        if kind == "move":
+            xdotool("mousemove", "--sync", str(step["x"]), str(step["y"]))
+        elif kind == "click":
+            xdotool("click", "--repeat", str(step["count"]), "--delay", "80", str(step["button"]))
+        elif kind == "wheel":
+            xdotool("click", "--repeat", str(step["count"]), "--delay", "40", str(step["button"]))
+        elif kind == "key":
+            xdotool("key", "--clearmodifiers", "--repeat", str(step["times"]), "--delay", "60", step["combo"])
+        elif kind == "type":
+            xdotool("type", "--clearmodifiers", "--delay", "12", "--", step["text"])
+        else:
+            raise ValueError(f"unknown step {kind}")
+    return {}
+
+
+def changed_share(a, b):
+    unchanged = ImageChops.difference(a, b).convert("L").histogram()[0]
+    return 1 - unchanged / (a.size[0] * a.size[1])
+
+
+def settle(request):
+    started = time.monotonic()
+    time.sleep(request["minMs"] / 1000)
+    previous = grab()
+    while (time.monotonic() - started) * 1000 < request["maxMs"]:
+        time.sleep(request["quietMs"] / 1000)
+        current = grab()
+        if changed_share(previous, current) < 0.002:
+            break
+        previous = current
+    return {}
+
+
 COLORS = [(214, 39, 40), (31, 119, 180), (44, 160, 44), (148, 103, 189), (255, 127, 14), (23, 190, 207), (227, 119, 194)]
 
 
@@ -247,7 +304,7 @@ def encode(image, max_bytes):
     return None
 
 
-VERBS = {"capture": capture, "render": render}
+VERBS = {"capture": capture, "render": render, "input": send_input, "settle": settle}
 
 
 def main():

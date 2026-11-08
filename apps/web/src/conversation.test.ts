@@ -48,10 +48,11 @@ function only<K extends DisplayItem["kind"]>(items: DisplayItem[], kind: K): Ext
 }
 
 const kinds = (items: DisplayItem[]) => items.map((item) => item.kind);
-const approval = (toolCallId = "c1"): PendingApproval => ({
+const approval = (toolCallId = "c1", subject: string | null = null): PendingApproval => ({
   _id: id<"approvals">("a1"),
   runId: id<"runs">("run1"),
   toolCallId,
+  subject,
 });
 
 describe("conversationItems", () => {
@@ -142,6 +143,10 @@ describe("conversationItems", () => {
       ["browser_type", "Typed on the page"],
       ["browser_press", "Pressed a key"],
       ["desktop_look", "Looked at the screen"],
+      ["desktop_click", "Clicked on the screen"],
+      ["desktop_type", "Typed on the screen"],
+      ["desktop_key", "Pressed keys"],
+      ["desktop_scroll", "Scrolled the screen"],
       ["memory_save", "Saved a note"],
       ["memory_forget", "Forgot a note"],
       ["description_set", "Updated its description"],
@@ -220,6 +225,28 @@ describe("conversationItems", () => {
         title: "Run this command?",
         arguments: [{ label: null, value: "printf 'a\nb'" }],
       });
+    });
+
+    it("asks about a desktop input in the orchestrator's words, shows typed text in full, and shows the screen", () => {
+      const askOf = (name: string, args: object, subject: string) =>
+        only(itemsOf([pendingRun({ id: "c1", name, arguments: JSON.stringify(args) })], [approval("c1", subject)]), "approval");
+      expect(askOf("desktop_click", { mark: 4 }, 'Click entry "Address and search bar" in Chromium')).toEqual({
+        key: "run1:c1",
+        kind: "approval",
+        approvalId: "a1",
+        title: "Click this?",
+        arguments: [{ label: null, value: 'Click entry "Address and search bar" in Chromium' }],
+        picture: true,
+      });
+      expect(askOf("desktop_type", { mark: 4, text: "rm -rf ~\nexit", submit: true }, 'Type into entry "x" in Chromium, then press Enter')).toMatchObject({
+        title: "Type this?",
+        arguments: [
+          { label: null, value: 'Type into entry "x" in Chromium, then press Enter' },
+          { label: "text", value: "rm -rf ~\nexit" },
+        ],
+        picture: true,
+      });
+      expect(only(itemsOf([pendingRun()], [approval()]), "approval").picture).toBe(false);
     });
 
     it("asks about a save with the exact text, and about a forget with its id", () => {

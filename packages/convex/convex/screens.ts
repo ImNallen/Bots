@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
-import { requireService } from "./identity.js";
+import { requireIdentity, requireService } from "./identity.js";
 import type { KeptScreen } from "./validators.js";
 
 async function screenOf(ctx: QueryCtx, runId: Id<"runs">): Promise<Doc<"screens"> | null> {
@@ -39,5 +39,24 @@ export const ofRun = query({
     await requireService(ctx);
     const row = await screenOf(ctx, runId);
     return row === null ? null : { toolCallId: row.toolCallId, view: row.view, image: row.image ?? null };
+  },
+});
+
+// The owner's approval card for a desktop input: the run's newest look, with the box that the card outlines. Only for a pending
+// approval of the owner's own run, so a picture of the desktop reaches nobody else, and none after the answer.
+export const forApproval = query({
+  args: { approvalId: v.id("approvals") },
+  handler: async (ctx, { approvalId }) => {
+    const { user } = await requireIdentity(ctx);
+    const approval = await ctx.db.get(approvalId);
+    if (user === null || approval === null || approval.ownerId !== user._id || approval.state !== "pending" || approval.subject === undefined) {
+      return null;
+    }
+    const row = await screenOf(ctx, approval.runId);
+    if (row === null || row.image === undefined) {
+      return null;
+    }
+    const { width, height } = JSON.parse(row.view) as { width: number; height: number };
+    return { image: row.image, width, height, box: approval.box ?? null };
   },
 });

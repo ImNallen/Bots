@@ -1,6 +1,8 @@
 import { describe, expect, it, expectTypeOf } from "vitest";
 import {
   COMPUTER_TOOL_NAMES,
+  isDesktopInputRequest,
+  parseKeyCombo,
   MAX_COMPUTER_MESSAGE_BYTES,
   MAX_MARKS,
   OUTPUT_CAP_BYTES,
@@ -237,6 +239,10 @@ describe("parseToolCall", () => {
       "browser_type",
       "browser_press",
       "desktop_look",
+      "desktop_click",
+      "desktop_type",
+      "desktop_key",
+      "desktop_scroll",
       "memory_save",
       "memory_forget",
       "description_set",
@@ -271,6 +277,10 @@ describe("toolEffect", () => {
       browser_type: "changesOutside",
       browser_press: "changesOutside",
       desktop_look: "readsScreen",
+      desktop_click: "controlsComputer",
+      desktop_type: "controlsComputer",
+      desktop_key: "controlsComputer",
+      desktop_scroll: "controlsComputer",
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
       description_set: "changesMemory",
@@ -332,7 +342,7 @@ describe("memory tools", () => {
 
   it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
     const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
-    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look"]);
+    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
     expect(isComputerTool("constructor")).toBe(false);
   });
 
@@ -436,5 +446,48 @@ describe("a result with a picture of the screen", () => {
   it("tells a desktop call from a browser call", () => {
     expect(isDesktopInvocation({ name: "desktop_look", args: {} })).toBe(true);
     expect(isDesktopInvocation({ name: "browser_snapshot", args: {} })).toBe(false);
+  });
+});
+
+describe("desktop input", () => {
+  const aim = {
+    window: { app: "Chromium", pid: 7, kind: "frame", title: "a" },
+    element: { role: "button", name: "Sign in", states: [], box: { x: 1, y: 2, w: 3, h: 4 } },
+  };
+
+  it.each([
+    ["ctrl+l", "ctrl+l"],
+    ["alt+F4", "alt+F4"],
+    ["Enter", "Return"],
+    ["shift+ctrl+T", "ctrl+shift+t"],
+    ["ArrowDown", "Down"],
+    ["page_down", "Page_Down"],
+  ])("reads %s as %s", (text, combo) => {
+    expect(parseKeyCombo(text)).toBe(combo);
+  });
+
+  it.each(["ctrl+", "ctrl+ctrl+l", "ctrl", "rm -rf", "hyper+a", "F13", "a+b"])("refuses %j", (text) => {
+    expect(parseKeyCombo(text)).toBeNull();
+  });
+
+  it("parses a model's call with no aim, and refuses one that brings its own", () => {
+    expect(parseToolCall({ name: "desktop_click", arguments: '{"mark":4}' })).toEqual({ kind: "ok", invocation: { name: "desktop_click", args: { mark: 4, button: "left" } } });
+    expect(parseToolCall({ name: "desktop_click", arguments: JSON.stringify({ mark: 4, aim }) }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_key", arguments: '{"keys":"Enter"}' })).toEqual({ kind: "ok", invocation: { name: "desktop_key", args: { keys: "Return", times: 1 } } });
+    expect(parseToolCall({ name: "desktop_key", arguments: '{"keys":"rm -rf /"}' }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_type", arguments: '{"text":"a\\u0000b"}' }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_click", arguments: '{"mark":201}' }).kind).toBe("invalid");
+  });
+
+  it("puts only an aimed call on the wire", () => {
+    const call = (tool: object) => parseJsonMessage({ raw: JSON.stringify({ kind: "toolCall", callId: "a:b", botId: "bot", tool }), schema: orchestratorMessage });
+    expect(call({ name: "desktop_click", args: { mark: 4, button: "left" } })).toBeNull();
+    expect(call({ name: "desktop_click", args: { mark: 4, button: "left" }, aim })).not.toBeNull();
+    expect(call({ name: "desktop_key", args: { keys: "ctrl+l", times: 1 }, aim: { window: null } })).not.toBeNull();
+  });
+
+  it("tells a desktop input from a look", () => {
+    expect(isDesktopInputRequest({ name: "desktop_scroll", args: { mark: 1, direction: "down", amount: 3 } })).toBe(true);
+    expect(isDesktopInputRequest({ name: "desktop_look", args: {} })).toBe(false);
   });
 });

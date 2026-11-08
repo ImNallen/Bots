@@ -1,6 +1,7 @@
 import { api } from "@bots/convex";
-import { useMutation } from "convex/react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { Id } from "@bots/convex/dataModel";
+import { useMutation, useQuery } from "convex/react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BotFace, type FaceState } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
 import type { DisplayItem, ToolOutput } from "./conversation.ts";
@@ -116,6 +117,29 @@ function ArgumentText(props: { text: string; index: number; onRead: (index: numb
   );
 }
 
+// The owner approves an action on their own logged-in desktop, and a role and a name do not identify an unnamed icon, so the card
+// shows the look that the action was aimed from, with the target outlined.
+function ScreenTarget({ approvalId }: { approvalId: Id<"approvals"> }) {
+  const target = useQuery(api.screens.forApproval, { approvalId });
+  const url = useMemo(() => (target ? URL.createObjectURL(new Blob([target.image.bytes], { type: target.image.mediaType })) : null), [target]);
+  useEffect(() => () => {
+    if (url !== null) URL.revokeObjectURL(url);
+  }, [url]);
+  if (!target || url === null) {
+    return null;
+  }
+  const { box, width, height } = target;
+  const percent = (value: number, of: number) => `${(value / of) * 100}%`;
+  return (
+    <figure className="ask-screen">
+      <img src={url} alt="The screen when the bot chose this action" width={width} height={height} />
+      {box !== null && (
+        <span className="ask-target" style={{ left: percent(box.x, width), top: percent(box.y, height), width: percent(box.w, width), height: percent(box.h, height) }} aria-hidden="true" />
+      )}
+    </figure>
+  );
+}
+
 function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" }> }) {
   const decide = useMutation(api.approvals.decide);
   const [sent, setSent] = useState<Decision | null>(null);
@@ -150,6 +174,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
           <ArgumentText text={argument.value} index={index} onRead={markRead} />
         </div>
       ))}
+      {item.picture && <ScreenTarget approvalId={item.approvalId} />}
       <div className="opts">
         {OPTIONS.map(({ decision, letter, label }) => (
           <button
