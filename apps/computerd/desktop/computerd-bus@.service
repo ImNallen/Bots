@@ -1,0 +1,20 @@
+# One session bus for a desktop. Xfce, Chromium, and the desktop helper all use it, so the helper can read every app's
+# accessibility tree. at-spi-bus-launcher starts on demand from this bus and inherits DISPLAY and XDG_RUNTIME_DIR, so the
+# accessibility bus lives here too.
+[Unit]
+Description=Bots desktop %i session bus
+BindsTo=computerd-xvfb@%i.service
+After=computerd-xvfb@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=browser
+Environment=DISPLAY=:%i XDG_RUNTIME_DIR=/run/computerd-bus-%i
+RuntimeDirectory=computerd-bus-%i
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/dbus-daemon --session --nofork --nopidfile --address=unix:path=/run/computerd-bus-%i/bus
+ExecStartPost=/bin/sh -c 'until [ -S /run/computerd-bus-%i/bus ]; do sleep 0.1; done'
+Restart=always
+RestartSec=2
+TimeoutStartSec=15

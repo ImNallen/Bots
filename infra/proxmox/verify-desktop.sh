@@ -41,12 +41,13 @@ DISPLAY_UNIT=computerd-xvfb@$SLOT.service
 BROWSER_UNIT=computerd-chromium@$SLOT.service
 STREAM_UNIT=computerd-vnc@$SLOT.service
 SESSION_UNIT=computerd-xfce@$SLOT.service
+BUS_UNIT=computerd-bus@$SLOT.service
 INPUT_UNIT=computerd-input@$SLOT.service
 INPUT=6908
 PROFILE=/home/browser/profiles/$BOT
 BASE=/home/browser/profile
 SYSTEMCTL_TIMEOUT_SECONDS=75
-PARTS="$BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $INPUT_UNIT $DISPLAY_UNIT $TARGET"
+PARTS="$BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $BUS_UNIT $INPUT_UNIT $DISPLAY_UNIT $TARGET"
 NODE=/opt/bots-computerd/current/.runtime/bin/node
 PROBE=$(mktemp --suffix=.mjs)
 base64 -d <<<"$1" >"$PROBE"
@@ -107,7 +108,7 @@ unit_processes() {
 }
 slot_processes() {
   local unit total=0
-  for unit in $BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $INPUT_UNIT $DISPLAY_UNIT; do
+  for unit in $BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $BUS_UNIT $INPUT_UNIT $DISPLAY_UNIT; do
     total=$((total + $(unit_processes "$unit")))
   done
   echo "$total"
@@ -116,15 +117,24 @@ base_hash() {
   [ -d "$BASE" ] || { echo none; return; }
   find "$BASE" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
 }
-memory() { # the desktop's memory now, summed across its units. Page cache is counted apart, because the kernel can take it back.
+memory() { # the memory of the named units, or of the whole desktop, now. Page cache is counted apart, because the kernel can take it back.
   local unit group anon=0 file=0
-  for unit in $BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $DISPLAY_UNIT; do
+  for unit in ${*:-$BROWSER_UNIT $STREAM_UNIT $SESSION_UNIT $BUS_UNIT $DISPLAY_UNIT}; do
     group=/sys/fs/cgroup$(systemctl show -p ControlGroup --value "$unit")
     anon=$((anon + $(awk '$1 == "anon" { print $2 }' "$group/memory.stat")))
     file=$((file + $(awk '$1 == "file" { print $2 }' "$group/memory.stat")))
   done
   echo "$((anon / 1024 / 1024)) MB anonymous, $((file / 1024 / 1024)) MB page cache"
 }
+HAND=/opt/bots-computerd/current/apps/computerd/desktop/hand.py
+hand() { # slot. Runs the desktop helper as computerd does, through sudo, with requests on stdin.
+  sudo -n -u computerd sudo -n -u browser -- /usr/bin/python3 -I "$HAND" "$1"
+}
+LOOK='{"verb":"capture","roles":["button","toggle button","entry","menu item","link"],"maxNodes":4000,"appDeadlineMs":1500,"walkDeadlineMs":8000}'
+look_has() { # slot, then a Python expression over the capture c
+  hand "$1" <<<"$LOOK" | python3 -c 'import json, sys; c = json.loads(sys.stdin.readline())["capture"]; sys.exit(0 if eval(sys.argv[1]) else 1)' "$2"
+}
+CHROMIUM_LISTED='c["bus"] == "ok" and any(w["app"] == "Chromium" and w["role"] == "frame" for w in c["windows"])'
 input_listens() { ss -ltnH "sport = :$INPUT" | grep -q .; }
 input_closed() { ! input_listens; }
 open_input() { sudo -n -u computerd sudo -n /usr/bin/systemctl restart --quiet "$INPUT_UNIT"; }
@@ -152,7 +162,7 @@ base_before=$(base_hash)
 holder "$SLOT" "$BOT" "$CDP" "$VNC"
 holder "$OTHER" "$OTHER_BOT" "$OTHER_CDP" "$OTHER_VNC"
 
-for name in computerd-desktop@.target computerd-xvfb@.service computerd-xfce@.service computerd-chromium@.service computerd-vnc@.service computerd-input@.service; do
+for name in computerd-desktop@.target computerd-xvfb@.service computerd-bus@.service computerd-xfce@.service computerd-chromium@.service computerd-vnc@.service computerd-input@.service; do
   check "installed: $name" test -f "/etc/systemd/system/$name"
 done
 for old in computerd-display computerd-browser computerd-screen-0 computerd-screen-7; do
@@ -165,6 +175,9 @@ grep -qF '/usr/bin/systemctl stop --quiet computerd-xvfb@[1-8].service' <<<"$lis
 grep -qF '/usr/bin/systemctl restart --quiet computerd-input@[1-8].service' <<<"$listed" && result true "sudoers: computerd may restart an input stream" || result false "sudoers: computerd may restart an input stream"
 ! sudo -n -u computerd sudo -n /usr/bin/systemctl restart --quiet computerd-vnc@$SLOT.service 2>/dev/null && result true "sudoers: computerd may not restart the view-only stream" || result false "sudoers: computerd may not restart the view-only stream"
 ! sudo -n -u computerd sudo -n /usr/bin/systemctl stop --quiet computerd.service 2>/dev/null && result true "sudoers: computerd may not stop another unit" || result false "sudoers: computerd may not stop another unit"
+grep -qF "(browser) NOPASSWD: /usr/bin/python3 -I $HAND [1-8]" <<<"$listed" && result true "sudoers: computerd may run the desktop helper as browser" || result false "sudoers: computerd may run the desktop helper as browser"
+! sudo -n -u computerd sudo -n -l -u browser /usr/bin/python3 -I "$HAND" 9 >/dev/null 2>&1 && result true "sudoers: computerd may not run the helper for a slot that does not exist" || result false "sudoers: computerd may not run the helper for a slot that does not exist"
+! sudo -n -u computerd sudo -n -l -u browser /usr/bin/python3 -c 'print(1)' >/dev/null 2>&1 && result true "sudoers: computerd may not run other Python as browser" || result false "sudoers: computerd may not run other Python as browser"
 
 sudo -u browser mkdir -p "$PROFILE.tmp"
 sudo -u browser touch "$PROFILE.tmp/left-by-a-kill"
@@ -182,6 +195,11 @@ same "start: Chromium is active" "$(state "$BROWSER_UNIT")" active
 same "start: Xfce is active" "$(state "$SESSION_UNIT")" active
 sleep 4
 measure "idle desktop: $(memory)"
+started=$(now_ms)
+look_has "$SLOT" "$CHROMIUM_LISTED" && result true "accessibility: the helper lists Chromium's window" || result false "accessibility: the helper lists Chromium's window" "$(hand "$SLOT" <<<"$LOOK" | head -c 400)"
+measure "a capture through sudo on an idle desktop: $(($(now_ms) - started)) ms"
+look_has "$SLOT" 'any(n["role"] == "entry" and n["name"] == "Address and search bar" for n in c["nodes"])' && result true "accessibility: Chromium's address bar is in the tree" || result false "accessibility: Chromium's address bar is in the tree"
+look_has "$SLOT" 'any(w["app"] == "xfce4-panel" for w in c["windows"]) and c["width"] == 1280 and c["height"] == 800' && result true "accessibility: the panel is in the tree, and the frame is 1280x800" || result false "accessibility: the panel is in the tree, and the frame is 1280x800"
 
 systemctl start --quiet computerd-desktop@$OTHER.target
 check "start: a second desktop answers on its own port" cdp_up "$OTHER_CDP"
@@ -375,6 +393,13 @@ wait_for 10 sh -c "[ \"\$(systemctl show -p MainPID --value $SESSION_UNIT)\" != 
   && result true "Xfce killed: the session restarts" || result false "Xfce killed: the session restarts" "$(state "$SESSION_UNIT")"
 same "Xfce killed: Chromium's process stays" "$(pid "$BROWSER_UNIT")" "$browser_pid"
 check "Xfce killed: CDP still answers" cdp_up
+wait_for 15 look_has "$SLOT" "$CHROMIUM_LISTED" && result true "Xfce killed: Chromium stays in the tree" || result false "Xfce killed: Chromium stays in the tree"
+
+browser_pid=$(pid "$BROWSER_UNIT")
+kill -9 "$(pid "$BUS_UNIT")"
+wait_for 20 look_has "$SLOT" "$CHROMIUM_LISTED and any(w['app'] == 'xfce4-panel' for w in c['windows'])" && result true "bus killed: Chromium and the panel come back in the tree" || result false "bus killed: Chromium and the panel come back in the tree" "$(hand "$SLOT" <<<"$LOOK" | head -c 400)"
+differ "bus killed: Chromium restarts, because it ends with its bus" "$(pid "$BROWSER_UNIT")" "$browser_pid"
+check "bus killed: CDP answers" wait_for 15 cdp_up
 
 kill -9 "$(pid "$DISPLAY_UNIT")"
 wait_for 15 all_down && result true "Xvfb killed: every part of the slot goes down" || result false "Xvfb killed: every part of the slot goes down" "$(for unit in $PARTS; do printf '%s=%s ' "$unit" "$(state "$unit")"; done)"
@@ -393,6 +418,29 @@ check "Xvfb killed: the same profile returns" test -f "$marker"
 probe open "$CDP" "https://en.wikipedia.org/wiki/Linux" >/dev/null 2>&1 && result true "memory: a real page opens" || result false "memory: a real page opens"
 sleep 5
 measure "desktop with a real page: $(memory)"
+measure "Chromium with a real page and accessibility on: $(memory "$BROWSER_UNIT")"
+look_has "$SLOT" "$CHROMIUM_LISTED" >/dev/null
+sleep 2
+measure "Chromium with a real page after a look: $(memory "$BROWSER_UNIT")"
+# The same page with the unit's accessibility switches taken out, for comparison.
+dropin=/run/systemd/system/$BROWSER_UNIT.d
+mkdir -p "$dropin"
+{
+  echo '[Service]'
+  echo 'UnsetEnvironment=ACCESSIBILITY_ENABLED'
+  echo 'ExecStart='
+  grep '^ExecStart=' /etc/systemd/system/computerd-chromium@.service | sed 's/ --force-renderer-accessibility//'
+} >"$dropin/no-accessibility.conf"
+systemctl daemon-reload
+systemctl restart --quiet "$BROWSER_UNIT"
+wait_for 30 cdp_up
+probe open "$CDP" "https://en.wikipedia.org/wiki/Linux" >/dev/null 2>&1
+sleep 5
+measure "Chromium with the same page and accessibility off: $(memory "$BROWSER_UNIT")"
+rm -rf "$dropin"
+systemctl daemon-reload
+systemctl restart --quiet "$BROWSER_UNIT"
+wait_for 30 cdp_up
 
 open_input
 hold "$INPUT" 60 /tmp/viewer-$$.out

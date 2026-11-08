@@ -1,16 +1,19 @@
 [Unit]
 Description=Bots desktop %i Xfce
 BindsTo=computerd-xvfb@%i.service
-After=computerd-xvfb@%i.service
+After=computerd-xvfb@%i.service computerd-bus@%i.service
 StartLimitIntervalSec=0
 
 [Service]
 Type=exec
 User=browser
-Environment=DISPLAY=:%i XDG_RUNTIME_DIR=/run/computerd-xfce-%i
+Environment=DISPLAY=:%i XDG_RUNTIME_DIR=/run/computerd-xfce-%i DBUS_SESSION_BUS_ADDRESS=unix:path=/run/computerd-bus-%i/bus
 RuntimeDirectory=computerd-xfce-%i
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/dbus-run-session -- /bin/sh -c 'xfwm4 --compositor=off & xfdesktop & exec xfce4-panel'
+# Starts the bus's accessibility launcher, which also writes its address on the display. A launcher from a bus that restarted
+# leaves an old address there, and an app that reads it gets no accessibility tree.
+ExecStartPre=/usr/bin/dbus-send --bus=unix:path=/run/computerd-bus-%i/bus --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress
+ExecStart=/bin/sh -c 'xfwm4 --compositor=off & xfdesktop & exec xfce4-panel'
 # Chromium draws its window for the window manager it finds. A browser that starts first gets a second title bar, which moves
 # the page.
 ExecStartPost=/bin/sh -c 'until xprop -display :%i -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; do sleep 0.1; done'
