@@ -39,8 +39,21 @@ export const toolResult = z.strictObject({
 
 export type ToolResult = z.infer<typeof toolResult>;
 
+// Every computerd accepted exactly these before hello named its tools. This is history, so it never changes.
+export const TOOLS_BEFORE_ANNOUNCEMENT: readonly string[] = [
+  "shell",
+  "read_file",
+  "write_file",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_press",
+];
+
 export const computerMessage = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("hello"), token: z.string().min(1).max(512) }),
+  // A computerd older than the announcement sends no tools.
+  z.strictObject({ kind: z.literal("hello"), token: z.string().min(1).max(512), tools: z.array(z.string().max(64)).max(64).optional() }),
   z.strictObject({ kind: z.literal("toolResult"), callId, result: toolResult }),
   z.strictObject({ kind: z.literal("streamHello"), token: z.string().min(1).max(512), streamId }),
 ]);

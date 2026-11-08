@@ -199,7 +199,9 @@ export function isScheduleInvocation(tool: AnyInvocation): tool is ScheduleInvoc
   return toolEffect(tool.name) === "changesSchedule";
 }
 
-const COMPUTER_TOOLS: ReadonlySet<string> = new Set(toolInvocation.options.map((option) => option.shape.name.value));
+export const COMPUTER_TOOL_NAMES: readonly ToolInvocation["name"][] = toolInvocation.options.map((option) => option.shape.name.value);
+
+const COMPUTER_TOOLS: ReadonlySet<string> = new Set(COMPUTER_TOOL_NAMES);
 
 export function isComputerTool(name: string): boolean {
   return COMPUTER_TOOLS.has(name);

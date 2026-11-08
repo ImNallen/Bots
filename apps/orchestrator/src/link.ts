@@ -3,6 +3,7 @@ import type { Id } from "@bots/convex/dataModel";
 import {
   LINK_CLOSE,
   MAX_COMPUTER_MESSAGE_BYTES,
+  TOOLS_BEFORE_ANNOUNCEMENT,
   capText,
   computerMessage,
   parseJsonMessage,
@@ -50,6 +51,9 @@ export type Link = {
 type Connection = {
   socket: WebSocket;
   computer: Computer;
+  // The tools that this computerd named in its hello. A call for any other tool is never sent, because computerd would close the link
+  // on it, and the link would send it again at every reconnect.
+  accepts: ReadonlySet<string>;
   issued: Set<string>;
   waiters: Map<string, Set<(result: ToolResult) => void>>;
   onDrop: Set<(closeCode: number | undefined) => void>;
@@ -76,6 +80,8 @@ function responseDeadlineMs(tool: ToolInvocation): number {
 
 const UNAVAILABLE_OUTPUT =
   "No computer answered in time, so the outcome is unknown. The call may not have run, or it may have run without its result arriving.";
+export const OLDER_COMPUTERD_OUTPUT =
+  "This computer runs an older computerd that does not have this tool, so the call did not run. computerd updates itself when this bot's owner has no run, so the tool works in a later conversation.";
 const CANCELLED_UNREACHABLE_OUTPUT =
   "The call was cancelled while the computer could not be reached. It may have run, and it may still be running.";
 
@@ -102,14 +108,14 @@ export function startLink(args: {
     connection.onDrop.clear();
   }
 
-  function addConnection(socket: WebSocket, computer: Computer): Connection {
+  function addConnection(socket: WebSocket, computer: Computer, accepts: ReadonlySet<string>): Connection {
     const previous = connections.get(computer.ownerId);
     if (previous !== undefined) {
       dropConnection(previous);
       previous.socket.close(LINK_CLOSE.replaced);
       log({ level: "info", event: "computer-replaced", computerId: computer.computerId });
     }
-    const connection: Connection = { socket, computer, issued: new Set(), waiters: new Map(), onDrop: new Set() };
+    const connection: Connection = { socket, computer, accepts, issued: new Set(), waiters: new Map(), onDrop: new Set() };
     connections.set(computer.ownerId, connection);
     for (const notify of onConnect) {
       notify();
@@ -169,7 +175,7 @@ export function startLink(args: {
     liveness.set(socket, true);
     socket.on("pong", () => liveness.set(socket, true));
 
-    async function authenticate(token: string): Promise<void> {
+    async function authenticate(token: string, accepts: ReadonlySet<string>): Promise<void> {
       const computer = await args.authenticate(token);
       if (socket.readyState !== WebSocket.OPEN) {
         return;
@@ -179,7 +185,7 @@ export function startLink(args: {
         socket.close(LINK_CLOSE.unauthorized);
         return;
       }
-      state = { kind: "ready", connection: addConnection(socket, computer) };
+      state = { kind: "ready", connection: addConnection(socket, computer, accepts) };
       send(socket, { kind: "welcome" });
       log({ level: "info", event: "computer-connected", computerId: computer.computerId });
     }
@@ -223,7 +229,7 @@ export function startLink(args: {
           }
           clearTimeout(helloTimer);
           state = { kind: "authenticating" };
-          authenticate(message.token).catch((error: unknown) => {
+          authenticate(message.token, new Set(message.tools ?? TOOLS_BEFORE_ANNOUNCEMENT)).catch((error: unknown) => {
             log({
               level: "error",
               event: "link-auth-failed",
@@ -411,6 +417,9 @@ export function startLink(args: {
     async call(call) {
       for (;;) {
         const connection = connections.get(call.ownerId);
+        if (connection !== undefined && !connection.accepts.has(call.tool.name)) {
+          return { outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false };
+        }
         const step = await (connection === undefined ? awaitComputer(call) : exchange(call, connection));
         switch (step.kind) {
           case "result":
