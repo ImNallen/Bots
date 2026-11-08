@@ -1,4 +1,4 @@
-import type { Browsing, ToolInvocation, ToolResult } from "@bots/protocol";
+import { withoutScreenImage, type Browsing, type ToolInvocation, type ToolResult } from "@bots/protocol";
 import type { Journal } from "./journal.ts";
 
 export type ExecuteTool = (args: {
@@ -28,7 +28,7 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
   const inFlight = new Map<string, InFlight>();
 
   async function settle(callId: string, result: ToolResult): Promise<ToolResult> {
-    await journal.finish({ callId, result });
+    await journal.finish({ callId, result: withoutScreenImage(result) });
     return result;
   }
 

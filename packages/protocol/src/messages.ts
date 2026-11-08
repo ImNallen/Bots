@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { OUTPUT_CAP_BYTES } from "./output.ts";
+import { screenView } from "./desktop.ts";
 import { toolInvocation } from "./tools.ts";
 
-// JSON escaping can expand each output byte to six, so these limits sit above the output cap.
-export const MAX_COMPUTER_MESSAGE_BYTES = OUTPUT_CAP_BYTES * 8;
+// A result carries a picture of the screen, up to MAX_SCREEN_IMAGE_BYTES, and its marks. computerd's fitToLink keeps every result
+// under this, and the orchestrator deploys first, so its limit is live before any computerd sends a picture.
+export const MAX_COMPUTER_MESSAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_ORCHESTRATOR_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 export const LINK_CLOSE = {
@@ -35,9 +36,41 @@ export const toolResult = z.strictObject({
   output: z.string(),
   exitCode: z.number().int().optional(),
   truncated: z.boolean(),
+  screen: screenView.optional(),
 });
 
 export type ToolResult = z.infer<typeof toolResult>;
+
+const LONGEST_CALL_ID = "x".repeat(64 * 2 + 1);
+const PICTURE_DROPPED = "The picture of the screen was too large to send, so this look has none.";
+
+function messageBytes(result: ToolResult): number {
+  return Buffer.byteLength(JSON.stringify({ kind: "toolResult", callId: LONGEST_CALL_ID, result }));
+}
+
+// computerd calls this before it journals a result. A frame over the limit would close the link, and the call sent again would
+// get the same answer from the journal at every reconnect.
+export function fitToLink(result: ToolResult): ToolResult {
+  if (result.screen === undefined || messageBytes(result) <= MAX_COMPUTER_MESSAGE_BYTES) {
+    return result;
+  }
+  const { image: _image, ...view } = result.screen;
+  let fitted: ToolResult = { ...result, output: `${result.output}\n${PICTURE_DROPPED}`, screen: view };
+  while (fitted.screen !== undefined && fitted.screen.marks.length > 0 && messageBytes(fitted) > MAX_COMPUTER_MESSAGE_BYTES) {
+    const marks = fitted.screen.marks.slice(0, Math.floor(fitted.screen.marks.length / 2));
+    fitted = { ...fitted, screen: { ...fitted.screen, marks, unlisted: fitted.screen.unlisted + fitted.screen.marks.length - marks.length } };
+  }
+  return fitted;
+}
+
+// The journal keeps results for days, so it keeps no picture of the screen. A repeated call gets the marks and no picture.
+export function withoutScreenImage(result: ToolResult): ToolResult {
+  if (result.screen?.image === undefined) {
+    return result;
+  }
+  const { image: _image, ...view } = result.screen;
+  return { ...result, screen: view };
+}
 
 // Every computerd accepted exactly these before hello named its tools. This is history, so it never changes.
 export const TOOLS_BEFORE_ANNOUNCEMENT: readonly string[] = [

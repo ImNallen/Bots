@@ -14,6 +14,7 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
   browser_click: { everything: true, outside: true, shell: false, nothing: false },
   browser_type: { everything: true, outside: true, shell: false, nothing: false },
   browser_press: { everything: true, outside: true, shell: false, nothing: false },
+  desktop_look: { everything: true, outside: false, shell: false, nothing: false },
   memory_save: { everything: true, outside: false, shell: false, nothing: false },
   memory_forget: { everything: true, outside: false, shell: false, nothing: false },
   description_set: { everything: true, outside: false, shell: false, nothing: false },
@@ -32,9 +33,9 @@ describe("decideTool for a read-only run", () => {
     },
   );
 
-  it("forbids exactly the 9 tools that change something", () => {
+  it("forbids exactly the 9 tools that change something, and the look at the logged-in desktop", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, touchedComputer: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 });
 

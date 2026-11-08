@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
 import { describeCadence } from "@bots/convex/scheduleTime";
-import { OUTPUT_CAP_BYTES,
+import { MAX_COMPUTER_MESSAGE_BYTES, OUTPUT_CAP_BYTES,
   callIdToFileStem,
   computerMessage,
   parseJsonMessage,
@@ -4223,6 +4223,68 @@ try {
     }
   });
 
+  await scenario("screens. a run keeps only its newest look, and nothing of it outlives the run", async () => {
+    const owner = clientFor(await signToken(`dev:verify-screens-${nonce}@localhost`));
+    const chat = await newChat({ client: owner, name: "screens" });
+    const adminRun = <T>(fn: string, args: object): T => {
+      const result = runConvex(["run", fn, JSON.stringify(args)]);
+      assert.ok(result.kind === "ok", `convex run ${fn} failed`);
+      return JSON.parse(result.stdout) as T;
+    };
+    const view = (title: string) => JSON.stringify({ width: 1280, height: 800, windows: [{ app: "Chromium", pid: 7, kind: "frame", title }], active: 0, marks: [], unlisted: 0, silent: [] });
+    const look = (toolCallId: string, title: string, bytes: number[]) => ({
+      kind: "toolResult" as const,
+      toolCallId,
+      name: "desktop_look",
+      outcome: "ok" as const,
+      output: "Looked at the screen.",
+      truncated: false,
+      screen: { view: view(title), image: { mediaType: "image/png" as const, bytes: new Uint8Array(bytes).buffer } },
+    });
+    try {
+      const runId = await chat.send(`look ${nonce}`);
+      const claimed = await service.mutation(api.runs.claim, { runId });
+      assert.ok(claimed.kind === "claimed");
+      const fenced = { runId, leaseToken: claimed.leaseToken };
+      const first = await service.mutation(api.runs.append, { ...fenced, expectedSeq: claimed.nextSeq, body: look("lookAAAA1", "first", [1, 2, 3]) });
+      await check("an append with a screen stores an event with only the short output", () => {
+        assert.deepEqual(first, { kind: "toolResult", toolCallId: "lookAAAA1", name: "desktop_look", outcome: "ok", output: "Looked at the screen.", truncated: false });
+      });
+      await check("the run's screens row holds that look, its view, and its picture", async () => {
+        const row = await service.query(api.screens.ofRun, { runId });
+        assert.equal(row?.toolCallId, "lookAAAA1");
+        assert.equal(row?.view, view("first"));
+        assert.deepEqual([...new Uint8Array(row?.image?.bytes ?? new ArrayBuffer(0))], [1, 2, 3]);
+      });
+      await service.mutation(api.runs.append, { ...fenced, expectedSeq: claimed.nextSeq + 1, body: look("lookAAAA2", "second", [4]) });
+      await check("a second look replaces the row, so a run has one", async () => {
+        const row = await service.query(api.screens.ofRun, { runId });
+        assert.equal(row?.toolCallId, "lookAAAA2");
+        assert.deepEqual([...new Uint8Array(row?.image?.bytes ?? new ArrayBuffer(0))], [4]);
+      });
+      await check("no owner or anonymous client reads a run's screen", async () => {
+        await assertRejected(owner.query(api.screens.ofRun, { runId }), /Not authorized/);
+        await assertRejected(anonymous.query(api.screens.ofRun, { runId }), /Not authorized/);
+      });
+      await service.mutation(api.runs.finish, { ...fenced, state: { kind: "done" } });
+      await check("the screen goes when the run ends", async () => {
+        assert.equal(await service.query(api.screens.ofRun, { runId }), null);
+      });
+
+      const routine = adminRun<{ scheduleId: Id<"schedules"> }>("scheduleChecks:createForCheck", { botId: chat.botId, instruction: `screens ${nonce}` });
+      const readOnlyRun = adminRun<Id<"runs">>("scheduleChecks:fireForCheck", { scheduleId: routine.scheduleId });
+      const readOnly = await service.mutation(api.runs.claim, { runId: readOnlyRun });
+      assert.ok(readOnly.kind === "claimed");
+      await service.mutation(api.runs.append, { runId: readOnlyRun, leaseToken: readOnly.leaseToken, expectedSeq: readOnly.nextSeq, body: look("lookAAAA3", "routine", [5]) });
+      await check("a read-only run keeps no screen, even one sent straight to runs.append", async () => {
+        assert.equal(await service.query(api.screens.ofRun, { runId: readOnlyRun }), null);
+      });
+      await service.mutation(api.runs.finish, { runId: readOnlyRun, leaseToken: readOnly.leaseToken, state: { kind: "cancelled" } });
+    } finally {
+      await owner.mutation(api.bots.remove, { botId: chat.botId }).catch(() => {});
+    }
+  });
+
   await scenario("approvals. the orchestrator asks, and only the owner answers", async () => {
     const scriptedShell = (text: string, command: string) =>
       fake.script(text, ({ toolResults }) =>
@@ -4893,7 +4955,7 @@ try {
     });
     await check("a message over maxPayload closes the socket", async () => {
       const probe = await helloLink(SECOND_COMPUTER_TOKEN);
-      probe.socket.send("x".repeat(1024 * 1024));
+      probe.socket.send("x".repeat(MAX_COMPUTER_MESSAGE_BYTES + 1));
       assert.equal(await probe.closed, 1009);
     });
     await check("a newer connection replaces the older one", async () => {

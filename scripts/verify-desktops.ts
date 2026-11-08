@@ -1,8 +1,11 @@
 // Runs in a user VM, as the computerd user, from the release's root. It uses the real desktops and browser code against real
 // units, with no link and no orchestrator. infra/proxmox/verify-desktop.sh runs it. Pass a directory for a frame of each desktop.
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type ToolResult } from "@bots/protocol";
 import { createBrowser } from "../apps/computerd/src/browser.ts";
+import { createDesktop } from "../apps/computerd/src/desktop.ts";
 import { createDesktops, createSystemd, IDLE_STOP_MS, streamPort, type DesktopLease, type Slot, type Systemd } from "../apps/computerd/src/desktops.ts";
 
 const FRAMES = process.argv[2];
@@ -53,6 +56,7 @@ let clockOffset = 0;
 const now = (): number => Date.now() + clockOffset;
 const desktops = createDesktops({ systemd: counted, runtimeDir: RUNTIME_DIR, now });
 const browser = createBrowser({ desktops });
+const desktop = createDesktop({ desktops });
 
 const browse = (botId: string, tool: Parameters<typeof browser.execute>[0]["tool"]) => browser.execute({ botId, tool, browsing: undefined, signal });
 const refOf = (output: string, label: string): number => Number(new RegExp(`\\[(\\d+)\\] [^\\n]*${label}`).exec(output)?.[1]);
@@ -138,6 +142,49 @@ check(again.slot === (leases.get(BOTS[1]) as DesktopLease).slot, "a new instance
 again.release();
 const sameScreen = await createBrowser({ desktops: recovered }).execute({ botId: BOTS[1], tool: { name: "browser_snapshot", args: {} }, browsing: undefined, signal });
 check(sameScreen.output.includes("typed by a person"), "a new instance over the same state finds the same page", sameScreen.output);
+
+const lookAt = (botId: string) => desktop.execute({ botId, tool: { name: "desktop_look", args: {} }, signal });
+const pictureBytes = (result: ToolResult): number => Buffer.byteLength(result.screen?.image?.base64 ?? "", "base64");
+async function savePicture(result: ToolResult, name: string): Promise<void> {
+  if (FRAMES !== undefined && result.screen?.image !== undefined) {
+    await writeFile(`${FRAMES}/look-${name}.${result.screen.image.mediaType === "image/png" ? "png" : "jpg"}`, Buffer.from(result.screen.image.base64, "base64"));
+  }
+}
+const marked = (result: ToolResult, role: string, name: string) => result.screen?.marks.find((mark) => mark.role === role && mark.name === name);
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("a form to look at", `<input aria-label="Your name"><button>Send it</button>`) } });
+startedAt = performance.now();
+const looked = await lookAt(BOTS[0]);
+measure("a look at a desktop with a form", startedAt);
+const active = looked.screen?.active === null || looked.screen === undefined ? undefined : looked.screen.windows[looked.screen.active];
+check(looked.outcome === "ok" && active?.app === "Chromium" && active.title.startsWith("a form to look at"), "a look names Chromium's window as active", looked.output + JSON.stringify(active));
+check(marked(looked, "entry", "Address and search bar") !== undefined, "a look lists Chromium's address bar, which CDP cannot reach");
+check(marked(looked, "entry", "Your name") !== undefined && marked(looked, "button", "Send it") !== undefined, "a look lists the page's field and button");
+check(looked.screen?.marks.some((mark) => looked.screen?.windows[mark.win]?.kind === "panel") === true, "a look lists the panel");
+check(looked.screen?.image !== undefined && pictureBytes(looked) <= MAX_SCREEN_IMAGE_BYTES, `a look's picture fits: ${pictureBytes(looked)} bytes of ${looked.screen?.image?.mediaType}`);
+await savePicture(looked, "form");
+
+const links = Array.from({ length: 2000 }, (_, index) => `<a href="#l${index}">link number ${index}</a>`).join(" ");
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("many links", links) } });
+startedAt = performance.now();
+const crowded = await lookAt(BOTS[0]);
+const crowdedMs = performance.now() - startedAt;
+measure("a look at a page with 2,000 links", startedAt);
+check(crowded.outcome === "ok" && crowdedMs < 3000, "a look at a page with 2,000 links takes under 3 s", `${Math.round(crowdedMs)} ms`);
+check(crowded.screen?.marks.length === MAX_MARKS && (crowded.screen?.unlisted ?? 0) > 0, `it lists ${MAX_MARKS} marks and counts the rest`, `${crowded.screen?.marks.length} listed, ${crowded.screen?.unlisted} more`);
+check(crowded.screen?.image !== undefined && pictureBytes(crowded) <= MAX_SCREEN_IMAGE_BYTES, `its picture fits: ${pictureBytes(crowded)} bytes of ${crowded.screen?.image?.mediaType}`);
+await savePicture(crowded, "many-links");
+
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("frozen", `<button>still here</button><script>setTimeout(() => { for (;;) {} }, 300)</script>`) } });
+await new Promise((done) => setTimeout(done, 1000));
+startedAt = performance.now();
+const frozen = await lookAt(BOTS[0]);
+const frozenMs = performance.now() - startedAt;
+measure("a look while the page spins in while (true)", startedAt);
+check(frozen.outcome === "ok" && frozenMs < 30_000, "a look still answers while the page spins", `${frozen.outcome} in ${Math.round(frozenMs)} ms, silent ${JSON.stringify(frozen.screen?.silent)}`);
+check(frozen.screen?.image !== undefined, "it still has its picture");
+await savePicture(frozen, "frozen");
+await browse(BOTS[0], { name: "browser_navigate", args: { url: "about:blank" } });
 
 (leases.get(BOTS[1]) as DesktopLease).release();
 clockOffset += IDLE_STOP_MS * 2;

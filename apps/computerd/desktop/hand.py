@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import os
 import select
@@ -15,7 +17,7 @@ os.environ["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={BUS}"
 # computerd ends this process at its own deadline. This alarm also ends it when computerd dies first.
 signal.alarm(30)
 
-from PIL import ImageGrab  # noqa: E402
+from PIL import ImageDraw, ImageFont, ImageGrab  # noqa: E402
 
 STATES = ["focused", "focusable", "checked", "pressed", "selected", "expanded", "enabled", "active", "modal", "editable"]
 VALUE_ROLES = {"entry", "text", "combo box", "spin button", "slider"}
@@ -43,7 +45,7 @@ def capture(request):
     tree = walk_in_child(request) if os.path.exists(BUS) else {"bus": "missing"}
     frame = grab()
     width, height = frame.size
-    return {"capture": {"width": width, "height": height, "apps": [], "windows": [], "nodes": [], **tree}}
+    return {"capture": {"width": width, "height": height, "apps": [], "windows": [], "nodes": [], "menus": [], **tree}}
 
 
 # libatspi aborts its process when it cannot reach the accessibility bus, and a frozen app can stall a call, so the walk runs in a
@@ -55,8 +57,9 @@ def walk_in_child(request):
         os.close(read_end)
         signal.alarm(25)
         try:
-            tree = {"bus": "ok", "apps": [], "windows": [], "nodes": []}
+            tree = {"bus": "ok", "apps": [], "windows": [], "nodes": [], "menus": []}
             walk_desktop(tree, set(request["roles"]), request["maxNodes"], request["appDeadlineMs"] / 1000)
+            tree["menus"] = [menu if menu["box"] is not None else {"win": menu["win"], "box": {"x": 0, "y": 0, "w": 0, "h": 0}} for menu in tree["menus"]]
             data = json.dumps(tree, separators=(",", ":")).encode()
         except BaseException:
             data = b'{"bus":"failed"}'
@@ -82,6 +85,14 @@ def walk_in_child(request):
         return json.loads(b"".join(chunks))
     except ValueError:
         return {"bus": "failed"}
+
+
+def union(a, b):
+    if a is None:
+        return dict(b)
+    left, top = min(a["x"], b["x"]), min(a["y"], b["y"])
+    right, bottom = max(a["x"] + a["w"], b["x"] + b["w"]), max(a["y"] + a["h"], b["y"] + b["h"])
+    return {"x": left, "y": top, "w": right - left, "h": bottom - top}
 
 
 def walk_desktop(tree, roles, max_nodes, app_deadline):
@@ -147,11 +158,11 @@ def walk_desktop(tree, roles, max_nodes, app_deadline):
                         "modal": states.contains(state_types["modal"]),
                     }
                 )
-                stack = [(window.get_child_at_index(i), 1) for i in reversed(range(window.get_child_count()))]
+                stack = [(window.get_child_at_index(i), 1, None) for i in reversed(range(window.get_child_count()))]
                 while stack:
                     if time.monotonic() > deadline:
                         raise TimeoutError
-                    node, depth = stack.pop()
+                    node, depth, menu = stack.pop()
                     visits += 1
                     if node is None or depth > MAX_DEPTH or visits > MAX_VISITS:
                         continue
@@ -161,6 +172,7 @@ def walk_desktop(tree, roles, max_nodes, app_deadline):
                     role = node.get_role_name()
                     focusable = node_states.contains(state_types["focusable"])
                     if (role in roles or focusable) and len(tree["nodes"]) < max_nodes:
+                        box = box_of(node)
                         tree["nodes"].append(
                             {
                                 "win": win,
@@ -169,16 +181,73 @@ def walk_desktop(tree, roles, max_nodes, app_deadline):
                                 "value": value_of(node, role),
                                 "states": [label for label, state in state_types.items() if node_states.contains(state)],
                                 "focusable": focusable,
-                                "box": box_of(node),
+                                "box": box,
+                                "menu": menu,
                             }
                         )
+                        if menu is not None and box["w"] > 0 and box["h"] > 0:
+                            tree["menus"][menu]["box"] = union(tree["menus"][menu]["box"], box)
+                    inner = menu
+                    if role == "menu":
+                        # A GTK menu opens inside its own window, over the rest of it. Its items are the only part that shows, so their
+                        # union is where the open menu covers that window.
+                        inner = len(tree["menus"])
+                        tree["menus"].append({"win": win, "box": None})
                     count = node.get_child_count()
-                    stack.extend((node.get_child_at_index(i), depth + 1) for i in reversed(range(count)))
+                    stack.extend((node.get_child_at_index(i), depth + 1, inner) for i in reversed(range(count)))
         except Exception:
             entry["silent"] = True
 
 
-VERBS = {"capture": capture}
+COLORS = [(214, 39, 40), (31, 119, 180), (44, 160, 44), (148, 103, 189), (255, 127, 14), (23, 190, 207), (227, 119, 194)]
+
+
+def overlaps(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def render(request):
+    if frame is None:
+        raise ValueError("render before capture")
+    image = frame.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
+    except OSError:
+        font = ImageFont.load_default()
+    placed = []
+    for index, item in enumerate(request["boxes"]):
+        box = item["box"]
+        color = COLORS[index % len(COLORS)]
+        left, top, right, bottom = box["x"], box["y"], box["x"] + box["w"] - 1, box["y"] + box["h"] - 1
+        draw.rectangle((left, top, right, bottom), outline=color, width=2)
+        text = str(item["mark"])
+        _, _, text_w, text_h = draw.textbbox((0, 0), text, font=font)
+        w, h = text_w + 6, text_h + 4
+        for x, y in ((left, top - h), (left, top), (right - w + 1, bottom + 1), (right - w + 1, bottom - h + 1)):
+            x = min(max(x, 0), image.size[0] - w)
+            y = min(max(y, 0), image.size[1] - h)
+            label = (x, y, x + w, y + h)
+            if not any(overlaps(label, other) for other in placed):
+                placed.append(label)
+                draw.rectangle(label, fill=color)
+                draw.text((x + 3, y + 1), text, fill=(255, 255, 255), font=font)
+                break
+    return {"image": encode(image, request["maxBytes"])}
+
+
+def encode(image, max_bytes):
+    attempts = [("image/png", lambda out: image.save(out, "PNG"))]
+    attempts += [("image/jpeg", lambda out, q=q: image.save(out, "JPEG", quality=q)) for q in (80, 65, 50)]
+    for media_type, save in attempts:
+        out = io.BytesIO()
+        save(out)
+        if out.tell() <= max_bytes:
+            return {"mediaType": media_type, "base64": base64.b64encode(out.getvalue()).decode("ascii")}
+    return None
+
+
+VERBS = {"capture": capture, "render": render}
 
 
 def main():

@@ -1,9 +1,10 @@
 import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
-import { isMemoryInvocation, isScheduleInvocation, makeCallId, parseToolCall } from "@bots/protocol";
+import { isMemoryInvocation, isScheduleInvocation, makeCallId, parseToolCall, screenView } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import type { Link } from "./link.ts";
+import { shownScreen, type StoredScreen } from "./desktop.ts";
+import type { Link, LinkOutcome } from "./link.ts";
 import type { LogFields } from "./log.ts";
 import {
   DENIED_OUTPUT,
@@ -134,6 +135,36 @@ async function loadEvents(args: { service: Service; runId: Id<"runs">; claim: Cl
   }
 }
 
+const storedView = screenView.omit({ image: true });
+
+async function loadScreen(service: Service, runId: Id<"runs">): Promise<StoredScreen | null> {
+  const row = await service.query(api.screens.ofRun, { runId });
+  if (row === null) {
+    return null;
+  }
+  const view = storedView.safeParse(JSON.parse(row.view));
+  if (!view.success) {
+    return null;
+  }
+  return { toolCallId: row.toolCallId, view: view.data, image: row.image === null ? null : { mediaType: row.image.mediaType, bytes: new Uint8Array(row.image.bytes) } };
+}
+
+type ToolResultBase = { kind: "toolResult"; toolCallId: string; name: string };
+
+// A look's screen goes to the run's screens row, and the event keeps only the short output.
+export function toAppendBody(base: ToolResultBase, result: LinkOutcome): AppendBody {
+  if (result.outcome === "unavailable") {
+    return { ...base, ...result };
+  }
+  const { screen, ...rest } = result;
+  if (screen === undefined) {
+    return { ...base, ...rest };
+  }
+  const { image, ...view } = screen;
+  const kept = image === undefined ? {} : { image: { mediaType: image.mediaType, bytes: Uint8Array.from(Buffer.from(image.base64, "base64")).buffer } };
+  return { ...base, ...rest, screen: { view: JSON.stringify(view), ...kept } };
+}
+
 async function callModel(args: {
   deps: RunnerDeps;
   runId: Id<"runs">;
@@ -198,6 +229,7 @@ async function callModel(args: {
       },
       events: events.map((event) => event.body),
       attachments,
+      screen: claim.capability === "full" ? shownScreen(await loadScreen(deps.service, runId)) : undefined,
     }),
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),
@@ -293,7 +325,7 @@ async function runTool(args: {
     cancel: lease.cancel,
   });
   deps.log({ level: "info", event: "tool-result", callId, outcome: result.outcome, truncated: result.truncated });
-  return { ...base, ...result };
+  return toAppendBody(base, result);
 }
 
 // The only state that survives one pass of this loop is what Convex stored, which is why a restart resumes it.

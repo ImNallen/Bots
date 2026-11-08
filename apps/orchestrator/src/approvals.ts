@@ -11,10 +11,10 @@ type Ask = "ask" | "run" | "askAfterComputer";
 
 // One answer for each level and effect, so a new effect or level fails the typecheck until it has a row here.
 const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
-  everything: { reads: "ask", changesVm: "ask", changesOutside: "ask", controlsComputer: "ask", changesMemory: "ask", changesSchedule: "ask" },
-  outside: { reads: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterComputer", changesSchedule: "ask" },
-  shell: { reads: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
-  nothing: { reads: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
+  everything: { reads: "ask", readsScreen: "ask", changesVm: "ask", changesOutside: "ask", controlsComputer: "ask", changesMemory: "ask", changesSchedule: "ask" },
+  outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterComputer", changesSchedule: "ask" },
+  shell: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
+  nothing: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
 };
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
@@ -31,6 +31,7 @@ export function decideTool(args: {
 }): ToolDecision {
   switch (args.capability) {
     case "readOnly":
+      // readsScreen is not reads, so a routine never sees the logged-in desktop.
       return toolEffect(args.toolName) === "reads" ? "run" : "reject";
     case "full": {
       const ask = ASKS[args.level][toolEffect(args.toolName)];
