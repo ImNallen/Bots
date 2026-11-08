@@ -7,6 +7,7 @@ import { BotFace, type FaceState } from "./BotFace.tsx";
 import { characterOf, type Character } from "./character.ts";
 import { CharacterPicker } from "./CharacterPicker.tsx";
 import { Icon } from "./Icon.tsx";
+import { RoutinesSection } from "./RoutinesSection.tsx";
 import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
 
@@ -206,11 +207,12 @@ export function InfoPanel(props: {
   onOpenScreen: () => void;
   onShowChat: () => void;
   onShowRoutines: () => void;
+  onComposeRoutine: () => void;
 }) {
-  const { bot, faceState, showRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen, onShowChat, onShowRoutines } = props;
+  const { bot, faceState, showRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen, onShowChat, onShowRoutines, onComposeRoutine } = props;
   const character = characterOf(bot);
   return (
-    <aside className="info" aria-label={`About ${bot.name}`}>
+    <aside className="info" data-routines={showRoutines} aria-label={`About ${bot.name}`}>
       <div className="info-head">
         <span>Bot details</span>
         <button type="button" className="round" aria-label="Close bot details" onClick={onClose}>
@@ -218,7 +220,7 @@ export function InfoPanel(props: {
         </button>
       </div>
       <div className="info-who">
-        <BotFace character={character} size={64} state={faceState} />
+        <BotFace character={character} size={showRoutines ? 48 : 64} state={faceState} />
         <div>
           <h2>{bot.name}</h2>
           {bot.title && <p className="info-title">{bot.title}</p>}
@@ -229,17 +231,19 @@ export function InfoPanel(props: {
         <button type="button" aria-current={showRoutines ? "page" : undefined} onClick={onShowRoutines}>Routines</button>
         <button type="button" onClick={onOpenScreen}>Computer</button>
       </nav>
-      <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
-      <section className="info-card">
-        <h3>Appearance</h3>
-        <CharacterCard botId={bot._id} character={character} />
-      </section>
-      <section className="info-card">
-        <h3>Approvals</h3>
-        <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
-        <p className="panel-note">Choose when your bot asks before acting.</p>
-      </section>
-      <DeleteBot botId={bot._id} name={bot.name} />
+      {showRoutines ? <RoutinesSection botId={bot._id} botName={bot.name} onNewRoutine={onComposeRoutine} /> : <>
+        <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
+        <section className="info-card">
+          <h3>Appearance</h3>
+          <CharacterCard botId={bot._id} character={character} />
+        </section>
+        <section className="info-card">
+          <h3>Approvals</h3>
+          <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
+          <p className="panel-note">Choose when your bot asks before acting.</p>
+        </section>
+        <DeleteBot botId={bot._id} name={bot.name} />
+      </>}
     </aside>
   );
 }

@@ -3,12 +3,17 @@ import type { Id } from "@bots/convex/dataModel";
 import { describeCadence } from "@bots/convex/scheduleTime";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
+import activeUrl from "./assets/ui/routine-active.svg";
+import pausedUrl from "./assets/ui/routine-paused.svg";
 import { timeLabel } from "./conversation.ts";
-import { browserTimeZone, routineStatus, runStateWords, type Routine } from "./routines.ts";
+import { browserTimeZone, nextRunLabel, routineStatus, runStateWords, type Routine } from "./routines.ts";
 import { errorMessage } from "./session.tsx";
 import { Icon } from "./Icon.tsx";
 
-function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; timeZone: string; now: number; locale: string }) {
+function RoutineControl({ routine, timeZone, now, locale, expanded, onSelect, onChangeInChat }: {
+  routine: Routine; timeZone: string; now: number; locale: string;
+  expanded: boolean; onSelect: () => void; onChangeInChat: () => void;
+}) {
   const pause = useMutation(api.schedules.pause);
   const resume = useMutation(api.schedules.resume);
   const runNow = useMutation(api.schedules.runNow);
@@ -17,6 +22,8 @@ function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; time
     { kind: "idle" } | { kind: "pending" } | { kind: "confirming" } | { kind: "deleting" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
   const scheduleId = routine._id;
+  const paused = routine.nextFireAt === undefined;
+  const busy = step.kind === "pending" || step.kind === "deleting";
 
   async function act(mutate: (args: { scheduleId: Id<"schedules"> }) => Promise<unknown>) {
     setStep({ kind: "pending" });
@@ -37,109 +44,75 @@ function RoutineRow({ routine, timeZone, now, locale }: { routine: Routine; time
     }
   }
 
-  const paused = routine.nextFireAt === undefined;
+  const toggle = <button type="button" className="routine-toggle" role="switch" aria-checked={!paused}
+    aria-label={`${paused ? "Resume" : "Pause"} ${routine.instruction}`} disabled={busy}
+    onClick={() => void act(paused ? resume : pause)}>
+    <img src={paused ? pausedUrl : activeUrl} alt="" width={32} height={20} />
+  </button>;
+
   return (
-    <li className="note routine-row">
-      <span className="routine-icon"><Icon name="clock" /></span>
-      <div className="routine-content">
-      <p className="note-text">{routine.instruction}</p>
-      <p className="note-meta">{describeCadence(routine.cadence, timeZone)}</p>
-      <p className="note-meta">{routineStatus(routine, { now, timeZone, locale })}</p>
-      {routine.lastMissed !== undefined && (
-        <p className="note-meta">
-          Missed {timeLabel({ at: routine.lastMissed.at, now, locale })}. {routine.lastMissed.reason}
-        </p>
-      )}
-      {routine.recentRuns.length > 0 && (
-        <ul className="routine-runs" aria-label="Recent runs">
+    <div className={expanded ? "routine-detail" : "routine-row"}>
+      {expanded ? <>
+        <h3>{routine.instruction}</h3>
+        <div className="routine-detail-field"><h4>Task</h4><p>{routine.instruction}</p></div>
+        <div className="routine-detail-field"><h4>Schedule</h4><p>{describeCadence(routine.cadence, timeZone)}</p></div>
+        <div className="routine-status"><span>{paused ? "Paused" : "Active"}</span>{toggle}</div>
+        <p className="panel-note">{routineStatus(routine, { now, timeZone, locale })}</p>
+        {routine.lastMissed !== undefined && <p className="panel-note">Missed {timeLabel({ at: routine.lastMissed.at, now, locale })}. {routine.lastMissed.reason}</p>}
+        {routine.recentRuns.length > 0 && <ul className="routine-runs" aria-label="Recent runs">
           {routine.recentRuns.map((run) => {
             const { words, tone } = runStateWords(run.state);
-            return (
-              <li key={run._id} data-tone={tone}>
-                {timeLabel({ at: run.createdAt, now, locale })}. {words}
-              </li>
-            );
+            return <li key={run._id} data-tone={tone}>{timeLabel({ at: run.createdAt, now, locale })}. {words}</li>;
           })}
-        </ul>
-      )}
-      {step.kind === "failed" && (
-        <p className="error" role="alert">
-          {step.message}
-        </p>
-      )}
-      {step.kind === "confirming" || step.kind === "deleting" ? (
-        <>
-          <p className="note-meta">Delete this routine? Its raw pages go. Reports already in the chat stay.</p>
+        </ul>}
+        {step.kind === "confirming" || step.kind === "deleting" ? <div className="confirm">
+          <p>Delete this routine? Its raw pages go. Reports already in the chat stay.</p>
           <div className="confirm-actions">
-            <button type="button" className="btn btn-danger" disabled={step.kind === "deleting"} onClick={() => void confirmDelete()}>
-              {step.kind === "deleting" ? "Deleting" : "Delete"}
-            </button>
-            <button type="button" className="btn" disabled={step.kind === "deleting"} onClick={() => setStep({ kind: "idle" })}>
-              Keep
-            </button>
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void confirmDelete()}>{busy ? "Deleting" : "Delete"}</button>
+            <button type="button" className="btn" disabled={busy} onClick={() => setStep({ kind: "idle" })}>Keep</button>
           </div>
-        </>
-      ) : (
-        <div className="note-actions">
-          <button type="button" disabled={step.kind === "pending"} onClick={() => void act(paused ? resume : pause)}>
-            {paused ? "Resume" : "Pause"}
-          </button>
-          <button type="button" disabled={step.kind === "pending"} onClick={() => void act(runNow)}>
-            Test now
-          </button>
-          <button type="button" disabled={step.kind === "pending"} onClick={() => setStep({ kind: "confirming" })}>
-            Delete
-          </button>
-        </div>
-      )}
-      </div>
-      <span className="routine-badge">{paused ? "Paused" : "Active"}</span>
-    </li>
+        </div> : <div className="routine-actions">
+          <button type="button" className="btn btn-go" disabled={busy} onClick={onChangeInChat}>Change in chat</button>
+          <button type="button" className="btn" disabled={busy} onClick={() => void act(runNow)}>Test now</button>
+          <button type="button" className="btn" disabled={busy} onClick={() => setStep({ kind: "confirming" })}>Delete</button>
+        </div>}
+      </> : <>
+        <button type="button" className="routine-content" aria-label={`Details for ${routine.instruction}`} onClick={onSelect}>
+          <span className="routine-title">{routine.instruction}</span>
+          <span className="routine-cadence">{describeCadence(routine.cadence, timeZone)}{paused ? " · Paused" : ""}</span>
+        </button>
+        {toggle}
+      </>}
+      {step.kind === "failed" && <p className="error" role="alert">{step.message}</p>}
+    </div>
   );
 }
 
-export function RoutinesSection({ botId, botName, onNewRoutine, onShowChat }: { botId: Id<"bots">; botName: string; onNewRoutine: () => void; onShowChat: () => void }) {
+export function RoutinesSection({ botId, botName, onNewRoutine }: { botId: Id<"bots">; botName: string; onNewRoutine: () => void }) {
   const list = useQuery(api.schedules.listForBot, { botId });
-  const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
+  const [selectedId, setSelectedId] = useState<Id<"schedules"> | null>(null);
   const now = Date.now();
   const locale = navigator.language;
   const routines = list?.routines ?? [];
-  const active = routines.filter((r) => r.nextFireAt !== undefined).length;
-  const shown = routines.filter((r) => filter === "all" || (filter === "active" ? r.nextFireAt !== undefined : r.nextFireAt === undefined));
-  const latest = routines.flatMap((routine) => routine.recentRuns.map((run) => ({ run, instruction: routine.instruction })))
-    .sort((a, b) => b.run.createdAt - a.run.createdAt)[0];
-  const lastStatus = latest === undefined ? undefined : runStateWords(latest.run.state);
+  const selected = routines.find((routine) => routine._id === selectedId);
+  const nextFireAt = routines.reduce<number | undefined>((next, routine) => routine.nextFireAt === undefined ? next : Math.min(next ?? Infinity, routine.nextFireAt), undefined);
+  const timeZone = list?.timeZone ?? browserTimeZone();
+
   return (
-    <section className="routines-page" aria-label={`${botName}'s routines`}>
-      <div className="routines-heading">
-        <div><h2>A little less to remember.</h2><p>Give {botName} a rhythm. Your routines run quietly in the background.</p></div>
-        <button type="button" className="btn btn-go" onClick={onNewRoutine}><Icon name="plus" /> New routine</button>
-      </div>
-      <nav className="routine-filters" aria-label="Filter routines">
-        <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All routines <span>{routines.length}</span></button>
-        <button type="button" aria-pressed={filter === "active"} onClick={() => setFilter("active")}>Active <span>{active}</span></button>
-        <button type="button" aria-pressed={filter === "paused"} onClick={() => setFilter("paused")}>Paused <span>{routines.length - active}</span></button>
-      </nav>
-      {list === undefined ? <p role="status">Loading routines.</p> : shown.length === 0 ? (
-        <div className="card routine-empty"><Icon name="clock" /><h3>{routines.length === 0 ? "A little help, on repeat." : "No routines here."}</h3><p>Ask {botName} in chat to repeat a task, then approve its routine card.</p></div>
-      ) : (
-        <ul className="card notes routine-list">
-          {shown.map((routine) => <RoutineRow key={routine._id} routine={routine} timeZone={list?.timeZone ?? browserTimeZone()} now={now} locale={locale} />)}
-        </ul>
-      )}
-      {latest !== undefined && lastStatus !== undefined && <section className="routine-last-run" aria-label="Last run">
-        <h3>Last run</h3>
-        <button type="button" className="routine-result" onClick={onShowChat}>
-          <Icon name={latest.run.state.kind === "done" ? "routineCheck" : "clock"} />
-          <span className="routine-result-text">
-            <strong>{latest.instruction}</strong>
-            <span data-tone={lastStatus.tone}>{lastStatus.words}{latest.run.state.kind === "done" ? ". Reports arrive in your conversation." : "."}</span>
-            <small>{timeLabel({ at: latest.run.createdAt, now, locale })}</small>
-          </span>
-          <span className="routine-result-arrow"><Icon name="forward" /></span>
-        </button>
-      </section>}
-      <p className="panel-note">Routine reports arrive in your conversation. To add a routine, ask {botName} in chat.</p>
+    <section className="routines-panel" aria-label={`${botName}'s routines`}>
+      {selected === undefined ? <>
+        <div className="routines-heading"><h2>Routines</h2><button type="button" className="btn" onClick={onNewRoutine}><Icon name="plus" /> New</button></div>
+        {list === undefined ? <p role="status">Loading routines.</p> : routines.length === 0 ? (
+          <div className="card routine-empty"><h3>A little help, on repeat.</h3><p>Ask {botName} in chat to repeat a task, then approve its routine card.</p></div>
+        ) : <ul className="routine-list">{routines.map((routine) => <li key={routine._id}>
+          <RoutineControl routine={routine} timeZone={timeZone} now={now} locale={locale} expanded={false} onSelect={() => setSelectedId(routine._id)} onChangeInChat={onNewRoutine} />
+        </li>)}</ul>}
+        {nextFireAt !== undefined && <p className="panel-note">Next run: {nextRunLabel({ at: nextFireAt, now, timeZone, locale })}.</p>}
+      </> : <>
+        <button type="button" className="btn routine-back" onClick={() => setSelectedId(null)}><Icon name="back" /> All routines</button>
+        <RoutineControl key={selected._id} routine={selected} timeZone={timeZone} now={now} locale={locale} expanded onSelect={() => setSelectedId(null)} onChangeInChat={onNewRoutine} />
+      </>}
+      <p className="panel-note">Results arrive in your conversation.</p>
     </section>
   );
 }
