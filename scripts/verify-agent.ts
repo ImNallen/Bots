@@ -109,7 +109,7 @@ function findFreePort(): Promise<number> {
   });
 }
 
-type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string }[]; tool_call_id?: string };
+type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string }[]; tool_call_id?: string; name?: string };
 type FakeRequest = {
   at: number;
   authorization: string;
