@@ -411,7 +411,7 @@ function BotChat({ botId }: { botId: string }) {
             onProfileEditsChange={setProfileEdits}
             onClose={closeInfo}
             onOpenScreen={openScreen}
-            onShowChat={() => void navigate({ to: "/bots/$botId", params, search: { ...(screen === true && { screen: true }), info: true }, replace: true })}
+            onShowChat={() => void navigate({ to: "/bots/$botId", params, search: { ...(screen === true && { screen: true }), ...(!isPhone && { info: true }) }, replace: true })}
             onComposeRoutine={() => {
               void navigate({ to: "/bots/$botId", params, search: screen === true ? { screen: true } : {}, replace: true });
               requestAnimationFrame(() => document.getElementById("message")?.focus());
