@@ -14,6 +14,7 @@ import {
   runEventBody,
   runState,
   runTrigger,
+  screenImageBytes,
 } from "./validators.js";
 
 export default defineSchema({
@@ -161,5 +162,14 @@ export default defineSchema({
     runId: v.id("runs"),
     text: v.string(),
     reasoning: v.optional(v.string()),
+  }).index("by_run", ["runId"]),
+
+  // The newest look of a run. A run has at most one, and endRun deletes it, so no picture of the owner's pages outlives its run.
+  screens: defineTable({
+    runId: v.id("runs"),
+    ownerId: v.id("users"),
+    toolCallId: v.string(),
+    view: v.string(),
+    image: v.optional(screenImageBytes),
   }).index("by_run", ["runId"]),
 });

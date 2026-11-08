@@ -1,6 +1,7 @@
-import { isBrowserInvocation } from "@bots/protocol";
+import { isBrowserInvocation, isDesktopInvocation } from "@bots/protocol";
 import { createBrowser, webSocketConnector } from "./browser.ts";
 import { createCalls } from "./calls.ts";
+import { createDesktop } from "./desktop.ts";
 import { parseConfig } from "./config.ts";
 import { createDesktops, createSystemd } from "./desktops.ts";
 import { executeSystemTool } from "./execute.ts";
@@ -42,15 +43,20 @@ setInterval(() => {
 }, DESKTOP_SWEEP_INTERVAL_MS);
 
 const browser = createBrowser({ desktops, takeoverSettled: logins.settled, personHasScreen: logins.hasInputStream });
+const desktop = createDesktop({ desktops, takeoverSettled: logins.settled });
 const calls = createCalls({
   journal,
   // Every tool holds the bot's desktop, so a long shell tool cannot lose the page that the bot left open.
   execute: async ({ botId, tool, browsing, signal }) => {
     const release = desktops.hold(botId);
     try {
-      return await (isBrowserInvocation(tool)
-        ? browser.execute({ botId, tool, browsing, signal })
-        : executeSystemTool({ botId, tool, signal }));
+      if (isBrowserInvocation(tool)) {
+        return await browser.execute({ botId, tool, browsing, signal });
+      }
+      if (isDesktopInvocation(tool)) {
+        return await desktop.execute({ botId, tool, signal });
+      }
+      return await executeSystemTool({ botId, tool, signal });
     } finally {
       release();
     }

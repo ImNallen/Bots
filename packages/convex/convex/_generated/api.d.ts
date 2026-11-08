@@ -25,6 +25,7 @@ import type * as runs from "../runs.js";
 import type * as scheduleChecks from "../scheduleChecks.js";
 import type * as scheduleTime from "../scheduleTime.js";
 import type * as schedules from "../schedules.js";
+import type * as screens from "../screens.js";
 import type * as threads from "../threads.js";
 import type * as users from "../users.js";
 import type * as validators from "../validators.js";
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   scheduleChecks: typeof scheduleChecks;
   scheduleTime: typeof scheduleTime;
   schedules: typeof schedules;
+  screens: typeof screens;
   threads: typeof threads;
   users: typeof users;
   validators: typeof validators;

@@ -3,7 +3,7 @@ import type { Id } from "@bots/convex/dataModel";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Link } from "./link.ts";
-import { startRunner } from "./runner.ts";
+import { startRunner, toAppendBody } from "./runner.ts";
 import type { Service } from "./service.ts";
 
 const POLL_MS = 5000;
@@ -141,5 +141,25 @@ describe("the runner's claims", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(claims.slice(0, 8)).toEqual(ids.slice(0, 8));
     expect(claims).toContain("run8");
+  });
+});
+
+describe("toAppendBody", () => {
+  const base = { kind: "toolResult" as const, toolCallId: "abcDEF123", name: "desktop_look" };
+  const view = { width: 1280, height: 800, windows: [], active: null, marks: [], unlisted: 0, silent: [] };
+
+  it("moves a look's screen into the append's screen, with the picture as bytes and the view as JSON", () => {
+    const body = toAppendBody(base, { outcome: "ok", output: "Looked at the screen.", truncated: false, screen: { ...view, image: { mediaType: "image/png", base64: "AQID" } } });
+    expect(body).toMatchObject({ ...base, outcome: "ok", output: "Looked at the screen.", truncated: false });
+    const screen = (body as { screen: { view: string; image: { mediaType: string; bytes: ArrayBuffer } } }).screen;
+    expect(JSON.parse(screen.view)).toEqual(view);
+    expect(screen.image.mediaType).toBe("image/png");
+    expect([...new Uint8Array(screen.image.bytes)]).toEqual([1, 2, 3]);
+  });
+
+  it("stores a look with no picture, and a result with no screen as before", () => {
+    expect(toAppendBody(base, { outcome: "ok", output: "x", truncated: false, screen: view })).toEqual({ ...base, outcome: "ok", output: "x", truncated: false, screen: { view: JSON.stringify(view) } });
+    expect(toAppendBody(base, { outcome: "error", output: "x", truncated: false })).toEqual({ ...base, outcome: "error", output: "x", truncated: false });
+    expect(toAppendBody(base, { outcome: "unavailable", output: "x", truncated: false })).toEqual({ ...base, outcome: "unavailable", output: "x", truncated: false });
   });
 });

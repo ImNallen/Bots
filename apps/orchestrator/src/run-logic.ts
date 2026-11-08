@@ -10,6 +10,7 @@ import {
   type ToolInvocation,
   type ToolName,
 } from "@bots/protocol";
+import { OLDER_LOOK, type ShownScreen } from "./desktop.ts";
 import type { MistralMessage, MistralUserChunk } from "./mistral.ts";
 
 export type RunEventBody = Doc<"runEvents">["body"];
@@ -146,10 +147,22 @@ function endUnansweredTurn(messages: MistralMessage[]): void {
   }
 }
 
+// Only the newest look carries its picture and marks, so a request holds one picture however long the history is.
+function toolMessage(event: ToolResultBody, screen: ShownScreen | undefined): MistralMessage {
+  const base = { role: "tool" as const, tool_call_id: event.toolCallId, name: event.name };
+  const text = toolResultContent(event);
+  if (screen !== undefined && screen.toolCallId === event.toolCallId) {
+    const picture = screen.imageUrl === null ? [] : [{ type: "image_url" as const, image_url: screen.imageUrl }];
+    return { ...base, content: [{ type: "text", text: `${text}\n\n${screen.text}` }, ...picture] };
+  }
+  return { ...base, content: event.name.startsWith("desktop_") ? `${text}\n${OLDER_LOOK}` : text };
+}
+
 export function toMistralMessages(args: {
   system: string;
   events: readonly RunEventBody[];
   attachments?: ReadonlyMap<string, MistralUserChunk[]>;
+  screen?: ShownScreen;
 }): MistralMessage[] {
   const messages: MistralMessage[] = [{ role: "system", content: args.system }];
   let reportsToSkip = args.events.filter((event) => event.kind === "routineReport").length - REPORTS_A_MODEL_READS;
@@ -177,12 +190,7 @@ export function toMistralMessages(args: {
         messages.push(assistantMessage(event));
         break;
       case "toolResult":
-        messages.push({
-          role: "tool",
-          tool_call_id: event.toolCallId,
-          name: event.name,
-          content: toolResultContent(event),
-        });
+        messages.push(toolMessage(event, args.screen));
         break;
       default:
         event satisfies never;
@@ -333,9 +341,14 @@ function offeredTools(run: PromptRun): readonly OfferedTool[] {
   }
 }
 
-export function modelRequest(args: { prompt: PromptArgs; events: readonly RunEventBody[]; attachments?: ReadonlyMap<string, MistralUserChunk[]> }) {
+export function modelRequest(args: {
+  prompt: PromptArgs;
+  events: readonly RunEventBody[];
+  attachments?: ReadonlyMap<string, MistralUserChunk[]>;
+  screen?: ShownScreen;
+}) {
   return {
-    messages: toMistralMessages({ system: systemPrompt(args.prompt), events: args.events, attachments: args.attachments }),
+    messages: toMistralMessages({ system: systemPrompt(args.prompt), events: args.events, attachments: args.attachments, screen: args.screen }),
     tools: offeredTools(args.prompt.run),
   };
 }

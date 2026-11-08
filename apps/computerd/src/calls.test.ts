@@ -51,6 +51,17 @@ describe("calls", () => {
     expect(counter.runs).toBe(1);
   });
 
+  it("journals a look without its picture, so the running call gets the picture and a repeat gets only the marks", async () => {
+    const screen = { width: 1280, height: 800, windows: [], active: null, marks: [], unlisted: 0, silent: [] };
+    const looked: ToolResult = { outcome: "ok", output: "Looked at the screen.", truncated: false, screen: { ...screen, image: { mediaType: "image/png", base64: "AAAA" } } };
+    const { counter, execute } = counting(async () => looked);
+    const calls = createCalls({ journal: await openJournal({ dir }), execute });
+    const desktopRequest = { callId: "run:look", botId: "bot", tool: { name: "desktop_look" as const, args: {} } };
+    expect(await calls.call(desktopRequest)).toEqual(looked);
+    expect(await calls.call(desktopRequest)).toEqual({ ...looked, screen });
+    expect(counter.runs).toBe(1);
+  });
+
   it("replays across a process restart", async () => {
     const first = counting();
     await createCalls({ journal: await openJournal({ dir }), execute: first.execute }).call(request);

@@ -75,6 +75,10 @@ export async function purgeRunBatch(ctx: MutationCtx, runId: Id<"runs">): Promis
       .query("runStreams")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .take(PURGE_BATCH)),
+    ...(await ctx.db
+      .query("screens")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .take(PURGE_BATCH)),
   ];
   await Promise.all(details.length > 0 ? details.map((document) => ctx.db.delete(document._id)) : [ctx.db.delete(runId)]);
 }

@@ -14,6 +14,26 @@ export const messageAttachment = v.object({
 export const runTrigger = v.union(v.literal("user"), v.literal("schedule"));
 export const runCapability = v.union(v.literal("full"), v.literal("readOnly"));
 
+const toolResultFields = {
+  kind: v.literal("toolResult"),
+  toolCallId: v.string(),
+  name: v.string(),
+  outcome: v.union(
+    v.literal("ok"),
+    v.literal("error"),
+    v.literal("timeout"),
+    v.literal("interrupted"),
+    v.literal("unavailable"),
+    v.literal("invalid"),
+    v.literal("cancelled"),
+    v.literal("denied"),
+    v.literal("rejected"),
+  ),
+  output: v.string(),
+  exitCode: v.optional(v.number()),
+  truncated: v.boolean(),
+};
+
 export const runEventBody = v.union(
   v.object({ kind: v.literal("userMessage"), text: v.string(), attachments: v.optional(v.array(messageAttachment)) }),
   v.object({ kind: v.literal("scheduleFired"), scheduleId: v.id("schedules"), text: v.string() }),
@@ -26,26 +46,15 @@ export const runEventBody = v.union(
     usage: v.object({ promptTokens: v.number(), completionTokens: v.number() }),
     model: v.string(),
   }),
-  v.object({
-    kind: v.literal("toolResult"),
-    toolCallId: v.string(),
-    name: v.string(),
-    outcome: v.union(
-      v.literal("ok"),
-      v.literal("error"),
-      v.literal("timeout"),
-      v.literal("interrupted"),
-      v.literal("unavailable"),
-      v.literal("invalid"),
-      v.literal("cancelled"),
-      v.literal("denied"),
-      v.literal("rejected"),
-    ),
-    output: v.string(),
-    exitCode: v.optional(v.number()),
-    truncated: v.boolean(),
-  }),
+  v.object(toolResultFields),
 );
+
+export const screenImageBytes = v.object({ mediaType: v.union(v.literal("image/png"), v.literal("image/jpeg")), bytes: v.bytes() });
+// view is a @bots/protocol screenView without its image, as JSON. Only the orchestrator reads it, through that schema.
+export const keptScreen = v.object({ view: v.string(), image: v.optional(screenImageBytes) });
+export type KeptScreen = Infer<typeof keptScreen>;
+// Only append takes this. A stored toolResult never holds a screen, because the screens row does.
+export const toolResultWithScreen = v.object({ ...toolResultFields, screen: keptScreen });
 
 export const terminalRunState = v.union(
   v.object({ kind: v.literal("done") }),

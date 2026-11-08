@@ -141,6 +141,7 @@ describe("conversationItems", () => {
       ["browser_click", "Clicked on the page"],
       ["browser_type", "Typed on the page"],
       ["browser_press", "Pressed a key"],
+      ["desktop_look", "Looked at the screen"],
       ["memory_save", "Saved a note"],
       ["memory_forget", "Forgot a note"],
       ["description_set", "Updated its description"],
