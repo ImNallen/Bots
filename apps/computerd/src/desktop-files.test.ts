@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { handArgv } from "./desktop.ts";
 import { holderText, SLOTS, streamPort } from "./desktops.ts";
 
 const DESKTOP_DIR = new URL("../desktop/", import.meta.url);
@@ -49,6 +50,32 @@ describe("the files a desktop runs from", () => {
       `computerd ALL=(root) NOPASSWD: /usr/bin/systemctl start --quiet computerd-desktop@[${first}-${last}].target, /usr/bin/systemctl stop --quiet computerd-xvfb@[${first}-${last}].service, /usr/bin/systemctl restart --quiet computerd-input@[${first}-${last}].service\n`,
     );
     expect(SLOTS).toEqual(Array.from({ length: last - first + 1 }, (_, index) => first + index));
+  });
+
+  it("lets computerd run the desktop helper as browser, exactly as handArgv says, for exactly the slots there are", async () => {
+    const sudoers = await readFile(new URL("../sudoers", import.meta.url), "utf8");
+    const [, , user, , ...command] = handArgv(1);
+    const line = `computerd ALL=(${user}) NOPASSWD: ${command.slice(0, -1).join(" ")} [${Math.min(...SLOTS)}-${Math.max(...SLOTS)}]\n`;
+    expect(sudoers).toContain(line);
+    expect(handArgv(8).at(-1)).toBe("8");
+    expect(sudoers.match(/\(browser\)/g)).toHaveLength(1);
+  });
+
+  it("puts Xfce, Chromium, and the helper on the one bus that the desktop starts", async () => {
+    const bus = await read("computerd-bus@.service");
+    const address = /--address=(unix:path=\S+)/.exec(execStart(bus))?.[1];
+    expect(address).toBe("unix:path=/run/computerd-bus-%i/bus");
+    expect(await read("computerd-xfce@.service")).toContain(`DBUS_SESSION_BUS_ADDRESS=${address}`);
+    expect(execStart(await read("computerd-xfce@.service"))).not.toContain("dbus-run-session");
+    expect(await read("computerd-chromium@.service")).toContain(`DBUS_SESSION_BUS_ADDRESS=${address}`);
+    expect(await read("hand.py")).toContain('BUS = f"/run/computerd-bus-{SLOT}/bus"');
+    expect(await read("computerd-desktop@.target")).toMatch(/^Wants=.*computerd-bus@%i\.service/m);
+  });
+
+  it("turns on Chromium's accessibility tree", async () => {
+    const unit = await read("computerd-chromium@.service");
+    expect(unit).toMatch(/^Environment=.*ACCESSIBILITY_ENABLED=1/m);
+    expect(execStart(unit)).toContain("--force-renderer-accessibility");
   });
 
   it("puts each stream on the port that streamPort names, for every slot", async () => {

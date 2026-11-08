@@ -1,18 +1,20 @@
 [Unit]
 Description=Bots desktop %i browser
 BindsTo=computerd-xvfb@%i.service
-After=computerd-xvfb@%i.service computerd-xfce@%i.service
+After=computerd-xvfb@%i.service computerd-bus@%i.service computerd-xfce@%i.service
 # A start that a limit refuses would need a reset-failed, and idle stop already bounds a browser that keeps crashing.
 StartLimitIntervalSec=0
 
 [Service]
 Type=exec
 User=browser
-Environment=DISPLAY=:%i
+Environment=DISPLAY=:%i DBUS_SESSION_BUS_ADDRESS=unix:path=/run/computerd-bus-%i/bus ACCESSIBILITY_ENABLED=1
 EnvironmentFile=/run/computerd/desktop-%i.env
 ExecStartPre=/bin/sh /opt/bots-computerd/current/apps/computerd/desktop/copy-base-profile.sh
+# As in computerd-xfce@.service.
+ExecStartPre=/usr/bin/dbus-send --bus=unix:path=/run/computerd-bus-%i/bus --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress
 # CDP listens on loopback. The sandbox stays on, so a page cannot reach the VM. Never turn it off here.
-ExecStart=/usr/bin/chromium --user-data-dir=/home/browser/profiles/${BOT_ID} --password-store=basic --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CDP_PORT} --no-first-run --no-default-browser-check --disable-gpu --hide-crash-restore-bubble --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --start-maximized about:blank
+ExecStart=/usr/bin/chromium --user-data-dir=/home/browser/profiles/${BOT_ID} --password-store=basic --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CDP_PORT} --no-first-run --no-default-browser-check --disable-gpu --hide-crash-restore-bubble --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --force-renderer-accessibility --start-maximized about:blank
 ExecStartPost=/bin/sh -c 'until curl -fsS --max-time 1 http://127.0.0.1:${CDP_PORT}/json/version >/dev/null 2>&1; do sleep 0.2; done'
 Restart=always
 RestartSec=2
