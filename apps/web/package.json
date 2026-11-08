@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --project tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify:chat": "node scripts/verify-chat.ts"
   },
   "dependencies": {
     "@bots/convex": "workspace:*",

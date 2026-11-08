@@ -3,12 +3,13 @@ import type { Id } from "@bots/convex/dataModel";
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { FACE_STATES, useShownActivity } from "./activity.ts";
+import { faceStateFor, useShownActivity } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
-import { ChatItem } from "./ChatItem.tsx";
+import { ChatFeed } from "./ChatFeed.tsx";
+import { StopReplyButton } from "./StopReplyButton.tsx";
 import { characterOf, tintOf, type Character } from "./character.ts";
 import { composerView, heldRunEnded, type HeldSend } from "./composerState.ts";
-import { conversationItems } from "./conversation.ts";
+import { conversationItems, isActive } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
@@ -171,15 +172,8 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
           </button>
           {voice.state.kind === "review" && <span className="voice-added" role="status"><span aria-hidden="true">✓</span><span>Added to draft</span></span>}
           <div className="composer-send">
-        {view.stop === "stopping" && (
-          <button type="button" className="send send-stopping" disabled>
-            Stopping
-          </button>
-        )}
-        {view.stop === "offered" && activeRun !== null && (
-          <button type="button" className="send send-stop" aria-label="Stop" onClick={() => void stop(activeRun._id)}>
-            <Icon name="stop" />
-          </button>
+        {view.stop !== "none" && activeRun !== null && (
+          <StopReplyButton stopping={view.stop === "stopping"} onStop={() => void stop(activeRun._id)} />
         )}
         {view.sendOffered && (
           <button type="submit" className={voice.state.kind === "review" ? "send voice-action voice-primary" : "send"} aria-label={sending ? "Sending" : "Send"} disabled={sending || !canSend}>
@@ -245,6 +239,18 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
   const user = useQuery(api.users.current);
   const { scroller, onScroll } = useStickToBottom(timeline !== undefined);
+  const send = useMutation(api.threads.send);
+  const latestRun = timeline?.runs.at(-1);
+  const previousRun = useRef<{ id: string; active: boolean } | null>(null);
+  const [completedRun, setCompletedRun] = useState<string | null>(null);
+  useEffect(() => {
+    const completed = latestRun?.state.kind === "done" && previousRun.current?.id === latestRun._id && previousRun.current.active;
+    previousRun.current = latestRun ? { id: latestRun._id, active: isActive(latestRun) } : null;
+    setCompletedRun(completed && latestRun ? latestRun._id : null);
+    if (!completed) return;
+    const timer = window.setTimeout(() => setCompletedRun(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [latestRun?._id, latestRun?.state.kind]);
   if (timeline === undefined) {
     return (
       <p className="session-status" role="status">
@@ -259,6 +265,9 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
     locale: navigator.language,
     timeZone: user?.timeZone ?? browserTimeZone(),
   });
+  const completedReply = completedRun === latestRun?._id
+    ? latestRun.events.findLast(({ body }) => body.kind === "assistantTurn" && body.text.trim() !== "")
+    : undefined;
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
@@ -271,9 +280,8 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
               <span>Send a message to start.</span>
             </div>
           )}
-          {items.map((item) => (
-            <ChatItem key={item.key} item={item} character={character} botName={botName} />
-          ))}
+          <ChatFeed items={items} character={character} botName={botName} completedReplyKey={completedReply ? `${completedReply._id}:text` : undefined}
+            onRetry={latestRun && !isActive(latestRun) ? async (text) => { await send({ threadId, text }); } : undefined} />
         </section>
       </div>
       <div className="dock">
@@ -335,7 +343,7 @@ function BotChat({ botId }: { botId: string }) {
   const [screenCoversChat, setScreenCoversChat] = useState(false);
   const [screenRequest, setScreenRequest] = useState(0);
   const [profileEdits, setProfileEdits] = useState<ProfileEdits>({});
-  const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW).kind;
+  const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW);
   if (bot === undefined) {
     return (
       <p className="session-status" role="status">
@@ -348,8 +356,7 @@ function BotChat({ botId }: { botId: string }) {
   }
   const params = { botId };
   const character = characterOf(bot);
-  // The badge belongs in the list, where it marks one bot among many.
-  const faceState = activity === "needsApproval" ? "idle" : FACE_STATES[activity];
+  const faceState = faceStateFor(activity);
 
   // On a phone, opening the drawer takes a history entry so Back dismisses it.
   const openInfo = () => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, info: true }), replace: !isPhone });

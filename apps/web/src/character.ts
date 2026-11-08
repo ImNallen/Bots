@@ -65,11 +65,11 @@ export const COLORS: Record<BotColor, { fill: string; darkFill: string; eyes: st
   black: { fill: "#b8b8b8", darkFill: "#a8a8a8", eyes: "#303030", bubble: "#222222" },
   brown: { fill: "#cbb9a5", darkFill: "#b7a38c", eyes: "#514233", bubble: "#8a5b2e" },
   red: { fill: "#dbb1af", darkFill: "#c99e9b", eyes: "#653e3b", bubble: "#d82433" },
-  orange: { fill: "#dfb79c", darkFill: "#d0a589", eyes: "#5e3f30", bubble: "#c55415" },
+  orange: { fill: "#e88b50", darkFill: "#e88b50", eyes: "#ffffff", bubble: "#c55415" },
   amber: { fill: "#d9ca9c", darkFill: "#c5b688", eyes: "#5a4c2b", bubble: "#ac6609" },
-  green: { fill: "#b9c7a5", darkFill: "#a8ba93", eyes: "#344331", bubble: "#0d884e" },
+  green: { fill: "#43a96e", darkFill: "#43a96e", eyes: "#ffffff", bubble: "#0d884e" },
   teal: { fill: "#a8c6bf", darkFill: "#94b4ad", eyes: "#304d46", bubble: "#118575" },
-  blue: { fill: "#acbdd8", darkFill: "#9cafd0", eyes: "#2d3d56", bubble: "#1b6fd6" },
+  blue: { fill: "#5687da", darkFill: "#5687da", eyes: "#ffffff", bubble: "#1b6fd6" },
   purple: { fill: "#c3b4d4", darkFill: "#b2a1c6", eyes: "#493957", bubble: "#7a47e6" },
   pink: { fill: "#d8b5c8", darkFill: "#c6a2b6", eyes: "#5e3c4d", bubble: "#da2a83" },
   grey: { fill: "#c5c5c5", darkFill: "#afafaf", eyes: "#424242", bubble: "#767676" },
@@ -78,7 +78,7 @@ export const COLORS: Record<BotColor, { fill: string; darkFill: string; eyes: st
 export const SHAPE_NAMES = Object.keys(SHAPES) as BotShape[];
 export const COLOR_NAMES = Object.keys(COLORS) as BotColor[];
 
-// Black and grey read as no colour at all, so a bot gets them only by someone's choice.
+// Keep bot identities stable while updating the palette.
 const DERIVED_COLORS = COLOR_NAMES.filter((color) => color !== "black" && color !== "grey");
 
 function hashOf(text: string): number {

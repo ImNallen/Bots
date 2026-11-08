@@ -66,9 +66,9 @@ describe("conversationItems", () => {
         ],
       }),
     ]);
-    expect(kinds(items)).toEqual(["time", "user", "reasoning", "assistant", "tool", "assistant"]);
+    expect(kinds(items)).toEqual(["time", "user", "assistant", "tool", "assistant"]);
     expect(only(items, "user").text).toBe("Hi **there**");
-    expect(only(items, "reasoning").text).toBe("I should list files.");
+    expect(JSON.stringify(items)).not.toContain("I should list files.");
   });
 
   describe("a routine's report", () => {
@@ -316,7 +316,7 @@ describe("conversationItems", () => {
 
     it("gives way to words that are arriving", () => {
       const items = itemsOf([run({ state: { kind: "running" }, stream: { text: "Hel", reasoning: "hmm" } })]);
-      expect(kinds(items)).toEqual(["time", "reasoning", "assistant"]);
+      expect(kinds(items)).toEqual(["time", "assistant"]);
       expect(only(items, "assistant")).toMatchObject({ text: "Hel", streaming: true });
     });
 

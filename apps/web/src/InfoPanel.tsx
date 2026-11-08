@@ -171,7 +171,7 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
     return (
       <div className="delete-bot-footer">
         <div><h3>Delete {name}</h3><p>Remove this bot and its work.</p></div>
-        <button type="button" className="btn" onClick={() => setStep({ kind: "confirming" })}>
+        <button type="button" className="btn danger-link" onClick={() => setStep({ kind: "confirming" })}>
           Delete bot
         </button>
       </div>

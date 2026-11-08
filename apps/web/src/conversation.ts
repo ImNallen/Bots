@@ -23,7 +23,6 @@ export type DisplayItem = { key: string } & (
   | { kind: "user"; text: string; attachments?: Extract<EventBody, { kind: "userMessage" }>["attachments"] }
   | { kind: "assistant"; text: string; streaming: boolean }
   | { kind: "report"; text: string }
-  | { kind: "reasoning"; text: string }
   | {
       kind: "tool";
       name: string;
@@ -238,9 +237,6 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
         items.push({ key: _id, kind: "report", text: body.text });
         break;
       case "assistantTurn":
-        if (body.reasoning !== undefined) {
-          items.push({ key: `${_id}:reasoning`, kind: "reasoning", text: body.reasoning });
-        }
         if (body.text.trim() !== "") {
           items.push({ key: `${_id}:text`, kind: "assistant", text: body.text, streaming: false });
         }
@@ -265,9 +261,6 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
     }
   }
   if (run.stream !== null) {
-    if (run.stream.reasoning !== undefined) {
-      items.push({ key: `${run._id}:stream:reasoning`, kind: "reasoning", text: run.stream.reasoning });
-    }
     if (run.stream.text !== "") {
       items.push({ key: `${run._id}:stream:text`, kind: "assistant", text: run.stream.text, streaming: true });
     }

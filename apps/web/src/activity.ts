@@ -14,8 +14,12 @@ export const FACE_STATES: Record<ShownActivity["kind"], FaceState> = {
   running: "working",
   needsApproval: "needsApproval",
   ownerHasScreen: "held",
-  failed: "idle",
+  failed: "error",
 };
+
+export function faceStateFor(activity: ShownActivity): FaceState {
+  return activity.kind === "running" ? activity.tool === null ? "thinking" : "working" : FACE_STATES[activity.kind];
+}
 
 const THINKING = "Thinking";
 const WORKING = "Working";

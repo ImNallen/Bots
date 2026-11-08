@@ -42,11 +42,6 @@ describe("ChatItem", () => {
     expect(html).not.toContain("javascript:");
   });
 
-  it("shows reasoning collapsed and as plain text", () => {
-    const html = render({ key: "r", kind: "reasoning", text: "**maybe**" });
-    expect(html).toMatch(/<details[^>]*><summary>Reasoning<\/summary><p>\*\*maybe\*\*<\/p><\/details>/);
-  });
-
   it("marks a failed tool row, and only a tool row with output can be expanded", () => {
     const row = { key: "t", kind: "tool", name: "Ran a command", icon: "terminal", summary: "ls", note: "failed" } as const;
     const failed = render({ ...row, status: "failed", output: { text: "no", exitCode: 1, truncated: false } });
@@ -57,8 +52,9 @@ describe("ChatItem", () => {
   });
 
   it("shows what stopped a run", () => {
-    expect(render({ key: "f", kind: "failed", reason: "<b>No key</b>" })).toBe(
-      '<div class="err" role="alert">&lt;b&gt;No key&lt;/b&gt;</div>',
-    );
+    const html = render({ key: "f", kind: "failed", reason: "<b>No key</b>" });
+    expect(html).toContain("The reply was interrupted");
+    expect(html).toContain("&lt;b&gt;No key&lt;/b&gt;");
+    expect(html).toContain("any partial reply are still here");
   });
 });

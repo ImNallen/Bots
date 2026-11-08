@@ -16,7 +16,7 @@ export type ComposerView = {
 
 export function composerView(args: { activeRun: ActiveRun; held: HeldSend; botName: string }): ComposerView {
   const { activeRun, held, botName } = args;
-  const messageHint = `Message ${botName}`;
+  const messageHint = `Message ${botName}…`;
   if (held !== null) {
     return { fieldDisabled: false, placeholder: messageHint, note: "Stopping the routine. Your message goes next.", stop: "stopping", sendOffered: false };
   }
@@ -26,7 +26,7 @@ export function composerView(args: { activeRun: ActiveRun; held: HeldSend; botNa
   const stop = activeRun.cancelRequested ? "stopping" : "offered";
   return activeRun.routine
     ? { fieldDisabled: false, placeholder: messageHint, note: `${botName} is running a routine. Sending a message stops it.`, stop, sendOffered: true }
-    : { fieldDisabled: true, placeholder: `${botName} is working`, note: null, stop, sendOffered: false };
+    : { fieldDisabled: false, placeholder: messageHint, note: null, stop, sendOffered: false };
 }
 
 export function heldRunEnded(held: HeldSend, activeRunId: Id<"runs"> | null): boolean {

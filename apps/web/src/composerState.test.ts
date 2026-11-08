@@ -9,15 +9,15 @@ const view = (activeRun: ActiveRun, held: { runId: Id<"runs"> } | null = null) =
 
 describe("composerView", () => {
   it("is an open box with Send when no run is active", () => {
-    expect(view(null)).toEqual({ fieldDisabled: false, placeholder: "Message Ada", note: null, stop: "none", sendOffered: true });
+    expect(view(null)).toEqual({ fieldDisabled: false, placeholder: "Message Ada…", note: null, stop: "none", sendOffered: true });
   });
 
-  it("locks the box during a chat run, with Stop and no Send", () => {
-    expect(view(chat)).toEqual({ fieldDisabled: true, placeholder: "Ada is working", note: null, stop: "offered", sendOffered: false });
+  it("keeps a follow-up draft editable during a chat run, with Stop and no Send", () => {
+    expect(view(chat)).toEqual({ fieldDisabled: false, placeholder: "Message Ada…", note: null, stop: "offered", sendOffered: false });
   });
 
   it("stays open during a routine, says that sending stops it, and has Stop and Send", () => {
-    expect(view(routine)).toEqual({ fieldDisabled: false, placeholder: "Message Ada", note: "Ada is running a routine. Sending a message stops it.", stop: "offered", sendOffered: true });
+    expect(view(routine)).toEqual({ fieldDisabled: false, placeholder: "Message Ada…", note: "Ada is running a routine. Sending a message stops it.", stop: "offered", sendOffered: true });
   });
 
   it("shows Stopping once a stop was asked for, and a routine still takes a message", () => {
@@ -28,7 +28,7 @@ describe("composerView", () => {
   it("shows that a held message goes next, and offers no second Send", () => {
     expect(view(routine, { runId: runId("r1") })).toEqual({
       fieldDisabled: false,
-      placeholder: "Message Ada",
+      placeholder: "Message Ada…",
       note: "Stopping the routine. Your message goes next.",
       stop: "stopping",
       sendOffered: false,

@@ -40,7 +40,7 @@ try {
   await visible(page, ".chat-head .pill");
   assert.equal((await page.locator(".side").boundingBox())?.width, 264, "Long bot previews must not widen the bot list.");
   assert.equal(await page.getByRole("link", { name: "Your bots", exact: true }).isVisible(), false, "The back button belongs to the mobile layout.");
-  assert.equal(await page.evaluate("getComputedStyle(document.querySelector('.me-dot')).backgroundColor"), "rgb(125, 77, 219)");
+  assert.equal(await page.evaluate("getComputedStyle(document.querySelector('.me-dot')).backgroundColor"), "rgb(32, 32, 32)");
   assert.equal(await page.evaluate("getComputedStyle(document.querySelector('.side')).paddingBottom"), "12px");
   assert.equal(await page.locator(".me-gear").count(), 0, "The deferred update control is absent.");
   await page.locator("#message").fill("Keep this draft while I check my bot.");

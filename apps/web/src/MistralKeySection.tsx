@@ -91,7 +91,7 @@ export function MistralKeySection() {
         )}
       </form>
       <p className="key-privacy"><Icon name="shield" /><span>Your saved key is never shown here.<br />You can replace or remove it at any time.</span></p>
-      {status.configured && <div className="card key-remove"><div><strong>Remove key</strong><small>Bots need a key to answer.</small></div><button type="button" className="btn" disabled={busy} onClick={() => void change({ method: "DELETE" })}>{submission.kind === "removing" ? "Removing" : "Remove"}</button></div>}
+      {status.configured && <div className="card key-remove"><div><strong>Remove key</strong><small>Bots need a key to answer.</small></div><button type="button" className="btn danger-link" disabled={busy} onClick={() => void change({ method: "DELETE" })}>{submission.kind === "removing" ? "Removing" : "Remove"}</button></div>}
     </>
   );
 }
