@@ -108,7 +108,8 @@ export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvoca
 
 type AnyInvocation = ToolInvocation | MemoryInvocation | ScheduleInvocation;
 
-export type ToolEffect = "reads" | "changesVm" | "changesMemory" | "changesOutside" | "changesSchedule";
+// controlsComputer can make the VM do anything its user can, so the Shell level asks for it.
+export type ToolEffect = "reads" | "changesVm" | "changesOutside" | "controlsComputer" | "changesMemory" | "changesSchedule";
 
 type ToolRow<Effect extends ToolEffect> = { description: string; args: z.ZodType; effect: Effect };
 
@@ -117,7 +118,7 @@ const TOOLS = {
     description:
       "Run a bash command as the agent user. Stdout and stderr are combined and capped at 32 KiB. The working directory is the bot's workspace. A command that outlives its timeout is killed with its whole process group. Redirect the output of anything left running in the background, because the pipe closes when the command returns.",
     args: shellArgs,
-    effect: "changesOutside",
+    effect: "controlsComputer",
   },
   read_file: {
     description: "Read a text file, capped at 32 KiB. A relative path resolves against the bot's workspace.",

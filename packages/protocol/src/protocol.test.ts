@@ -251,7 +251,7 @@ describe("parseToolCall", () => {
 describe("toolEffect", () => {
   it("gives each published tool its effect", () => {
     const expected: Record<ToolName, ToolEffect> = {
-      shell: "changesOutside",
+      shell: "controlsComputer",
       read_file: "reads",
       write_file: "changesVm",
       browser_navigate: "reads",

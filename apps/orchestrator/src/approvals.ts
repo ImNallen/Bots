@@ -7,20 +7,14 @@ export type ToolDecision = "run" | "ask" | "reject";
 
 const POLL_MS = 2000;
 
-const ASKS_AT_EVERY_LEVEL: Record<ToolEffect, boolean> = {
-  reads: false,
-  changesVm: false,
-  changesOutside: false,
-  changesMemory: false,
-  changesSchedule: true,
-};
+type Ask = "ask" | "run" | "askAfterComputer";
 
-const ASKS_AT_OUTSIDE: Record<ToolEffect, (touchedComputer: boolean) => boolean> = {
-  reads: () => false,
-  changesVm: () => false,
-  changesOutside: () => true,
-  changesMemory: (touchedComputer) => touchedComputer,
-  changesSchedule: () => true,
+// One answer for each level and effect, so a new effect or level fails the typecheck until it has a row here.
+const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
+  everything: { reads: "ask", changesVm: "ask", changesOutside: "ask", controlsComputer: "ask", changesMemory: "ask", changesSchedule: "ask" },
+  outside: { reads: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterComputer", changesSchedule: "ask" },
+  shell: { reads: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
+  nothing: { reads: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
 };
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
@@ -28,22 +22,6 @@ export const EXPIRED_OUTPUT = "The user did not answer in time, so this call did
 export const NOT_SENT_CANCELLED_OUTPUT = "The run was cancelled while this call waited for approval, so it did not run.";
 export const READ_ONLY_OUTPUT = "This run is read-only, so this call did not run. Do not try to reach the same result another way.";
 export const FINAL_CALL_OUTPUT = "This run has reached its limit and had to write its report, so this call did not run.";
-
-function needsApproval(args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }): boolean {
-  if (ASKS_AT_EVERY_LEVEL[toolEffect(args.toolName)]) {
-    return true;
-  }
-  switch (args.level) {
-    case "everything":
-      return true;
-    case "outside":
-      return ASKS_AT_OUTSIDE[toolEffect(args.toolName)](args.touchedComputer);
-    case "shell":
-      return args.toolName === "shell";
-    case "nothing":
-      return false;
-  }
-}
 
 export function decideTool(args: {
   capability: RunCapability;
@@ -54,8 +32,10 @@ export function decideTool(args: {
   switch (args.capability) {
     case "readOnly":
       return toolEffect(args.toolName) === "reads" ? "run" : "reject";
-    case "full":
-      return needsApproval(args) ? "ask" : "run";
+    case "full": {
+      const ask = ASKS[args.level][toolEffect(args.toolName)];
+      return ask === "ask" || (ask === "askAfterComputer" && args.touchedComputer) ? "ask" : "run";
+    }
   }
 }
 
