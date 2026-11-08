@@ -17,6 +17,15 @@ import {
   type ScreenState,
   type Stream,
 } from "./screenState.ts";
+import { useFloatingComputer } from "./useFloatingComputer.ts";
+import type { ResizeEdge } from "./floatingComputer.ts";
+import gripUrl from "./assets/ui/window-grip.svg";
+import minimizeUrl from "./assets/ui/window-minimize.svg";
+import expandUrl from "./assets/ui/window-expand.svg";
+import closeUrl from "./assets/ui/window-close.svg";
+import eyeUrl from "./assets/ui/window-eye.svg";
+import resizeUrl from "./assets/ui/window-resize.svg";
+import restoreUrl from "./assets/ui/window-restore.svg";
 import { useHasCoarsePointer, useIsPhone } from "./useIsPhone.ts";
 
 const RENEW_MS = 60_000;
@@ -138,26 +147,23 @@ function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<S
 
 // A phone's keyboard covers the page without resizing it, so the view follows the part that stays visible. A pinch also shrinks that
 // part, and the view must not shrink with it.
-function useFitVisibleArea(view: RefObject<HTMLElement | null>) {
+function useFitVisibleArea(enabled: boolean) {
+  const [area, setArea] = useState<{ top: number; height: number } | undefined>();
   useLayoutEffect(() => {
     const visible = window.visualViewport;
-    const element = view.current;
-    if (visible === null || element === null) {
-      return undefined;
-    }
-    const fit = () => {
-      const zoomed = visible.scale > 1.01;
-      element.style.top = zoomed ? "" : `${visible.offsetTop}px`;
-      element.style.height = zoomed ? "" : `${visible.height}px`;
-    };
+    if (!enabled || visible === null) return;
+    const fit = () => setArea(visible.scale > 1.01 ? undefined : { top: visible.offsetTop, height: visible.height });
     fit();
     visible.addEventListener("resize", fit);
     visible.addEventListener("scroll", fit);
-    return () => {
-      visible.removeEventListener("resize", fit);
-      visible.removeEventListener("scroll", fit);
-    };
-  }, [view]);
+    return () => { visible.removeEventListener("resize", fit); visible.removeEventListener("scroll", fit); };
+  }, [enabled]);
+  return enabled ? area : undefined;
+}
+
+const WINDOW_ICONS = { grip: gripUrl, minimize: minimizeUrl, expand: expandUrl, close: closeUrl, eye: eyeUrl, resize: resizeUrl, restore: restoreUrl };
+function WindowIcon({ name }: { name: keyof typeof WINDOW_ICONS }) {
+  return <span className="window-icon" style={{ maskImage: `url("${WINDOW_ICONS[name]}")` }} aria-hidden="true" />;
 }
 
 const REFUSALS = {
@@ -253,15 +259,15 @@ function TouchControls({ stream }: { stream: Stream }) {
   );
 }
 
-function ControlPill({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<ScreenEvent> }) {
+function ControlPill({ state, dispatch, floating = false }: { state: ScreenState; dispatch: Dispatch<ScreenEvent>; floating?: boolean }) {
   switch (state.kind) {
     case "watching":
     case "requesting":
       return (
         <div className="seg-big">
           <span>
-            <Icon name="eye" />
-            Watching
+            {floating ? <WindowIcon name="eye" /> : <Icon name="eye" />}
+            {floating ? "Watching · Live" : "Watching"}
           </span>
           <button type="button" disabled={state.kind === "requesting"} onClick={() => dispatch({ type: "takeControl" })}>
             {state.kind === "requesting" ? "Taking control…" : "Take control"}
@@ -331,62 +337,97 @@ function Message({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<S
   }
 }
 
-export function ScreenPanel({ botId, botName, character, onClose }: { botId: Id<"bots">; botName: string; character: Character; onClose: () => void }) {
+export function ScreenPanel({ botId, botName, character, chat, openRequest, onClose, onCoverChange }: {
+  botId: Id<"bots">; botName: string; character: Character; chat: RefObject<HTMLElement | null>;
+  openRequest: number; onClose: () => void; onCoverChange: (covered: boolean) => void;
+}) {
   const [state, dispatch] = useReducer(screenReducer, INITIAL_SCREEN_STATE);
   useTakeover(botId, state, dispatch);
   const isPhone = useIsPhone();
-  // Not the phone's width, because a phone on its side and a tablet are wider than that and still have no real keyboard.
   const hasTouchKeyboard = useHasCoarsePointer();
+  const [presentation, setPresentation] = useState<"window" | "minimized" | "fullscreen">("window");
+  const geometry = useFloatingComputer(chat, presentation === "minimized");
+  const fullScreen = isPhone || hasTouchKeyboard || (geometry.ready && !geometry.fits) || presentation === "fullscreen";
+  const minimized = !fullScreen && presentation === "minimized";
   const view = useRef<HTMLElement>(null);
   const [opener] = useState(() => document.activeElement);
-  useFitVisibleArea(view);
+  const visibleArea = useFitVisibleArea(fullScreen && (isPhone || hasTouchKeyboard));
+  const holding = holdsScreen(state);
 
+  useEffect(() => { setPresentation("window"); }, [openRequest]);
+  useLayoutEffect(() => { onCoverChange(fullScreen); }, [fullScreen, onCoverChange]);
+  useLayoutEffect(() => {
+    const target = minimized ? view.current?.querySelector<HTMLButtonElement>('[aria-label="Restore computer window"]')
+      : holding ? view.current?.querySelector<HTMLCanvasElement>(".scr-stream canvas") : view.current;
+    target?.focus({ preventScroll: true });
+  }, [fullScreen, minimized, holding]);
   useEffect(() => {
     view.current?.focus({ preventScroll: true });
-    return () => {
-      if (opener instanceof HTMLElement) {
-        opener.focus({ preventScroll: true });
-      }
-    };
+    return () => { if (opener instanceof HTMLElement) opener.focus({ preventScroll: true }); };
   }, [opener]);
-
-  // During a take-over, Escape belongs to the desktop.
-  const holding = holdsScreen(state);
   useEffect(() => {
-    if (holding) {
-      return undefined;
-    }
+    if (holding) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
+      if (event.key === "Escape" && (fullScreen || (event.target instanceof Node && view.current?.contains(event.target)))) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [holding, onClose]);
+  }, [holding, fullScreen, onClose]);
 
+  function minimize() {
+    if (holding) dispatch({ type: "giveBack" });
+    setPresentation("minimized");
+  }
   const compact = isPhone || hasTouchKeyboard;
   const mode = streamFor(state);
+  const edges: ResizeEdge[] = ["n", "e", "s", "w", "ne", "nw", "se", "sw"];
+  const pointer = { onPointerMove: geometry.pointerMove, onPointerUp: geometry.pointerEnd, onPointerCancel: geometry.pointerEnd, onLostPointerCapture: geometry.pointerEnd };
   return (
-    <section ref={view} className="screen" role="dialog" aria-modal="true" aria-label={`${botName}'s screen`} tabIndex={-1} data-compact={compact}>
-      <div className="scr-top">
-        <button type="button" className="scr-x" aria-label="Close the screen" onClick={onClose}>
-          <Icon name="back" />
-        </button>
+    <section ref={view} className="screen" role={fullScreen ? "dialog" : "region"} aria-modal={fullScreen ? true : undefined}
+      aria-label={`${botName}'s screen`} tabIndex={-1} data-compact={compact}
+      data-presentation={fullScreen ? "fullscreen" : minimized ? "minimized" : "floating"} data-dragging={geometry.dragging}
+      style={fullScreen ? visibleArea : { left: geometry.rect.x, top: geometry.rect.y, width: geometry.rect.width, height: geometry.rect.height }}>
+      {fullScreen ? <div className="scr-top" key="header">
+        <button type="button" className="scr-x" aria-label="Close the screen" onClick={onClose}><Icon name="back" /></button>
         <BotFace character={character} size={compact ? 30 : 36} state={holding ? "held" : "idle"} />
         <div className="scr-identity"><h2>{botName}’s computer</h2><small>Live screen</small></div>
         <span className="scr-connection">{state.kind === "ended" ? "Disconnected" : state.kind === "watching" || state.kind === "controlling" || state.kind === "requesting" ? <><Icon name="check" /> Connected</> : "Connecting…"}</span>
-      </div>
-      <p className="scr-state" role="status">{topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
-      <div className="scr-mid">
+        {!compact && geometry.fits && <button type="button" className="scr-x" aria-label="Return to floating view" onClick={() => setPresentation("window")}><Icon name="shrink" /></button>}
+      </div> : <div className="window-header" key="header">
+        <div className="window-drag" role="button" tabIndex={0} aria-label="Move computer window" aria-describedby="computer-window-help"
+          onPointerDown={(event) => geometry.pointerDown(event, { kind: "move" })} {...pointer}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPresentation(minimized ? "window" : "fullscreen"); }
+            else geometry.moveKey(event);
+          }} onDoubleClick={() => setPresentation(minimized ? "window" : "fullscreen")}>
+          {!minimized && <WindowIcon name="grip" />}
+          <BotFace character={character} size={24} state={holding ? "held" : "idle"} />
+          <h2>{botName}’s computer</h2>
+        </div>
+        {minimized ? <button type="button" className="window-button" aria-label="Restore computer window" onClick={() => setPresentation("window")}><WindowIcon name="restore" /></button> : <>
+          <button type="button" className="window-button" aria-label="Minimize computer window" disabled={state.kind === "requesting" || state.kind === "lost"} onClick={minimize}><WindowIcon name="minimize" /></button>
+          <button type="button" className="window-button" aria-label="Open full screen" onClick={() => setPresentation("fullscreen")}><WindowIcon name="expand" /></button>
+        </>}
+        <button type="button" className="window-button" aria-label="Close the screen" onClick={onClose}><WindowIcon name="close" /></button>
+        <span className="visually-hidden" id="computer-window-help">Drag to move, or use arrow keys. {minimized ? "Press Enter or double-click to restore." : "Press Enter or double-click for full screen."}</span>
+      </div>}
+      <p key="status" className={fullScreen ? "scr-state" : "visually-hidden"} role="status">{topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
+      <div className="scr-mid" key="stream" hidden={minimized}>
         {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} dispatch={dispatch} />}
         <Message state={state} dispatch={dispatch} />
       </div>
-      <div className="scr-low">
+      <div className="scr-low" key="controls" hidden={minimized}>
         {state.kind === "controlling" && hasTouchKeyboard && <TouchControls stream={state.stream} />}
-        <ControlPill state={state} dispatch={dispatch} />
+        <ControlPill state={state} dispatch={dispatch} floating={!fullScreen} />
         <p className="scr-hint">{holding ? compact ? "Leaving this view gives control back." : "Use your mouse and keyboard. Give back when you’re ready." : compact ? "Pinch to zoom. Rotate for a larger view." : "Take control to click, type, or sign in."}</p>
       </div>
+      {!fullScreen && !minimized && edges.map((edge) => <div key={edge} className="window-resize" data-edge={edge}
+        role={edge === "se" ? "slider" : undefined} tabIndex={edge === "se" ? 0 : undefined}
+        aria-label={edge === "se" ? "Resize computer window" : undefined} aria-valuemin={edge === "se" ? 384 : undefined}
+        aria-valuemax={edge === "se" ? Math.floor(geometry.maxWidth) : undefined} aria-valuenow={edge === "se" ? Math.round(geometry.rect.width) : undefined}
+        onPointerDown={(event) => geometry.pointerDown(event, { kind: "resize", edge })} {...pointer} onKeyDown={geometry.resizeKey}>
+        {edge === "se" && <WindowIcon name="resize" />}
+      </div>)}
     </section>
   );
 }

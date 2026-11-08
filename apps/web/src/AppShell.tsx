@@ -62,9 +62,6 @@ function Sidebar(props: { email: string; onNewBot: () => void; onSettings: () =>
       <button type="button" className="me" aria-label={`Settings for ${email}`} title={compact ? `Settings for ${name}` : undefined} onClick={onSettings}>
         <span className="me-dot">{name.split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join("").toUpperCase()}</span>
         <span className="me-name">{name}</span>
-        <span className="me-gear">
-          <Icon name="accountDots" />
-        </span>
       </button>
       {!phone && <div
         className="sidebar-resize"

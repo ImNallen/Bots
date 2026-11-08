@@ -1,4 +1,4 @@
-// The full-screen view exists only while it is open, so closing it needs no state here: leaving the page ends both streams and
+// The computer viewer exists only while it is open, so closing it needs no state here: leaving the page ends both streams and
 // gives the screen back.
 
 export type Stream = { sendKey(keysym: number, code: string | null): void };

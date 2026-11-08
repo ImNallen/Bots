@@ -2,7 +2,7 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { FACE_STATES, useShownActivity } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
 import { ChatItem } from "./ChatItem.tsx";
@@ -12,7 +12,6 @@ import { conversationItems } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
-import { RoutinesSection } from "./RoutinesSection.tsx";
 import { browserTimeZone } from "./routines.ts";
 import { ScreenPanel } from "./ScreenPanel.tsx";
 import { NotFoundNotice, ProblemNotice, errorMessage } from "./session.tsx";
@@ -22,6 +21,9 @@ import { AttachmentDrafts, useDraftAttachments } from "./Attachments.tsx";
 import { useVoiceInput } from "./useVoiceInput.ts";
 import { appendTranscript } from "./voiceAudio.ts";
 import { VoiceInput } from "./VoiceInput.tsx";
+import computerUrl from "./assets/ui/window-computer.svg";
+
+const ScreenCoversChat = createContext(false);
 
 const STICK_TO_BOTTOM_PX = 80;
 const NO_ROW = { activity: { kind: "idle" }, takeoverUntil: null } as const;
@@ -48,9 +50,10 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
   const [draggingFiles, setDraggingFiles] = useState(false);
   const view = composerView({ activeRun, held, botName });
   const search = useSearch({ from: "/app/bots/$botId" });
+  const screenCoversChat = useContext(ScreenCoversChat);
   const isPhone = useIsPhone();
   const key = useQuery(api.credentials.status);
-  const voice = useVoiceInput({ botId, onTranscript: (transcript) => setText((current) => appendTranscript(current, transcript)), visible: search.routines !== true && search.screen !== true && (!isPhone || search.info !== true) });
+  const voice = useVoiceInput({ botId, onTranscript: (transcript) => setText((current) => appendTranscript(current, transcript)), visible: !screenCoversChat && (!isPhone || (search.info !== true && search.routines !== true)) });
   const locked = view.fieldDisabled || sending || held !== null;
   const canSend = (text.trim() !== "" || attachments.ids.length > 0) && attachments.ready && !voice.pending;
   const voiceActive = voice.state.kind !== "idle" && voice.state.kind !== "review";
@@ -328,6 +331,9 @@ function BotChat({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const router = useRouter();
   const isPhone = useIsPhone();
+  const chat = useRef<HTMLDivElement>(null);
+  const [screenCoversChat, setScreenCoversChat] = useState(false);
+  const [screenRequest, setScreenRequest] = useState(0);
   const [profileEdits, setProfileEdits] = useState<ProfileEdits>({});
   const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW).kind;
   if (bot === undefined) {
@@ -345,71 +351,77 @@ function BotChat({ botId }: { botId: string }) {
   // The badge belongs in the list, where it marks one bot among many.
   const faceState = activity === "needsApproval" ? "idle" : FACE_STATES[activity];
 
-  // On a phone the panel is a page of its own, so it takes a history entry and the back gesture leaves it.
+  // On a phone, opening the drawer takes a history entry so Back dismisses it.
   const openInfo = () => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, info: true }), replace: !isPhone });
   const closeInfo = () => {
     if (isPhone && router.history.canGoBack()) {
       router.history.back();
     } else {
-      void navigate({ to: "/bots/$botId", params, search: routines === true ? { routines: true } : {}, replace: true });
+      void navigate({ to: "/bots/$botId", params, search: screen === true ? { screen: true } : {}, replace: true });
     }
   };
 
   // A history entry at every width, because a browser's back action should leave the view and not the bot.
-  const openScreen = () => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, screen: true }) });
+  const openScreen = () => {
+    setScreenRequest((value) => value + 1);
+    if (screen !== true) void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, screen: true }) });
+  };
   const closeScreen = () => {
     if (router.history.canGoBack()) {
       router.history.back();
     } else {
-      void navigate({ to: "/bots/$botId", params, search: ({ info: wasInfo }) => (wasInfo === true ? { info: true } : {}), replace: true });
+      void navigate({ to: "/bots/$botId", params, search: ({ info: wasInfo, routines: wasRoutines }) => ({ ...(wasInfo === true && { info: true }), ...(wasRoutines === true && { routines: true }) }), replace: true });
     }
   };
 
   return (
-    <div className="tint bot-page" {...tintOf(character.color)}>
-      <div className="chat" inert={isPhone && info === true}>
-        <header className="chat-head">
-          <Link to="/" className="round chat-back" aria-label="Your bots">
-            <Icon name="menu" />
-          </Link>
-          <button
-            type="button"
-            className="pill"
-            aria-expanded={info === true}
-            aria-label={`About ${bot.name}`}
-            onClick={info === true ? closeInfo : openInfo}
-          >
-            <BotFace character={character} size={32} state={faceState} />
-            <span className="pill-who">
-              <span>{bot.name}</span>
-            </span>
-          </button>
-        </header>
-        <div className="chat-body" hidden={routines === true}>
-          <BotThread botId={bot._id} botName={bot.name} character={character} />
+    <ScreenCoversChat.Provider value={screen === true && screenCoversChat}>
+      <div className="tint bot-page" {...tintOf(character.color)}>
+        <div className="chat" ref={chat} inert={isPhone && (info === true || routines === true)}>
+          <header className="chat-head">
+            <Link to="/" className="round chat-back" aria-label="Your bots">
+              <Icon name="menu" />
+            </Link>
+            <button
+              type="button"
+              className="pill"
+              aria-expanded={info === true || routines === true}
+              aria-label={`About ${bot.name}`}
+              onClick={info === true || routines === true ? closeInfo : openInfo}
+            >
+              <BotFace character={character} size={32} state={faceState} />
+              <span className="pill-who">
+                <span>{bot.name}</span>
+              </span>
+            </button>
+            <button type="button" className="chat-computer" onClick={openScreen} aria-label="Open computer" aria-expanded={screen === true}>
+              <span className="window-icon" style={{ maskImage: `url("${computerUrl}")` }} aria-hidden="true" />Computer
+            </button>
+          </header>
+          <div className="chat-body">
+            <BotThread botId={bot._id} botName={bot.name} character={character} />
+          </div>
         </div>
-        {routines === true && <RoutinesSection botId={bot._id} botName={bot.name} onShowChat={() => {
-          void navigate({ to: "/bots/$botId", params, search: !isPhone && info === true ? { info: true } : {}, replace: true });
-        }} onNewRoutine={() => {
-          void navigate({ to: "/bots/$botId", params, search: isPhone ? {} : { info: true } });
-          requestAnimationFrame(() => document.getElementById("message")?.focus());
-        }} />}
+        {(info === true || routines === true) && (
+          <InfoPanel
+            bot={bot}
+            faceState={faceState}
+            showRoutines={routines === true}
+            profileEdits={profileEdits}
+            onProfileEditsChange={setProfileEdits}
+            onClose={closeInfo}
+            onOpenScreen={openScreen}
+            onShowChat={() => void navigate({ to: "/bots/$botId", params, search: { ...(screen === true && { screen: true }), info: true }, replace: true })}
+            onComposeRoutine={() => {
+              void navigate({ to: "/bots/$botId", params, search: screen === true ? { screen: true } : {}, replace: true });
+              requestAnimationFrame(() => document.getElementById("message")?.focus());
+            }}
+            onShowRoutines={() => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, info: true, routines: true }), replace: true })}
+          />
+        )}
+        {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} character={character} chat={chat} openRequest={screenRequest} onCoverChange={setScreenCoversChat} onClose={closeScreen} />}
       </div>
-      {info === true && (
-        <InfoPanel
-          bot={bot}
-          faceState={faceState}
-          showRoutines={routines === true}
-          profileEdits={profileEdits}
-          onProfileEditsChange={setProfileEdits}
-          onClose={closeInfo}
-          onOpenScreen={openScreen}
-          onShowChat={() => void navigate({ to: "/bots/$botId", params, search: isPhone ? {} : { info: true }, replace: true })}
-          onShowRoutines={() => void navigate({ to: "/bots/$botId", params, search: isPhone ? { routines: true } : { info: true, routines: true }, replace: true })}
-        />
-      )}
-      {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} character={character} onClose={closeScreen} />}
-    </div>
+    </ScreenCoversChat.Provider>
   );
 }
 
