@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type ToolResult } from "@bots/protocol";
+import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type ToolResult } from "../packages/protocol/src/index.ts";
 import { createBrowser } from "../apps/computerd/src/browser.ts";
 import { createDesktop } from "../apps/computerd/src/desktop.ts";
 import { createDesktops, createSystemd, IDLE_STOP_MS, streamPort, type DesktopLease, type Slot, type Systemd } from "../apps/computerd/src/desktops.ts";
@@ -175,14 +175,16 @@ check(crowded.screen?.marks.length === MAX_MARKS && (crowded.screen?.unlisted ??
 check(crowded.screen?.image !== undefined && pictureBytes(crowded) <= MAX_SCREEN_IMAGE_BYTES, `its picture fits: ${pictureBytes(crowded)} bytes of ${crowded.screen?.image?.mediaType}`);
 await savePicture(crowded, "many-links");
 
-await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("frozen", `<button>still here</button><script>setTimeout(() => { for (;;) {} }, 300)</script>`) } });
-await new Promise((done) => setTimeout(done, 1000));
+// The spin starts after the navigation has returned, so the browser tool does not see it and close the page first.
+await browse(BOTS[0], { name: "browser_navigate", args: { url: pageWith("frozen", `<button>still here</button><script>setTimeout(() => { for (;;) {} }, 2500)</script>`) } });
+await new Promise((done) => setTimeout(done, 4000));
 startedAt = performance.now();
 const frozen = await lookAt(BOTS[0]);
 const frozenMs = performance.now() - startedAt;
 measure("a look while the page spins in while (true)", startedAt);
 check(frozen.outcome === "ok" && frozenMs < 30_000, "a look still answers while the page spins", `${frozen.outcome} in ${Math.round(frozenMs)} ms, silent ${JSON.stringify(frozen.screen?.silent)}`);
 check(frozen.screen?.image !== undefined, "it still has its picture");
+check(frozen.screen?.windows.some((window) => window.app === "Chromium" && window.title.startsWith("frozen")) === true, "it still names the frozen page's window", JSON.stringify(frozen.screen?.windows));
 await savePicture(frozen, "frozen");
 await browse(BOTS[0], { name: "browser_navigate", args: { url: "about:blank" } });
 
