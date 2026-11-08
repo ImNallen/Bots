@@ -1,6 +1,8 @@
 import { describe, expect, it, expectTypeOf } from "vitest";
 import {
+  COMPUTER_TOOL_NAMES,
   OUTPUT_CAP_BYTES,
+  TOOLS_BEFORE_ANNOUNCEMENT,
   callIdToFileStem,
   capText,
   computerMessage,
@@ -251,7 +253,7 @@ describe("parseToolCall", () => {
 describe("toolEffect", () => {
   it("gives each published tool its effect", () => {
     const expected: Record<ToolName, ToolEffect> = {
-      shell: "changesOutside",
+      shell: "controlsComputer",
       read_file: "reads",
       write_file: "changesVm",
       browser_navigate: "reads",
@@ -366,5 +368,19 @@ describe("link messages", () => {
 
   it("returns null for text that is not JSON", () => {
     expect(parseJsonMessage({ raw: "{", schema: computerMessage })).toBeNull();
+  });
+});
+
+describe("hello", () => {
+  const parse = (message: object) => parseJsonMessage({ raw: JSON.stringify(message), schema: computerMessage });
+
+  it("accepts a hello with the tools a computerd has, and one from before it named them", () => {
+    const named = { kind: "hello", token: "t", tools: [...COMPUTER_TOOL_NAMES] };
+    expect(parse(named)).toEqual(named);
+    expect(parse({ kind: "hello", token: "t" })).toEqual({ kind: "hello", token: "t" });
+  });
+
+  it("keeps every tool from before the announcement on the link", () => {
+    expect(TOOLS_BEFORE_ANNOUNCEMENT.filter((name) => !isComputerTool(name))).toEqual([]);
   });
 });

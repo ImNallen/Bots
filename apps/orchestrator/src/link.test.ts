@@ -3,7 +3,7 @@ import type { Id } from "@bots/convex/dataModel";
 import { LINK_CLOSE, type Browsing, type OrchestratorMessage, type ToolInvocation } from "@bots/protocol";
 import { beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { startLink, type Link } from "./link.ts";
+import { OLDER_COMPUTERD_OUTPUT, startLink, type Link } from "./link.ts";
 
 const OWNER = "owner" as Id<"users">;
 const tool: ToolInvocation = { name: "read_file", args: { path: "a" } };
@@ -35,7 +35,7 @@ beforeAll(async () => {
 
 type Computer = { socket: WebSocket; received: OrchestratorMessage[]; closed: Promise<number> };
 
-async function connectComputer(): Promise<Computer> {
+async function connectComputer(tools?: string[]): Promise<Computer> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   const received: OrchestratorMessage[] = [];
   const welcomed = Promise.withResolvers<void>();
@@ -48,7 +48,7 @@ async function connectComputer(): Promise<Computer> {
   });
   const closed = new Promise<number>((resolve) => socket.once("close", resolve));
   await new Promise((resolve) => socket.once("open", resolve));
-  socket.send(JSON.stringify({ kind: "hello", token: "good" }));
+  socket.send(JSON.stringify({ kind: "hello", token: "good", ...(tools === undefined ? {} : { tools }) }));
   await welcomed.promise;
   return { socket, received, closed };
 }
@@ -134,6 +134,30 @@ describe("link", () => {
     expect((await pending).output).toBe("real");
     newer.socket.close();
     await newer.closed;
+  });
+
+  describe("the tools that a computerd names in its hello", () => {
+    it("never sends a tool that the computerd did not name, and keeps its link open", async () => {
+      const computer = await connectComputer(["shell"]);
+      expect(await link.call(callArgs("a:unnamed"))).toEqual({ outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false });
+      const shell = link.call({ ...callArgs("a:named"), tool: { name: "shell", args: { command: "true", timeoutSeconds: 1 } } });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      expect(computer.received.filter((message) => message.kind === "toolCall").map((message) => message.callId)).toEqual(["a:named"]);
+      answer(computer, "a:named", "ran");
+      expect((await shell).output).toBe("ran");
+      computer.socket.close();
+      expect(await computer.closed).toBe(1005);
+    });
+
+    it("sends a computerd that names no tools every tool from before the announcement", async () => {
+      const computer = await connectComputer();
+      const pending = link.call(callArgs("a:older"));
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      answer(computer, "a:older", "read");
+      expect((await pending).output).toBe("read");
+      computer.socket.close();
+      await computer.closed;
+    });
   });
 
   describe("a logged-out call", () => {

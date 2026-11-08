@@ -1,4 +1,5 @@
 import {
+  COMPUTER_TOOL_NAMES,
   LINK_CLOSE,
   MAX_ORCHESTRATOR_MESSAGE_BYTES,
   orchestratorMessage,
@@ -60,7 +61,7 @@ export function connectLink(args: {
 
     socket.on("open", () => {
       resetSilence();
-      send({ kind: "hello", token });
+      send({ kind: "hello", token, tools: [...COMPUTER_TOOL_NAMES] });
     });
     socket.on("ping", resetSilence);
     socket.on("message", (raw: Buffer) => {
