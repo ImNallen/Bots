@@ -149,6 +149,26 @@ describe("link", () => {
       expect(await computer.closed).toBe(1005);
     });
 
+    it("never sends a desktop tool to a computerd from before the announcement", async () => {
+      const computer = await connectComputer();
+      expect(await link.call({ ...callArgs("a:look"), tool: { name: "desktop_look", args: {} } })).toEqual({ outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(computer.received.some((message) => message.kind === "toolCall")).toBe(false);
+      computer.socket.close();
+      await computer.closed;
+    });
+
+    it("sends a look to a computerd that names it, and passes its picture through", async () => {
+      const computer = await connectComputer(["desktop_look"]);
+      const pending = link.call({ ...callArgs("a:looked"), tool: { name: "desktop_look", args: {} } });
+      await until(() => computer.received.some((message) => message.kind === "toolCall"));
+      const screen = { width: 1280, height: 800, windows: [], active: null, marks: [], unlisted: 0, silent: [], image: { mediaType: "image/png", base64: "A".repeat(400_000) } };
+      computer.socket.send(JSON.stringify({ kind: "toolResult", callId: "a:looked", result: { outcome: "ok", output: "Looked at the screen.", truncated: false, screen } }));
+      expect(await pending).toEqual({ outcome: "ok", output: "Looked at the screen.", truncated: false, screen });
+      computer.socket.close();
+      await computer.closed;
+    });
+
     it("sends a computerd that names no tools every tool from before the announcement", async () => {
       const computer = await connectComputer();
       const pending = link.call(callArgs("a:older"));

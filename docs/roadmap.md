@@ -110,6 +110,8 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 ### Follow-ups, in this order
 
 1. Let bots use the desktop as well as the user. The owner wants this. A bot needs tools for screenshots, the mouse, and the keyboard, and a model that can read images. These tools must go through approvals, and they count as actions that change something.
+
+   Built on the branch `t3/desktop-tools`, and not deployed. A bot has `desktop_look`, `desktop_click`, `desktop_type`, `desktop_key`, and `desktop_scroll`, and [How a bot uses its desktop](architecture.md#how-a-bot-uses-its-desktop) explains them. A look is a picture with numbered marks from each app's accessibility tree. Input asks at Outside and at Shell, acts only on the element that the card names, and a routine gets none of the tools. `infra/proxmox/verify-desktop.sh` passed on the throwaway VM 950 on 2026-11-08, with its new checks for looks, clicks, typing in a field and the address bar, keys, scrolling, a stale aim, a take-over, a file chooser, and a terminal opened from the panel. `verify:agent` passed in full on the same code, with new scenarios for a run's screen and for desktop calls against Docker, which has no desktop. `pnpm verify:desktop-tools` checks a real model's use of a real desktop, and it waits for a deploy, which needs the owner.
 2. Let a user reset a computer. A computer is not a permanent store, so a reset deletes its workspaces and browser logins, and the button must say so. It can reuse the removal path and clone a new VM into the same slot.
 3. Let a bot ask for a take-over, for example at a login page. Grok Bot calls this a secure handoff.
 4. Add automatic review, so most actions need no card. The owner wants this later, in place of asking about everything. What Grok Bot does, according to its documentation, as the owner gave it on 2026-11-06:
@@ -482,3 +484,14 @@ These are open on purpose. Fix each one when the work reaches it.
 - A kill of the input stream's `x11vnc` with a key held leaves that key down until the next viewer leaves. A viewer that only leaves or is replaced releases its keys, unless x11vnc hangs on its SIGTERM and the 3-second stop limit kills it.
 - Streams carry no limit on bandwidth, and a bot that reads its own link token can send its owner false video.
 - A site can block the browser. GitLab stopped it at a Cloudflare check during testing.
+- Chromium's file chooser opens taller than the 1280x800 screen, so its Cancel and Select buttons are off the screen and have no marks. A bot can press Escape or Return, or type a path after ctrl+l.
+- An app that a bot starts from its shell runs as `agent`, outside the desktop's bus, so a look lists none of its elements. An app started from the panel runs as `browser` and is listed.
+- A desktop that was running before the update that added the bus has no marks until its next start, which the idle stop brings within an hour. Its looks say so.
+- Accessibility is on in every Chromium, which costs about 67 MB more anonymous memory with a real page, 318 MB against 251 MB on the Wikipedia page for Linux. Turning it on only after a run's first look would save this for desktops that no bot looks at.
+- A click is refused, with a new look, when the page moved the element more than 24 px between the look and the action. This costs one look and never clicks the wrong thing.
+- A look walks every app's tree, including apps that it then leaves out because another window covers them. A page with 2,000 links in a window behind the active one still costs about 1.4 s.
+- An always-visible menu on a web page, made with `role="menu"`, counts as an open menu, so an element of the page that overlaps it loses its mark.
+- Each click at the default level is its own card, so one task can ask many times. Automatic review is the later answer.
+- A desktop card shows the run's newest look. A card whose look was replaced cannot happen today, because a run waits on its card, but nothing records which look a card was aimed from.
+- The numbers on the picture can cover text near a box, and two labels that would overlap leave the second unlabelled. The text list carries every mark.
+- Desktop tools have no coordinate click and no drag, so an app with no accessibility tree gets only keys.

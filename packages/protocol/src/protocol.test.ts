@@ -1,8 +1,17 @@
 import { describe, expect, it, expectTypeOf } from "vitest";
 import {
   COMPUTER_TOOL_NAMES,
+  isDesktopInputRequest,
+  parseKeyCombo,
+  MAX_COMPUTER_MESSAGE_BYTES,
+  MAX_MARKS,
   OUTPUT_CAP_BYTES,
   TOOLS_BEFORE_ANNOUNCEMENT,
+  fitToLink,
+  isDesktopInvocation,
+  toolResult,
+  withoutScreenImage,
+  type ScreenView,
   callIdToFileStem,
   capText,
   computerMessage,
@@ -229,12 +238,18 @@ describe("parseToolCall", () => {
       "browser_click",
       "browser_type",
       "browser_press",
+      "desktop_look",
+      "desktop_click",
+      "desktop_type",
+      "desktop_key",
+      "desktop_scroll",
       "memory_save",
       "memory_forget",
       "description_set",
       "schedule_propose",
     ]);
     for (const tool of toolDefinitions) {
+      expect(JSON.stringify(tool.function.parameters)).not.toMatch(/"(anyOf|oneOf)"/);
       expect(tool.function.parameters).toMatchObject({ type: "object" });
       expect(tool.function.parameters).not.toHaveProperty("$schema");
     }
@@ -261,6 +276,11 @@ describe("toolEffect", () => {
       browser_click: "changesOutside",
       browser_type: "changesOutside",
       browser_press: "changesOutside",
+      desktop_look: "readsScreen",
+      desktop_click: "controlsComputer",
+      desktop_type: "controlsComputer",
+      desktop_key: "controlsComputer",
+      desktop_scroll: "controlsComputer",
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
       description_set: "changesMemory",
@@ -322,7 +342,7 @@ describe("memory tools", () => {
 
   it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
     const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
-    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press"]);
+    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
     expect(isComputerTool("constructor")).toBe(false);
   });
 
@@ -382,5 +402,92 @@ describe("hello", () => {
 
   it("keeps every tool from before the announcement on the link", () => {
     expect(TOOLS_BEFORE_ANNOUNCEMENT.filter((name) => !isComputerTool(name))).toEqual([]);
+  });
+});
+
+describe("a result with a picture of the screen", () => {
+  const mark = (at: number) => ({ mark: at, win: 0, role: "link", name: `\u0000${"\u2028".repeat(119)}`, states: [], box: { x: 0, y: 0, w: 10, h: 10 } });
+  const view = (marks: number, base64: string): ScreenView => ({
+    width: 1280,
+    height: 800,
+    windows: [{ app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title: "\u0000".repeat(120) }],
+    active: 0,
+    marks: Array.from({ length: marks }, (_, index) => mark(index + 1)),
+    unlisted: 0,
+    silent: [],
+    image: { mediaType: "image/png", base64 },
+  });
+  const sent = (result: object) => Buffer.byteLength(JSON.stringify({ kind: "toolResult", callId: `${"a".repeat(64)}:${"b".repeat(64)}`, result }));
+
+  it("passes a result that fits through unchanged", () => {
+    const result = { outcome: "ok" as const, output: "Looked at the screen.", truncated: false, screen: view(3, "AAAA") };
+    expect(fitToLink(result)).toBe(result);
+  });
+
+  it("drops the picture first, and then marks from the end, so the frame stays under the link's limit", () => {
+    const largest = "A".repeat(Math.ceil((384 * 1024) / 3) * 4);
+    const result = { outcome: "ok" as const, output: "\u0000".repeat(OUTPUT_CAP_BYTES), truncated: false, screen: view(MAX_MARKS, largest) };
+    expect(toolResult.safeParse(result).success).toBe(true);
+    const fitted = fitToLink({ ...result, output: "\u0001".repeat(300_000) });
+    expect(sent(fitted)).toBeLessThanOrEqual(MAX_COMPUTER_MESSAGE_BYTES);
+    expect(fitted.screen?.image).toBeUndefined();
+    expect(fitted.output).toContain("too large to send");
+    expect((fitted.screen?.marks.length ?? 0) + (fitted.screen?.unlisted ?? 0)).toBe(MAX_MARKS);
+  });
+
+  it("keeps the marks and drops the picture for the journal", () => {
+    const result = { outcome: "ok" as const, output: "Looked at the screen.", truncated: false, screen: view(2, "AAAA") };
+    const kept = withoutScreenImage(result);
+    expect(kept.screen?.image).toBeUndefined();
+    expect(kept.screen?.marks).toHaveLength(2);
+    expect(withoutScreenImage({ outcome: "ok", output: "", truncated: false })).toEqual({ outcome: "ok", output: "", truncated: false });
+  });
+
+  it("tells a desktop call from a browser call", () => {
+    expect(isDesktopInvocation({ name: "desktop_look", args: {} })).toBe(true);
+    expect(isDesktopInvocation({ name: "browser_snapshot", args: {} })).toBe(false);
+  });
+});
+
+describe("desktop input", () => {
+  const aim = {
+    window: { app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title: "a" },
+    element: { role: "button", name: "Sign in", states: [], box: { x: 1, y: 2, w: 3, h: 4 } },
+  };
+
+  it.each([
+    ["ctrl+l", "ctrl+l"],
+    ["alt+F4", "alt+F4"],
+    ["Enter", "Return"],
+    ["shift+ctrl+T", "ctrl+shift+t"],
+    ["ArrowDown", "Down"],
+    ["page_down", "Page_Down"],
+  ])("reads %s as %s", (text, combo) => {
+    expect(parseKeyCombo(text)).toBe(combo);
+  });
+
+  it.each(["ctrl+", "ctrl+ctrl+l", "ctrl", "rm -rf", "hyper+a", "F13", "a+b"])("refuses %j", (text) => {
+    expect(parseKeyCombo(text)).toBeNull();
+  });
+
+  it("parses a model's call with no aim, and refuses one that brings its own", () => {
+    expect(parseToolCall({ name: "desktop_click", arguments: '{"mark":4}' })).toEqual({ kind: "ok", invocation: { name: "desktop_click", args: { mark: 4, button: "left" } } });
+    expect(parseToolCall({ name: "desktop_click", arguments: JSON.stringify({ mark: 4, aim }) }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_key", arguments: '{"keys":"Enter"}' })).toEqual({ kind: "ok", invocation: { name: "desktop_key", args: { keys: "Return", times: 1 } } });
+    expect(parseToolCall({ name: "desktop_key", arguments: '{"keys":"rm -rf /"}' }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_type", arguments: '{"text":"a\\u0000b"}' }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "desktop_click", arguments: '{"mark":201}' }).kind).toBe("invalid");
+  });
+
+  it("puts only an aimed call on the wire", () => {
+    const call = (tool: object) => parseJsonMessage({ raw: JSON.stringify({ kind: "toolCall", callId: "a:b", botId: "bot", tool }), schema: orchestratorMessage });
+    expect(call({ name: "desktop_click", args: { mark: 4, button: "left" } })).toBeNull();
+    expect(call({ name: "desktop_click", args: { mark: 4, button: "left" }, aim })).not.toBeNull();
+    expect(call({ name: "desktop_key", args: { keys: "ctrl+l", times: 1 }, aim: { window: null } })).not.toBeNull();
+  });
+
+  it("tells a desktop input from a look", () => {
+    expect(isDesktopInputRequest({ name: "desktop_scroll", args: { mark: 1, direction: "down", amount: 3 } })).toBe(true);
+    expect(isDesktopInputRequest({ name: "desktop_look", args: {} })).toBe(false);
   });
 });

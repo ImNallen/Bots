@@ -4,5 +4,5 @@
 [Unit]
 Description=Bots desktop %i
 BindsTo=computerd-xvfb@%i.service
-Wants=computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service
-After=computerd-xvfb@%i.service computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service
+Wants=computerd-bus@%i.service computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service
+After=computerd-xvfb@%i.service computerd-bus@%i.service computerd-xfce@%i.service computerd-chromium@%i.service computerd-vnc@%i.service

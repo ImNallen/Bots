@@ -12,9 +12,9 @@ import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type Pr
 import { errorMessage } from "./session.tsx";
 
 const APPROVAL_LEVELS = [
-  ["outside", "Shell commands and page changes"],
+  ["outside", "Shell, desktop, and page changes"],
   ["everything", "Everything"],
-  ["shell", "Shell commands only"],
+  ["shell", "Shell and desktop only"],
   ["nothing", "Nothing"],
 ] as const;
 

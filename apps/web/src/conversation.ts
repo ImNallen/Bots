@@ -32,7 +32,8 @@ export type DisplayItem = { key: string } & (
       note: string | null;
       output: ToolOutput | null;
     }
-  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[] }
+  // picture is true for a desktop input, whose card shows the run's newest look with the target outlined.
+  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean }
   | { kind: "denied"; text: string }
   | { kind: "failed"; reason: string }
   | { kind: "stopped" }
@@ -52,6 +53,11 @@ const TOOL_WORDS = {
   browser_click: { done: "Clicked on the page", ask: "Click on this page?", icon: "pointer" },
   browser_type: { done: "Typed on the page", ask: "Type on this page?", icon: "text" },
   browser_press: { done: "Pressed a key", ask: "Press this key?", icon: "key" },
+  desktop_look: { done: "Looked at the screen", ask: "Look at the screen?", icon: "screen" },
+  desktop_click: { done: "Clicked on the screen", ask: "Click this?", icon: "pointer" },
+  desktop_type: { done: "Typed on the screen", ask: "Type this?", icon: "text" },
+  desktop_key: { done: "Pressed keys", ask: "Press these keys?", icon: "key" },
+  desktop_scroll: { done: "Scrolled the screen", ask: "Scroll here?", icon: "lines" },
   memory_save: { done: "Saved a note", ask: "Save this note?", icon: "text" },
   memory_forget: { done: "Forgot a note", ask: "Forget this note?", icon: "close" },
   description_set: { done: "Updated its description", ask: "Update this description?", icon: "text" },
@@ -88,6 +94,11 @@ function callSummary(raw: string): string {
   if (parsed === null) {
     return raw;
   }
+  // A desktop click or scroll names a mark from a look, which is all that can be said before it runs.
+  const { mark, text } = parsed as { mark?: unknown; text?: unknown };
+  if (typeof mark === "number" && typeof text !== "string") {
+    return `mark ${mark}`;
+  }
   const values = Object.values(parsed);
   const first: unknown = values.find((value) => typeof value === "string");
   if (typeof first === "string") {
@@ -112,6 +123,12 @@ function callArguments(raw: string): CallArgument[] {
     label,
     value: typeof value === "string" ? value : JSON.stringify(value, null, 2),
   }));
+}
+
+// A mark number means nothing to a person, so a desktop card says what the orchestrator aimed at, and shows typed text in full.
+function desktopCard(subject: string, raw: string): CallArgument[] {
+  const text = (parseObject(raw) as { text?: unknown } | null)?.text;
+  return [{ label: null, value: subject }, ...(typeof text === "string" ? [{ label: "text", value: text }] : [])];
 }
 
 function routineCard(raw: string, timeZone: string): { title: string; arguments: CallArgument[] } | null {
@@ -154,23 +171,25 @@ function callItem(args: {
   call: ToolCall;
   result: ToolResult | undefined;
   active: boolean;
-  approvalId: Id<"approvals"> | undefined;
+  approval: Pick<PendingApproval, "_id" | "subject"> | undefined;
   timeZone: string;
 }): DisplayItem {
-  const { key, call, result, active, approvalId, timeZone } = args;
+  const { key, call, result, active, approval, timeZone } = args;
   const known = isToolName(call.name) ? call.name : null;
   const icon: IconName = known === null ? "gear" : TOOL_WORDS[known].icon;
   const row = { key, kind: "tool" as const, icon, summary: callSummary(call.arguments) };
   const doneName = known === null ? call.name : TOOL_WORDS[known].done;
   if (result === undefined) {
-    if (approvalId !== undefined) {
+    if (approval !== undefined) {
       const routine = known === "schedule_propose" ? routineCard(call.arguments, timeZone) : null;
+      const desktop = approval.subject === null ? null : desktopCard(approval.subject, call.arguments);
       return {
         key,
         kind: "approval",
-        approvalId,
+        approvalId: approval._id,
         title: routine?.title ?? (known === null ? `Run ${call.name}?` : TOOL_WORDS[known].ask),
-        arguments: routine?.arguments ?? callArguments(call.arguments),
+        arguments: routine?.arguments ?? desktop ?? callArguments(call.arguments),
+        picture: desktop !== null,
       };
     }
     // A row that is still running must not claim the past tense.
@@ -217,7 +236,7 @@ function statusItem(args: { run: TimelineRun; waitingForAnswer: boolean }): Disp
   return { key, kind: "status", mode: tool === null ? "thinking" : "tool", text: friendlyStep(tool) };
 }
 
-function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"approvals">>; timeZone: string }): DisplayItem[] {
+function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, PendingApproval>; timeZone: string }): DisplayItem[] {
   const { run, approvals, timeZone } = args;
   const active = isActive(run);
   const results = new Map(
@@ -246,7 +265,7 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Id<"a
             call,
             result: results.get(call.id),
             active,
-            approvalId: approvals.get(`${run._id}:${call.id}`),
+            approval: approvals.get(`${run._id}:${call.id}`),
             timeZone,
           });
           waitingForAnswer ||= item.kind === "approval";
@@ -285,7 +304,7 @@ export function conversationItems(args: {
   timeZone: string;
 }): DisplayItem[] {
   const { timeline, pending, now, locale, timeZone } = args;
-  const approvals = new Map(pending.map((row) => [`${row.runId}:${row.toolCallId}`, row._id]));
+  const approvals = new Map(pending.map((row) => [`${row.runId}:${row.toolCallId}`, row]));
   return timeline.runs.flatMap((run, index) => {
     const previous = timeline.runs[index - 1];
     const showTime = previous === undefined || run.createdAt - previous.createdAt > TIME_GAP_MS;

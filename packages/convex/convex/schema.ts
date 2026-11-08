@@ -14,6 +14,8 @@ import {
   runEventBody,
   runState,
   runTrigger,
+  screenBox,
+  screenImageBytes,
 } from "./validators.js";
 
 export default defineSchema({
@@ -74,6 +76,9 @@ export default defineSchema({
     toolName: v.string(),
     state: approvalState,
     requestedAt: v.number(),
+    // A desktop input's card: what it does in words, and the box that the card outlines on the run's newest look.
+    subject: v.optional(v.string()),
+    box: v.optional(screenBox),
   })
     .index("by_run_call", ["runId", "toolCallId"])
     .index("by_owner_state", ["ownerId", "state"])
@@ -161,5 +166,14 @@ export default defineSchema({
     runId: v.id("runs"),
     text: v.string(),
     reasoning: v.optional(v.string()),
+  }).index("by_run", ["runId"]),
+
+  // The newest look of a run. A run has at most one, and endRun deletes it, so no picture of the owner's pages outlives its run.
+  screens: defineTable({
+    runId: v.id("runs"),
+    ownerId: v.id("users"),
+    toolCallId: v.string(),
+    view: v.string(),
+    image: v.optional(screenImageBytes),
   }).index("by_run", ["runId"]),
 });
