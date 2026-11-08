@@ -111,7 +111,7 @@ describe("desktop_look", () => {
 });
 
 describe("desktop input", () => {
-  const window = { app: "Chromium", pid: 5092, kind: "frame" as const, title: "Sign in to GitHub · GitHub - Chromium" };
+  const window = { app: "Chromium", pid: 5092, kind: "frame" as const, path: "/org/a11y/atspi/accessible/1005", title: "Sign in to GitHub · GitHub - Chromium" };
   const signIn = { role: "button", name: "Sign in", states: [], box: { x: 464, y: 438, w: 352, h: 40 } };
   const click = (box = signIn.box) => ({ name: "desktop_click" as const, args: { mark: 9, button: "left" as const }, aim: { window, element: { ...signIn, box } } });
 

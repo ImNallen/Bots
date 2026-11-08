@@ -112,12 +112,14 @@ export type Box = z.infer<typeof box>;
 export const WINDOW_KINDS = ["frame", "dialog", "popup", "panel"] as const;
 export type WindowKind = (typeof WINDOW_KINDS)[number];
 
-// A window is its app, its process, and its kind. The title is for people and the model, and it is not part of what makes a window
-// itself, because a page's title changes as it loads.
+// A window is its app, its process, its kind, and its accessibility path, which stays the same for the window's life and differs
+// between two windows of one process. The title is for people and the model, and it is not part of what makes a window itself,
+// because a page's title changes as it loads.
 export const windowRef = z.strictObject({
   app: label(40),
   pid: z.number().int().min(1),
   kind: z.enum(WINDOW_KINDS),
+  path: label(96),
   title: label(120),
 });
 export type WindowRef = z.infer<typeof windowRef>;

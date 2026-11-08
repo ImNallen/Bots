@@ -129,7 +129,7 @@ describe("selectMarks on captures from a real desktop", () => {
 });
 
 describe("locate, on a fresh capture from a real desktop", () => {
-  const chromium = { app: "Chromium", pid: 5092, kind: "frame" as const, title: "anything, because a title is not part of a window's identity" };
+  const chromium = { app: "Chromium", pid: 5092, kind: "frame" as const, path: "/org/a11y/atspi/accessible/1005", title: "anything, because a title is not part of a window's identity" };
   const signIn = { role: "button", name: "Sign in", states: [], box: { x: 464, y: 438, w: 352, h: 40 } };
   const click = (aim: { window: typeof chromium; element: typeof signIn }): AimedInvocation => ({ name: "desktop_click", args: { mark: 1, button: "left" }, aim });
   const key = (window: typeof chromium | null): AimedInvocation => ({ name: "desktop_key", args: { keys: "ctrl+l" as KeyCombo, times: 1 }, aim: { window } });
@@ -151,10 +151,24 @@ describe("locate, on a fresh capture from a real desktop", () => {
     expect(locate(now, click({ window: { ...chromium, pid: 1 }, element: signIn })).kind).toBe("stale");
   });
 
+  it("acts only in the approved window when another window of the same process shows the same page and takes the focus", () => {
+    const other = "/org/a11y/atspi/accessible/2000";
+    const win = Math.max(...now.windows.map((window) => window.win)) + 1;
+    const second = {
+      ...now,
+      windows: [...now.windows.map((window) => (window.win === 5 ? { ...window, active: false } : window)), { ...now.windows.find((window) => window.win === 5)!, win, path: other, active: true }],
+      nodes: [...now.nodes, ...now.nodes.filter((node) => node.win === 5).map((node) => ({ ...node, win }))],
+    };
+    expect(locate(second, click({ window: chromium, element: signIn })).kind).toBe("stale");
+    expect(locate(second, key(chromium)).kind).toBe("stale");
+    expect(locate(second, click({ window: { ...chromium, path: other }, element: signIn }))).toMatchObject({ kind: "at", x: 640, y: 458 });
+    expect(locate(second, key({ ...chromium, path: other }))).toMatchObject({ kind: "focus", window: { path: other } });
+  });
+
   it("never finds an element that another window now covers", () => {
     const thunarBack = { role: "button", name: "Back", states: [], box: { x: 9, y: 85, w: 37, h: 35 } };
     expect(locate(recorded("terminal-active"), click({ window: chromium, element: signIn })).kind).toBe("stale");
-    expect(locate(now, click({ window: { ...chromium, app: "thunar", pid: 5258, title: "File System - Thunar" }, element: thunarBack })).kind).toBe("stale");
+    expect(locate(now, click({ window: { ...chromium, app: "thunar", pid: 5258, path: "/org/a11y/atspi/accessible/1008", title: "File System - Thunar" }, element: thunarBack })).kind).toBe("stale");
   });
 
   it("sends a key only to the window the look showed as active", () => {
@@ -174,7 +188,7 @@ describe("locate, on a fresh capture from a real desktop", () => {
 });
 
 describe("inputPlan and summaryOf", () => {
-  const window = { app: "Chromium", pid: 7, kind: "frame" as const, title: "t" };
+  const window = { app: "Chromium", pid: 7, kind: "frame" as const, path: "/org/a11y/atspi/accessible/1", title: "t" };
   const element = { role: "entry", name: "Address and search bar", states: [], box: { x: 0, y: 0, w: 10, h: 10 } };
   const at = { kind: "at" as const, x: 5, y: 6, element, window };
   const focus = { kind: "focus" as const, window };

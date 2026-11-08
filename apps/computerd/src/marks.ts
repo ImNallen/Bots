@@ -110,6 +110,7 @@ export const capture = z.strictObject({
         win: z.number().int().min(0),
         app: label(40),
         pid,
+        path: label(96),
         role: label(32),
         title: label(120),
         box: anyBox,
@@ -209,7 +210,7 @@ export function selectMarks(captured: Capture): Selection {
   const refOf = (window: CapturedWindow): WindowRef => {
     let ref = refs.get(window);
     if (ref === undefined) {
-      ref = { app: window.app, pid: window.pid, kind: kindOf(window), title: window.title };
+      ref = { app: window.app, pid: window.pid, kind: kindOf(window), path: window.path, title: window.title };
       refs.set(window, ref);
     }
     return ref;
@@ -270,7 +271,7 @@ export const MOVE_TOLERANCE_PX = 24;
 export type Located = { kind: "at"; x: number; y: number; element: Element; window: WindowRef } | { kind: "focus"; window: WindowRef | null } | { kind: "stale"; why: string };
 
 const sameWindow = (a: WindowRef | null, b: WindowRef | null): boolean =>
-  a === null || b === null ? a === b : a.app === b.app && a.pid === b.pid && a.kind === b.kind;
+  a === null || b === null ? a === b : a.app === b.app && a.pid === b.pid && a.kind === b.kind && a.path === b.path;
 
 function activeWindowOf(captured: Capture): WindowRef | null {
   const { view } = selectMarks(captured);
@@ -290,7 +291,7 @@ function find(candidates: readonly Candidate[], aim: { window: WindowRef; elemen
   return matches[0] ?? null;
 }
 
-// Finds what the owner approved in a fresh capture: the same app, process, window kind, role, and name, with its center within
+// Finds what the owner approved in a fresh capture: the same window, role, and name, with its center within
 // MOVE_TOLERANCE_PX of where the look showed it, and the nearest of several. A key and typing with no mark need the same active
 // window, and typing needs the element that had the focus to have it still.
 export function locate(captured: Capture, tool: AimedInvocation): Located {

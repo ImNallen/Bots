@@ -152,6 +152,7 @@ def walk_desktop(tree, roles, max_nodes, app_deadline):
                         "win": win,
                         "app": name,
                         "pid": entry["pid"],
+                        "path": cap(window.path or "", 96),
                         "role": cap(window.get_role_name(), 32),
                         "title": cap(window.get_name(), 120),
                         "box": box_of(window),

@@ -6,9 +6,9 @@ const view: Omit<ScreenView, "image"> = {
   width: 1280,
   height: 800,
   windows: [
-    { app: "Chromium", pid: 7, kind: "frame", title: "Sign in to GitHub · GitHub - Chromium" },
-    { app: "xfce4-panel", pid: 3, kind: "panel", title: "" },
-    { app: "thunar", pid: 9, kind: "frame", title: "File System - Thunar" },
+    { app: "Chromium", pid: 7, kind: "frame", path: "/org/a11y/atspi/accessible/1", title: "Sign in to GitHub · GitHub - Chromium" },
+    { app: "xfce4-panel", pid: 3, kind: "panel", path: "/org/a11y/atspi/accessible/42", title: "" },
+    { app: "thunar", pid: 9, kind: "frame", path: "/org/a11y/atspi/accessible/2", title: "File System - Thunar" },
   ],
   active: 0,
   marks: [
@@ -109,7 +109,7 @@ describe("aimDesktopInput", () => {
 });
 
 describe("approvalDetail", () => {
-  const window = { app: "Chromium", pid: 7, kind: "frame" as const, title: "t" };
+  const window = { app: "Chromium", pid: 7, kind: "frame" as const, path: "/org/a11y/atspi/accessible/1", title: "t" };
   const element = { role: "entry", name: "Address and search bar", states: [], box: { x: 158, y: 78, w: 903, h: 24 } };
 
   it("says what a click does, in words, with the box to outline", () => {
