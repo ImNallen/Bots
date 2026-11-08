@@ -1,7 +1,7 @@
 import { api } from "@bots/convex";
 import { useMutation } from "convex/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { BotFace, QueuedDots } from "./BotFace.tsx";
+import { BotFace, type FaceState } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
 import type { DisplayItem, ToolOutput } from "./conversation.ts";
 import { allArgumentsRead, hasReadToEnd, linesBelow, linesBelowNote } from "./hiddenLines.ts";
@@ -23,7 +23,7 @@ function outputNote({ exitCode, truncated }: ToolOutput): string {
     .join(", ");
 }
 
-function ToolRow({ item }: { item: Extract<DisplayItem, { kind: "tool" }> }) {
+export function ToolRow({ item }: { item: Extract<DisplayItem, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   const { output } = item;
   const content = (
@@ -143,7 +143,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
   };
   return (
     <section className="ask" data-done={sent !== null} aria-label="This call needs your approval">
-      <h3>{item.title}</h3>
+      <h3>{sent === "approved" ? "Approved · Continuing" : sent === "denied" ? "Skipped · Nothing was run" : item.title}</h3>
       {item.arguments.map((argument, index) => (
         <div className="ask-argument" key={argument.label ?? index}>
           {argument.label !== null && <span className="ask-label">{argument.label}</span>}
@@ -175,16 +175,50 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
   );
 }
 
-function StatusLine({ item, character }: { item: Extract<DisplayItem, { kind: "status" }>; character: Character }) {
-  return (
-    <div className="live" role="status">
-      {item.mode === "tool" ? <BotFace character={character} size={22} state="working" /> : <QueuedDots />}
-      {item.mode === "queued" ? <span>{item.text}</span> : <b>{item.text}</b>}
-    </div>
-  );
+export function BotAuthor({ character, botName, state = "idle" }: { character: Character; botName: string; state?: FaceState }) {
+  return <div className="assistant-author"><BotFace character={character} size={24} state={state} /><span>{botName}</span></div>;
 }
 
-export function ChatItem({ item, character, botName = "Bot" }: { item: DisplayItem; character: Character; botName?: string }) {
+function ReplyActions({ text, onRetry }: { text?: string; onRetry?: () => Promise<void> }) {
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const copy = async () => {
+    if (text === undefined) return;
+    try { await navigator.clipboard.writeText(text); setCopied(true); setProblem(null); }
+    catch { setProblem("Could not copy. Select the reply to copy it."); }
+  };
+  const retry = async () => {
+    if (!onRetry || busy) return;
+    setBusy(true); setProblem(null);
+    try { await onRetry(); } catch (error) { setProblem(errorMessage(error)); }
+    finally { setBusy(false); }
+  };
+  return <>
+    <div className="reply-actions">
+      {text !== undefined && <button type="button" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>}
+      {onRetry && <button type="button" disabled={busy} onClick={() => void retry()}>{busy ? "Retrying…" : "Retry"}</button>}
+    </div>
+    {problem && <p className="error" role="alert">{problem}</p>}
+  </>;
+}
+
+function StatusLine({ item, character, botName }: { item: Extract<DisplayItem, { kind: "status" }>; character: Character; botName: string }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (item.mode === "queued") return;
+    const timer = window.setTimeout(() => setSlow(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [item.text, item.mode]);
+  const label = item.mode === "thinking" ? "Thinking…" : item.text;
+  return <div className="assistant-message">
+    <BotAuthor character={character} botName={botName} state={item.mode === "tool" ? "working" : item.mode === "thinking" ? "thinking" : "idle"} />
+    <div className="live" role="status"><span className="activity-dot" aria-hidden="true" /><span>{slow ? "Still working…" : label}</span>{slow && <small>{label} · You can stop at any time</small>}</div>
+  </div>;
+}
+
+export function ChatItem({ item, character, botName = "Bot", onRetry, completed = false }: { item: DisplayItem; character: Character; botName?: string; onRetry?: () => Promise<void>; completed?: boolean }) {
   switch (item.kind) {
     case "time":
       return <div className="when">{item.label}</div>;
@@ -193,8 +227,9 @@ export function ChatItem({ item, character, botName = "Bot" }: { item: DisplayIt
     case "assistant":
       return (
         <article className="assistant-message">
-          <div className="assistant-author"><BotFace character={character} size={24} /><span>{botName}</span></div>
+          <BotAuthor character={character} botName={botName} state={item.streaming ? "working" : completed ? "success" : "idle"} />
           <div className="bub" aria-live={item.streaming ? "polite" : undefined}><Markdown text={item.text} /></div>
+          {!item.streaming && <ReplyActions text={item.text} onRetry={onRetry} />}
         </article>
       );
     case "report":
@@ -204,28 +239,17 @@ export function ChatItem({ item, character, botName = "Bot" }: { item: DisplayIt
           <Markdown text={item.text} />
         </div>
       );
-    case "reasoning":
-      return (
-        <details className="reasoning">
-          <summary>Reasoning</summary>
-          <p>{item.text}</p>
-        </details>
-      );
     case "tool":
       return <ToolRow item={item} />;
     case "approval":
-      return <ApprovalCard item={item} />;
+      return <div className="assistant-message"><BotAuthor character={character} botName={botName} state="needsApproval" /><ApprovalCard item={item} /></div>;
     case "denied":
       return <div className="system-line">{item.text}</div>;
     case "failed":
-      return (
-        <div className="err" role="alert">
-          {item.reason}
-        </div>
-      );
+      return <section className="chat-recovery" role="alert"><h3>The reply was interrupted</h3><p>{item.reason}</p><p>Your message and any partial reply are still here.</p>{onRetry && <ReplyActions onRetry={onRetry} />}</section>;
     case "stopped":
-      return <div className="system-line">Stopped</div>;
+      return <section className="chat-recovery"><h3>You stopped this reply</h3><p>Any text already written stays in the conversation.</p>{onRetry && <ReplyActions onRetry={onRetry} />}</section>;
     case "status":
-      return <StatusLine item={item} character={character} />;
+      return <StatusLine item={item} character={character} botName={botName} />;
   }
 }

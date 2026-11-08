@@ -9,7 +9,7 @@ import { snapCenterToCursor } from "@dnd-kit/modifiers";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { useState } from "react";
-import { FACE_STATES, subLineOf, useShownActivity, type BotRow } from "./activity.ts";
+import { faceStateFor, subLineOf, useShownActivity, type BotRow } from "./activity.ts";
 import { BotFace, QueuedDots } from "./BotFace.tsx";
 import { characterOf } from "./character.ts";
 import { errorMessage } from "./session.tsx";
@@ -39,7 +39,7 @@ function BotLink({ row, highlighted, phone, compact, disabled }: { row: BotRow; 
         data-dragging={drag.isDragging} data-bot-id={row._id} title={row.name}
         draggable={false}
       >
-        <BotFace character={characterOf(row)} size={highlighted ? compact ? 36 : 44 : phone ? 40 : 32} state={FACE_STATES[activity.kind]} />
+        <BotFace character={characterOf(row)} size={highlighted ? compact ? 36 : 44 : phone ? 40 : 32} state={faceStateFor(activity)} badge />
         {highlighted ? <span className="highlight-name">{row.name}</span> : (
           <span className="row-text">
             <span className="row-name">{row.name}</span>

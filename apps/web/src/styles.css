@@ -1,10 +1,10 @@
 /* Shared with Bots / Quiet and Bots / Shape in Figma. */
 :root {
-  --page: #fafafa;
-  --side: #f2f2f2;
+  --page: #ffffff;
+  --side: #f5f5f5;
   --raised: #ffffff;
-  --bubble: #efefef;
-  --sel: #e6e6e6;
+  --bubble: #f5f5f5;
+  --sel: #ebebeb;
   --hover: #eaeaea;
   --line: #e4e4e4;
   --hair: #e4e4e4;
@@ -13,8 +13,8 @@
   --faint: #999999;
   --danger: #cf3535;
   --on-danger: #ffffff;
-  --account-avatar: #7d4ddb;
-  --account-initials: #ffffff;
+  --account-avatar: var(--fg);
+  --account-initials: var(--page);
   --unread: #5c5c5c;
   --scrim: rgb(0 0 0 / 0.32);
   --shot: none;
@@ -46,7 +46,6 @@
   --faint: #858585;
   --danger: #ff8585;
   --on-danger: #202020;
-  --account-avatar: #9463f0;
   --scrim: rgb(0 0 0 / 0.4);
   color-scheme: dark;
 }
@@ -256,29 +255,13 @@ pre {
   fill: var(--on-bot);
 }
 
-.face[data-state="working"] .face-body {
-  animation: face-wobble 1.7s ease-in-out infinite;
-}
-
-.face[data-state="working"] .face-eyes {
-  animation:
-    face-wobble 1.7s ease-in-out infinite,
-    face-look 3.4s steps(1) infinite;
-}
-
-.face[data-state="idle"] .face-eyes,
-.face[data-state="needsApproval"] .face-eyes {
-  animation: face-blink 5.5s linear infinite;
-}
-
-.face[data-state="held"] .face-eyes {
-  scale: 1 0.28;
-}
-
-/* A grid of choices should not blink together. */
-.pick .face .face-eyes {
-  animation: none;
-}
+.face-gaze { translate: var(--gaze-x, 0px) var(--gaze-y, 0px); transition: translate 300ms ease-out; }
+.face[data-looking="true"] .face-gaze { transition-duration: 180ms; }
+.face[data-state="idle"] .face-eyes { animation: face-blink 5.5s linear infinite; }
+.face[data-state="thinking"] .face-eyes { animation: face-think 2.9s ease-out infinite; }
+.face[data-state="thinking"] .face-eye:first-child { animation: face-think-left 2.9s ease-out infinite; }
+.face[data-state="thinking"] .face-eye:last-child { animation: face-think-right 2.9s ease-out infinite; }
+.pick .face .face-eyes, .pick .face .face-eye { animation: none; }
 
 .face-wrap {
   position: relative;
@@ -324,30 +307,13 @@ pre {
   animation-delay: 0.4s;
 }
 
-@keyframes face-wobble {
-  0%,
-  100% {
-    rotate: -3deg;
-    scale: 1 1;
-  }
-  50% {
-    rotate: 3deg;
-    scale: 1.03 0.97;
-  }
+@keyframes face-think {
+  0%, 38%, 100% { translate: 0 0; }
+  50%, 88% { translate: 2px 0; }
 }
 
-@keyframes face-look {
-  0%,
-  100% {
-    translate: 0 0;
-  }
-  30% {
-    translate: -6% 0;
-  }
-  60% {
-    translate: 6% 0;
-  }
-}
+@keyframes face-think-left { 0%, 38%, 100% { y: 16px; height: 18px; } 50%, 88% { y: 18px; height: 14px; } }
+@keyframes face-think-right { 0%, 38%, 100% { y: 18px; height: 14px; } 50%, 88% { y: 16px; height: 18px; } }
 
 @keyframes face-blink {
   0%,
@@ -373,9 +339,11 @@ pre {
 @media (prefers-reduced-motion: reduce) {
   .face-body,
   .face-eyes,
+  .face-eye,
   .dots i {
     animation: none !important;
   }
+  .face-gaze { translate: 0 0; transition: none; }
 }
 
 /* Shell */
@@ -654,18 +622,6 @@ pre {
   font-size: 0.88em;
 }
 
-.reasoning summary {
-  cursor: pointer;
-}
-
-.reasoning p {
-  margin-top: 4px;
-  padding-left: 8px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  border-left: 2px solid var(--line);
-}
-
 button.tool:hover {
   color: var(--fg);
 }
@@ -794,43 +750,9 @@ button.tool:hover {
   box-shadow: none;
 }
 
-.live {
-  align-self: flex-start;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 2px 2px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.live b {
-  background: linear-gradient(90deg, var(--fg) 20%, var(--faint) 50%, var(--fg) 80%);
-  background-size: 220% 100%;
-  background-clip: text;
-  color: transparent;
-  font-weight: 400;
-  animation: sheen 2.2s linear infinite;
-}
-
-@keyframes sheen {
-  from {
-    background-position: 110% 0;
-  }
-  to {
-    background-position: -110% 0;
-  }
-}
-
-/* After the rule above, which has the same specificity and would otherwise win. */
-@media (prefers-reduced-motion: reduce) {
-  .live b {
-    background: none;
-    color: var(--fg);
-    animation: none;
-  }
-}
-
+.live { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 13px; font-weight: 500; }
+.live small { font-size: 12px; font-weight: 400; }
+.activity-dot { flex: none; width: 5px; height: 5px; background: var(--muted); border-radius: 50%; mask: url("./assets/ui/activity-dot.svg") center / 5px 5px no-repeat; }
 .composer textarea::placeholder {
   color: var(--faint);
 }
@@ -1494,24 +1416,23 @@ button.card-row:hover {
 .pill { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-width: 112px; max-width: min(300px, 65%); height: 48px; padding: 8px 16px; background: var(--side); border-radius: var(--radius-pill); font-size: 15px; font-weight: 500; }
 .pill-who { min-width: 0; line-height: 1.5; }
 .chat-scroll { flex: 1; min-height: 0; overflow: hidden auto; padding: 26px 32px 16px; }
-.conversation { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 720px; margin: 0 auto; }
+.conversation { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: 720px; margin: 0 auto; }
 .when { margin: 0 0 8px; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
 .bub { align-self: flex-start; width: 100%; min-width: 0; max-width: 100%; padding: 0; background: none; border-radius: 24px; font-size: 15px; overflow-wrap: anywhere; }
-.mine { align-self: flex-end; width: auto; max-width: 80%; margin: 0 0 14px; padding: 16px; background: var(--side); color: var(--fg); white-space: pre-wrap; }
+.mine { align-self: flex-end; width: auto; max-width: min(80%, 510px); margin: 0 0 14px; padding: 16px; background: var(--sel); color: var(--fg); white-space: pre-wrap; }
 .assistant-message { display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; }
-.assistant-author { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 500; }
+.assistant-author { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 500; }
 .report { padding: 24px; background: var(--raised); border: 1px solid var(--line); }
-.reasoning { align-self: flex-start; max-width: 100%; color: var(--muted); font-size: 12px; }
 .tool { display: inline-flex; align-self: flex-start; align-items: center; gap: 6px; max-width: 100%; min-width: 0; margin: 0; padding: 0; color: var(--muted); font-size: 11px; }
-.ask { display: flex; align-self: flex-start; flex-direction: column; gap: 12px; width: 100%; margin: 0; padding: 20px; background: var(--bubble); border-radius: var(--radius-card); overflow-wrap: anywhere; }
+.ask { display: flex; align-self: flex-start; flex-direction: column; gap: 12px; width: 100%; margin: 0; padding: 16px; background: var(--sel); border: 1px solid var(--line); border-radius: var(--radius-card); overflow-wrap: anywhere; }
 .opts { display: flex; flex-wrap: wrap; gap: 8px; }
 .opt { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 0 14px; background: var(--raised); border-radius: var(--radius-pill); font-size: 12px; }
 .opt:first-child { background: var(--fg); color: var(--raised); }
 .opt i { display: none; }
 .dock { flex: none; padding: 8px 32px calc(20px + var(--safe-bottom)); }
 .composer { display: grid; gap: 8px; width: 100%; max-width: 720px; margin: 0 auto; }
-.composer-row { display: flex; flex-direction: column; gap: 10px; min-height: 114px; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-composer); }
-.composer textarea { flex: none; width: 100%; min-width: 0; min-height: 36px; max-height: 180px; padding: 0; background: none; border: 0; outline: 0; resize: none; font-size: 14px; line-height: 21px; }
+.composer-row { display: flex; flex-direction: column; gap: 22px; min-height: 114px; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-field); }
+.composer textarea { flex: none; width: 100%; min-width: 0; min-height: 22px; max-height: 180px; padding: 0; background: none; border: 0; outline: 0; resize: none; font-size: 15px; line-height: 22px; }
 .composer-toolbar { display: flex; align-items: center; gap: 12px; min-height: 36px; }
 .composer-attach { width: 36px; height: 36px; color: var(--muted); background: transparent; }
 .composer-attach .icon { width: 17px; height: 17px; }
@@ -1575,7 +1496,8 @@ button.card-row:hover {
 .message-attachment:has(> img) { flex-direction: column; align-items: stretch; }
 .message-attachment > img { display: block; width: 100%; max-height: 200px; object-fit: contain; border-radius: 10px; }
 .send { display: grid; flex: none; place-items: center; width: 36px; height: 36px; background: var(--fg); color: var(--raised); border-radius: var(--radius-pill); }
-.send-stopping { width: auto; padding: 0 12px; }
+.send-stopping { opacity: 0.55; }
+.send-stop .icon, .send-stopping .icon { width: 24px; height: 24px; fill: currentColor; stroke: none; }
 .composer-disclaimer { padding-top: 8px; color: var(--muted); font-size: 10px; text-align: center; }
 
 /* Docked bot details. The chat gives this column room instead of being covered. */
@@ -1612,7 +1534,7 @@ button.card-row:hover {
 .pick-colors .face { animation: none; }
 .new-bot .pick-colors { justify-content: center; }
 .info > .card:last-child { background: transparent; border: 0; }
-.danger-link { color: var(--muted); }
+.danger-link { color: var(--danger); }
 .delete-bot-footer { display: flex; flex: none; align-items: center; gap: 14px; min-height: 84px; padding: 20px; }
 .delete-bot-footer > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .delete-bot-footer h3 { font-size: 13px; font-weight: 500; }
@@ -1725,7 +1647,7 @@ button.card-row:hover {
   .chat-scroll { padding: 16px 20px; }
   .conversation { gap: 20px; }
   .bub, .err { max-width: 100%; font-size: 15px; }
-  .mine { max-width: 90%; padding: 16px; }
+  .mine { max-width: min(90%, 292px); padding: 16px; }
   .dock { padding: 8px 16px calc(16px + var(--safe-bottom)); }
   .composer textarea { font-size: 16px; }
   .composer[data-voice] textarea { font-size: 16px; }
@@ -1826,3 +1748,19 @@ button.card-row:hover {
 .window-drag:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; border-radius: 8px; }
 .window-resize:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; border-radius: 4px; }
 .screen[data-presentation="minimized"] .window-header { height: 42px; }
+
+/* Chat / Activity, tool disclosure, reply actions and recovery. */
+.tool-details { width: 100%; padding-left: 12px; border-left: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.tool-details summary { display: flex; gap: 6px; cursor: pointer; width: fit-content; max-width: 100%; overflow-wrap: anywhere; list-style: none; }
+.tool-details summary::-webkit-details-marker { display: none; }
+.tool-details summary::before { content: "›"; flex: none; }
+.tool-details[open] > summary::before { content: "⌄"; }
+.tool-steps { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-top: 12px; }
+.tool-steps .tool { font-size: 12px; }
+.tool-steps .out { align-self: stretch; width: 100%; margin: 0; }
+.reply-actions { display: flex; gap: 20px; color: var(--muted); font-size: 12px; }
+.reply-actions button:hover { color: var(--fg); }
+.reply-actions button:disabled { opacity: .5; }
+.chat-recovery { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-card); }
+.chat-recovery h3 { font-size: 13px; font-weight: 500; }
+.chat-recovery p { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
