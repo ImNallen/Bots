@@ -11,13 +11,15 @@ Each step ends in a check. Start the next step only after that check passes. The
 | 4 | Done, with gaps listed below | Screens, live view, take-over, and approvals | Two bots work at once while a user watches one and takes over the other from a phone |
 | 4b | Done, with gaps listed below | The redesign | On a phone and a computer, the owner creates a bot, chats with it, answers an approval, watches it, takes it over, and deletes it in the new design, and accepts the result |
 | 5 | Done, with gaps listed below | The standing assignment, now the description, memory, schedules, and the Activity view | The orchestrator rejects a write attempt from a scheduled run |
-| 6 | **Next** | Friend invites | A friend goes from invite to working bot without help |
+| 6 | Deferred | Friend invites | A friend goes from invite to working bot without help |
 | 7 | | Tauri and Expo apps, and push | A user approves an action from a push notification |
 | 8 | | OAuth connectors, the independent reviewer, and the Vault | Bots use saved logins without seeing the passwords, and bots no longer have passwordless `sudo` |
 
 Step 3 isolates bots from the LAN. Friends join through the invites in step 6, and until then an operator declares each computer by hand.
 
-Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Add off-server copies of Convex exports and the master key before anyone depends on this system.
+The owner deferred step 6 on 2026-11-08, because nobody is waiting for an invite yet. Until then, work continues on [the desktop follow-ups](#follow-ups-in-this-order), starting with letting bots use the desktop. Step 6's gaps below still apply when it starts.
+
+Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Add off-server copies of Convex exports and the master key before anyone depends on this system. The owner confirmed on 2026-11-08 that nothing depends on it yet.
 
 ## Where things run
 
@@ -182,7 +184,7 @@ Routines show the newest run across the bot's current routines, using the existi
 
 `pnpm verify:highlights` uses a separate local account and the real backend. It checks mouse dragging, touch dragging, touch scrolling, keyboard movement, reordering, centring, square buttons with names inside, long names, reloads, a second browser session, the four-bot limit, ownership, invalid positions, and deletion. It also checks border and keyboard resizing, saved and invalid widths, responsive grids, and dragging in the compact rail. `pnpm verify:design` seeds routine records through the existing internal check functions to verify the last-run summary and its navigation. Touch was checked through Chromium's touch emulation. A physical phone is untested.
 
-`pnpm typecheck`, `pnpm test`, `pnpm build`, and `pnpm verify:auth` passed locally. `pnpm verify:design` checks the live app at 1440, 1024, and 390 pixels wide. It covers sidebar geometry, hidden description preservation, draft preservation, colours, Settings, system and saved themes, mobile navigation, Computer's disconnected state, and bot creation and deletion. Screenshots were reviewed in light and dark, and an existing conversation was reviewed on a computer and at phone width. This revision has not been deployed or accepted on a real phone. Docker has no desktop, so live streaming, takeover input, and the phone keyboard still need verification on a VM.
+`pnpm typecheck`, `pnpm test`, `pnpm build`, and `pnpm verify:auth` passed locally. `pnpm verify:design` checks the live app at 1440, 1024, and 390 pixels wide. It covers sidebar geometry, hidden description preservation, draft preservation, colours, Settings, system and saved themes, mobile navigation, Computer's disconnected state, and bot creation and deletion. Screenshots were reviewed in light and dark, and an existing conversation was reviewed on a computer and at phone width. This revision runs on the control VM at `1dc9f04`. On 2026-11-08, `verify:screen`, `verify:takeover`, and `verify:browser` passed there against VM 201. Those checks speak to the stream and take-over directly, not through the web app, so the floating Computer view on a real desktop and the phone keyboard are still untested. The owner has not accepted this revision on a real phone.
 
 ### Chat attachments on 2026-11-07
 
@@ -276,7 +278,7 @@ Step 5 was accepted on 2026-11-07, after these checks on the real system:
 - `infra/proxmox/verify-desktop.sh 201` passed all 247 checks, including the logged-out step and the reboot.
 - The owner tried a real routine and reported that it works.
 
-The step's check itself, that the orchestrator rejects a write attempt from a scheduled run, has only run with a scripted fake model, because a real model has no reason to attempt one. So nothing shows that Mistral accepts a history that holds a call to a tool it was not offered. `pnpm verify:browser`, `pnpm verify:screen`, and `pnpm verify:takeover` have not run since this stack.
+The step's check itself, that the orchestrator rejects a write attempt from a scheduled run, has only run with a scripted fake model, because a real model has no reason to attempt one. So nothing shows that Mistral accepts a history that holds a call to a tool it was not offered. `pnpm verify:browser`, `pnpm verify:screen`, and `pnpm verify:takeover` passed on 2026-11-08 against `1dc9f04`, which includes this stack.
 
 ### The description
 
@@ -438,6 +440,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - VM 110 has no firewall of its own, and SSH and LLMNR listen on its `10.78.0.2` address. Only `bots_guard` stops a user VM from reaching them. `verify-network.sh` fails if that table is missing, and guests do not autostart without it.
 - The rules limit where a bot connects, not how much it sends. A bot can flood the link port, and it can connect to port 25 on any public address from the home IP address.
 - A check that fails or times out before its end leaves its `verify-*` bots in the user's list. The bot page deletes them.
+- If the setup run of `pnpm verify:takeover` ends with no `browser_navigate` result, the check prints no reason, and every later step that needs the form fails. This happened once on 2026-11-08 against a real model, and a rerun passed.
 - Deleting a bot does not end a background process that the bot left running, and a process can keep a deleted file open. A computer reset will end them.
 - A screen that opens in the instant before a delete can bring back an empty profile for that bot, and nothing removes it.
 - A deleted bot's tool results stay in the VM's `computerd` journal for up to 7 days, where another bot with `sudo` can read them.
