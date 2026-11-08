@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { MAX_SCREEN_IMAGE_BYTES, fitToLink, screenImage, type Box, type DesktopInvocation, type ToolResult } from "@bots/protocol";
+import { MAX_SCREEN_IMAGE_BYTES, fitToLink, screenImage, type AimedInvocation, type Box, type DesktopInvocation, type ToolResult } from "@bots/protocol";
 import type { Desktops, Slot } from "./desktops.ts";
 import { log } from "./log.ts";
-import { INTERACTIVE_ROLES, capture, selectMarks, type Capture } from "./marks.ts";
+import { INTERACTIVE_ROLES, capture, inputPlan, locate, selectMarks, summaryOf, type Capture, type InputStep } from "./marks.ts";
 
 export const HAND_PATH = "/opt/bots-computerd/current/apps/computerd/desktop/hand.py";
 
@@ -14,6 +14,7 @@ export function handArgv(slot: Slot): string[] {
 
 const DEADLINE_MS = 30_000;
 const CAPTURE = { roles: INTERACTIVE_ROLES, maxNodes: 4000, appDeadlineMs: 1500, walkDeadlineMs: 8000 } as const;
+const SETTLE = { minMs: 300, quietMs: 150, maxMs: 2000 } as const;
 
 // The helper's side of the line protocol. One JSON object per line each way, answered in order.
 export type Hand = {
@@ -21,6 +22,10 @@ export type Hand = {
   capture: () => Promise<unknown>;
   // Draws each box and its number on the last frame, and encodes it within maxBytes, or answers null.
   render: (request: { boxes: readonly { mark: number; box: Box }[]; maxBytes: number }) => Promise<unknown>;
+  // Sends the steps with xdotool, in order.
+  input: (steps: readonly InputStep[]) => Promise<void>;
+  // Waits at least minMs, then until two grabs quietMs apart differ in under 0.2% of their pixels, or until maxMs.
+  settle: (request: typeof SETTLE) => Promise<void>;
   close: () => void;
 };
 
@@ -64,6 +69,8 @@ export function openHand(slot: Slot): Hand {
   return {
     capture: () => ask({ verb: "capture", ...CAPTURE }).then((reply) => (reply as { capture: unknown }).capture),
     render: (request) => ask({ verb: "render", ...request }).then((reply) => (reply as { image: unknown }).image),
+    input: (steps) => ask({ verb: "input", steps }).then(() => {}),
+    settle: (request) => ask({ verb: "settle", ...request }).then(() => {}),
     // The helper exits at the end of its input. A kill reaches it through sudo, which passes the signal on.
     close: () => {
       child.stdin.end();
@@ -80,20 +87,40 @@ export function createDesktop(args: {
   desktops: Pick<Desktops, "acquire">;
   open?: (slot: Slot) => Hand;
   takeoverSettled?: (botId: string, signal: AbortSignal) => Promise<void>;
+  personHasScreen?: (botId: string) => boolean;
   deadlineMs?: number;
 }): Desktop {
-  const { desktops, open = openHand, takeoverSettled, deadlineMs = DEADLINE_MS } = args;
+  const { desktops, open = openHand, takeoverSettled, personHasScreen, deadlineMs = DEADLINE_MS } = args;
   const queues = new Map<string, Promise<unknown>>();
 
-  async function look(hand: Hand, output: string): Promise<ToolResult> {
+  async function captureOf(hand: Hand): Promise<Capture> {
     const parsed = capture.safeParse(await hand.capture());
     if (!parsed.success) {
       throw new Error("the desktop helper's capture does not parse");
     }
-    const captured: Capture = parsed.data;
+    return parsed.data;
+  }
+
+  // The picture is drawn on the frame of the last capture, so a refusal shows the screen that it found.
+  async function lookAt(hand: Hand, captured: Capture, outcome: "ok" | "error", output: string): Promise<ToolResult> {
     const { view } = selectMarks(captured);
     const image = screenImage.safeParse(await hand.render({ boxes: view.marks.map(({ mark, box }) => ({ mark, box })), maxBytes: MAX_SCREEN_IMAGE_BYTES }));
-    return { outcome: "ok", output, truncated: false, screen: image.success ? { ...view, image: image.data } : view };
+    return { outcome, output, truncated: false, screen: image.success ? { ...view, image: image.data } : view };
+  }
+
+  async function act(hand: Hand, botId: string, tool: AimedInvocation, started: () => void): Promise<ToolResult> {
+    const before = await captureOf(hand);
+    if (personHasScreen?.(botId) === true) {
+      return await lookAt(hand, before, "error", "Your owner has the screen, so nothing was done. This look is new.");
+    }
+    const located = locate(before, tool);
+    if (located.kind === "stale") {
+      return await lookAt(hand, before, "error", `Nothing was done, because ${located.why}. This look is new.`);
+    }
+    started();
+    await hand.input(inputPlan(tool, located));
+    await hand.settle(SETTLE);
+    return await lookAt(hand, await captureOf(hand), "ok", summaryOf(tool, located));
   }
 
   async function run(botId: string, tool: DesktopInvocation, signal: AbortSignal): Promise<ToolResult> {
@@ -110,17 +137,17 @@ export function createDesktop(args: {
       }
       ends.addEventListener("abort", stop, { once: true });
     });
+    let sent = false;
+    const partly = () => (sent ? " It may have partly happened." : " Nothing was sent to the screen.");
     try {
-      switch (tool.name) {
-        case "desktop_look":
-          return await Promise.race([look(hand, "Looked at the screen."), stopped]);
-      }
+      const work = tool.name === "desktop_look" ? captureOf(hand).then((captured) => lookAt(hand, captured, "ok", "Looked at the screen.")) : act(hand, botId, tool, () => (sent = true));
+      return await Promise.race([work, stopped]);
     } catch (error) {
       if (signal.aborted) {
-        return { outcome: "cancelled", output: "The look at the screen was cancelled.", truncated: false };
+        return { outcome: "cancelled", output: `The desktop action was cancelled.${partly()}`, truncated: false };
       }
       if (ends.aborted) {
-        return { outcome: "timeout", output: `The look at the screen did not finish in ${deadlineMs / 1000} seconds, so it stopped.`, truncated: false };
+        return { outcome: "timeout", output: `The desktop action did not finish in ${deadlineMs / 1000} seconds, so it stopped.${partly()}`, truncated: false };
       }
       throw error;
     } finally {

@@ -14,6 +14,7 @@ import {
   runEventBody,
   runState,
   runTrigger,
+  screenBox,
   screenImageBytes,
 } from "./validators.js";
 
@@ -75,6 +76,9 @@ export default defineSchema({
     toolName: v.string(),
     state: approvalState,
     requestedAt: v.number(),
+    // A desktop input's card: what it does in words, and the box that the card outlines on the run's newest look.
+    subject: v.optional(v.string()),
+    box: v.optional(screenBox),
   })
     .index("by_run_call", ["runId", "toolCallId"])
     .index("by_owner_state", ["ownerId", "state"])

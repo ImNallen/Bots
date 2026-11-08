@@ -19,10 +19,10 @@ OLD_ROOT=/opt/computerd
 UNIT_DIR=/etc/systemd/system
 UNIT=$UNIT_DIR/computerd.service
 TOOLS="sudo procps ca-certificates curl git xz-utils"
-# at-spi2-core through fonts-dejavu-core let the desktop helper read each app's accessibility tree, grab the screen, and number
-# it. The portal makes Chromium's file chooser its own GTK app, which has an accessibility tree, where Chromium's built-in dialog
-# has none.
-BROWSER_PACKAGES="chromium xvfb x11vnc x11-utils dbus dbus-bin xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-terminal xfconf thunar fonts-liberation fonts-noto-color-emoji at-spi2-core gir1.2-atspi-2.0 python3-gi python3-pil fonts-dejavu-core xdg-desktop-portal xdg-desktop-portal-gtk"
+# at-spi2-core through xdotool let the desktop helper read each app's accessibility tree, grab the screen, number it, and send
+# input. The portal makes Chromium's file chooser its own GTK app, which has an accessibility tree, where Chromium's built-in
+# dialog has none.
+BROWSER_PACKAGES="chromium xvfb x11vnc x11-utils dbus dbus-bin xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-terminal xfconf thunar fonts-liberation fonts-noto-color-emoji at-spi2-core gir1.2-atspi-2.0 python3-gi python3-pil fonts-dejavu-core xdotool xdg-desktop-portal xdg-desktop-portal-gtk"
 
 ref=${1:?usage: install-computerd.sh GIT_REF [all|build|activate|force]}
 mode=${2:-all}

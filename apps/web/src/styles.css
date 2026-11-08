@@ -711,6 +711,30 @@ button.tool:hover {
   font-size: 11.5px;
 }
 
+.ask-screen {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  line-height: 0;
+  border-radius: 8px;
+}
+
+.ask-screen img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ask-target {
+  position: absolute;
+  outline: 3px solid #e5383b;
+  outline-offset: 2px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.18);
+  pointer-events: none;
+}
+
 .ask pre {
   max-height: 40vh;
   margin: 0;

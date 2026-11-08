@@ -15,6 +15,10 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
   browser_type: { everything: true, outside: true, shell: false, nothing: false },
   browser_press: { everything: true, outside: true, shell: false, nothing: false },
   desktop_look: { everything: true, outside: false, shell: false, nothing: false },
+  desktop_click: { everything: true, outside: true, shell: true, nothing: false },
+  desktop_type: { everything: true, outside: true, shell: true, nothing: false },
+  desktop_key: { everything: true, outside: true, shell: true, nothing: false },
+  desktop_scroll: { everything: true, outside: true, shell: true, nothing: false },
   memory_save: { everything: true, outside: false, shell: false, nothing: false },
   memory_forget: { everything: true, outside: false, shell: false, nothing: false },
   description_set: { everything: true, outside: false, shell: false, nothing: false },
@@ -33,9 +37,9 @@ describe("decideTool for a read-only run", () => {
     },
   );
 
-  it("forbids exactly the 9 tools that change something, and the look at the logged-in desktop", () => {
+  it("forbids exactly the tools that change something, and every desktop tool, because the desktop shows the owner's logins", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, touchedComputer: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 });
 
@@ -78,17 +82,19 @@ describe("decideTool for a full run", () => {
     expect(asked("everything")).toEqual(TOOLS);
   });
 
-  it("asks for shell and for browser actions that change something at outside", () => {
-    expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press", "schedule_propose"]);
+  const DESKTOP_INPUT: ToolName[] = ["desktop_click", "desktop_type", "desktop_key", "desktop_scroll"];
+
+  it("asks for shell, desktop input, and browser actions that change something at outside", () => {
+    expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "schedule_propose"]);
   });
 
   it("also asks for the memory tools at outside after a computer tool", () => {
-    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
+    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 
-  it("asks only for shell and a routine at shell", () => {
-    expect(asked("shell")).toEqual(["shell", "schedule_propose"]);
-    expect(asked("shell", true)).toEqual(["shell", "schedule_propose"]);
+  it("asks for anything that can run a program, and a routine, at shell, because a terminal is one click away", () => {
+    expect(asked("shell")).toEqual(["shell", ...DESKTOP_INPUT, "schedule_propose"]);
+    expect(asked("shell", true)).toEqual(["shell", ...DESKTOP_INPUT, "schedule_propose"]);
   });
 
   it("asks only for a routine at nothing", () => {

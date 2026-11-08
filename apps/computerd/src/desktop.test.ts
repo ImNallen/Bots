@@ -18,13 +18,19 @@ function fakeHand(overrides: Partial<Hand> = {}) {
       calls.push(`render ${boxes.length}`);
       return { mediaType: "image/png", base64: "iVBORw0KGgo=" };
     },
+    input: async (steps) => {
+      calls.push(`input ${JSON.stringify(steps)}`);
+    },
+    settle: async () => {
+      calls.push("settle");
+    },
     close: () => calls.push("close"),
     ...overrides,
   };
   return { hand, calls };
 }
 
-function desktopWith(hand: Hand, deadlineMs?: number) {
+function desktopWith(hand: Hand, deadlineMs?: number, personHasScreen?: () => boolean) {
   const leases: string[] = [];
   const desktop = createDesktop({
     desktops: {
@@ -35,6 +41,7 @@ function desktopWith(hand: Hand, deadlineMs?: number) {
     },
     open: () => hand,
     ...(deadlineMs === undefined ? {} : { deadlineMs }),
+    ...(personHasScreen === undefined ? {} : { personHasScreen }),
   });
   return { desktop, leases };
 }
@@ -100,5 +107,43 @@ describe("desktop_look", () => {
     const { desktop } = desktopWith(hand);
     await Promise.all([desktop.execute({ botId: "bot", tool: look, signal: signal() }), desktop.execute({ botId: "bot", tool: look, signal: signal() })]);
     expect(order).toEqual(["first starts", "first ends", "second starts", "second ends"]);
+  });
+});
+
+describe("desktop input", () => {
+  const window = { app: "Chromium", pid: 5092, kind: "frame" as const, title: "Sign in to GitHub · GitHub - Chromium" };
+  const signIn = { role: "button", name: "Sign in", states: [], box: { x: 464, y: 438, w: 352, h: 40 } };
+  const click = (box = signIn.box) => ({ name: "desktop_click" as const, args: { mark: 9, button: "left" as const }, aim: { window, element: { ...signIn, box } } });
+
+  it("clicks the approved element where the fresh capture finds it, waits for the screen, and looks again", async () => {
+    const { hand, calls } = fakeHand();
+    const result = await desktopWith(hand).desktop.execute({ botId: "bot", tool: click(), signal: signal() });
+    expect(result).toMatchObject({ outcome: "ok", output: 'Clicked button "Sign in" in Chromium.' });
+    expect(calls).toEqual(["capture", `input ${JSON.stringify([{ kind: "move", x: 640, y: 458 }, { kind: "click", button: 1, count: 1 }])}`, "settle", "capture", `render ${result.screen?.marks.length}`, "close"]);
+  });
+
+  it("sends nothing when the element is no longer where the look showed it, and answers with a new look", async () => {
+    const { hand, calls } = fakeHand();
+    const result = await desktopWith(hand).desktop.execute({ botId: "bot", tool: click({ x: 464, y: 600, w: 352, h: 40 }), signal: signal() });
+    expect(result.outcome).toBe("error");
+    expect(result.output).toBe('Nothing was done, because button "Sign in" is not where the last look showed it. This look is new.');
+    expect(result.screen?.marks.length).toBeGreaterThan(0);
+    expect(calls.some((call) => call.startsWith("input"))).toBe(false);
+  });
+
+  it("sends nothing while the owner has the screen", async () => {
+    const { hand, calls } = fakeHand();
+    const result = await desktopWith(hand, undefined, () => true).desktop.execute({ botId: "bot", tool: click(), signal: signal() });
+    expect(result).toMatchObject({ outcome: "error", output: expect.stringContaining("Your owner has the screen") });
+    expect(calls.some((call) => call.startsWith("input"))).toBe(false);
+  });
+
+  it("says that a cancel during input may have partly happened", async () => {
+    const stop = new AbortController();
+    const { hand, calls } = fakeHand({ input: () => new Promise(() => {}) });
+    const pending = desktopWith(hand).desktop.execute({ botId: "bot", tool: click(), signal: stop.signal });
+    setTimeout(() => stop.abort(), 5);
+    expect(await pending).toMatchObject({ outcome: "cancelled", output: "The desktop action was cancelled. It may have partly happened." });
+    expect(calls.at(-1)).toBe("close");
   });
 });

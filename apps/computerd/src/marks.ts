@@ -1,4 +1,17 @@
-import { MAX_MARKS, type Box, type Element, type ElementState, type MarkedElement, type ScreenView, type WindowKind, type WindowRef } from "@bots/protocol";
+import {
+  MAX_MARKS,
+  type AimedInvocation,
+  type Box,
+  type DESKTOP_BUTTONS,
+  type Element,
+  type ElementState,
+  type KeyCombo,
+  type MarkedElement,
+  type SCROLL_DIRECTIONS,
+  type ScreenView,
+  type WindowKind,
+  type WindowRef,
+} from "@bots/protocol";
 import { z } from "zod";
 
 export const PANEL_APP = "xfce4-panel";
@@ -250,4 +263,131 @@ export function selectMarks(captured: Capture): Selection {
     },
     candidates,
   };
+}
+
+export const MOVE_TOLERANCE_PX = 24;
+
+export type Located = { kind: "at"; x: number; y: number; element: Element; window: WindowRef } | { kind: "focus"; window: WindowRef | null } | { kind: "stale"; why: string };
+
+const sameWindow = (a: WindowRef | null, b: WindowRef | null): boolean =>
+  a === null || b === null ? a === b : a.app === b.app && a.pid === b.pid && a.kind === b.kind;
+
+function activeWindowOf(captured: Capture): WindowRef | null {
+  const { view } = selectMarks(captured);
+  return view.active === null ? null : (view.windows[view.active] ?? null);
+}
+
+function find(candidates: readonly Candidate[], aim: { window: WindowRef; element: Element }): Candidate | null {
+  const target = centerOf(aim.element.box);
+  const distance = (candidate: Candidate) => {
+    const center = centerOf(candidate.element.box);
+    return Math.hypot(center.x - target.x, center.y - target.y);
+  };
+  const matches = candidates
+    .filter(({ window, element }) => sameWindow(window, aim.window) && element.role === aim.element.role && element.name === aim.element.name)
+    .filter((candidate) => distance(candidate) <= MOVE_TOLERANCE_PX)
+    .sort((a, b) => distance(a) - distance(b));
+  return matches[0] ?? null;
+}
+
+// Finds what the owner approved in a fresh capture: the same app, process, window kind, role, and name, with its center within
+// MOVE_TOLERANCE_PX of where the look showed it, and the nearest of several. A key and typing with no mark need the same active
+// window, and typing needs the element that had the focus to have it still.
+export function locate(captured: Capture, tool: AimedInvocation): Located {
+  switch (tool.name) {
+    case "desktop_click":
+    case "desktop_scroll":
+      return locateElement(captured, tool.aim);
+    case "desktop_type":
+      if (tool.args.mark !== undefined) {
+        return tool.aim.window === null || tool.aim.element === null ? { kind: "stale", why: "the aim has no element" } : locateElement(captured, { window: tool.aim.window, element: tool.aim.element });
+      }
+      return locateFocus(captured, tool.aim);
+    case "desktop_key":
+      return locateFocus(captured, { window: tool.aim.window, element: null });
+  }
+}
+
+function locateElement(captured: Capture, aim: { window: WindowRef; element: Element }): Located {
+  const found = find(selectMarks(captured).candidates, aim);
+  if (found === null) {
+    return { kind: "stale", why: `${elementLabel(aim.element)} is not where the last look showed it` };
+  }
+  const { x, y } = centerOf(found.element.box);
+  return { kind: "at", x, y, element: found.element, window: found.window };
+}
+
+function locateFocus(captured: Capture, aim: { window: WindowRef | null; element: Element | null }): Located {
+  const active = activeWindowOf(captured);
+  if (!sameWindow(active, aim.window)) {
+    return { kind: "stale", why: `the active window is ${active === null ? "none" : `${active.app} ${JSON.stringify(active.title)}`} now, not the one the last look showed` };
+  }
+  if (aim.element !== null && aim.window !== null) {
+    const found = find(selectMarks(captured).candidates, { window: aim.window, element: aim.element });
+    if (found === null || !found.element.states.includes("focused")) {
+      return { kind: "stale", why: `${elementLabel(aim.element)} no longer has the keyboard focus` };
+    }
+  }
+  return { kind: "focus", window: active };
+}
+
+export type InputStep =
+  | { kind: "move"; x: number; y: number }
+  | { kind: "click"; button: 1 | 2 | 3; count: 1 | 2 }
+  | { kind: "wheel"; button: 4 | 5 | 6 | 7; count: number }
+  | { kind: "key"; combo: KeyCombo; times: number }
+  | { kind: "type"; text: string };
+
+const CLICKS: Readonly<Record<(typeof DESKTOP_BUTTONS)[number], Extract<InputStep, { kind: "click" }>>> = {
+  left: { kind: "click", button: 1, count: 1 },
+  middle: { kind: "click", button: 2, count: 1 },
+  right: { kind: "click", button: 3, count: 1 },
+  double: { kind: "click", button: 1, count: 2 },
+};
+const WHEEL: Readonly<Record<(typeof SCROLL_DIRECTIONS)[number], 4 | 5 | 6 | 7>> = { up: 4, down: 5, left: 6, right: 7 };
+const SELECT_ALL = "ctrl+a" as KeyCombo;
+const ENTER = "Return" as KeyCombo;
+
+export function inputPlan(tool: AimedInvocation, located: Exclude<Located, { kind: "stale" }>): InputStep[] {
+  const at = located.kind === "at" ? [{ kind: "move" as const, x: located.x, y: located.y }] : [];
+  switch (tool.name) {
+    case "desktop_click":
+      return [...at, CLICKS[tool.args.button]];
+    case "desktop_scroll":
+      return [...at, { kind: "wheel", button: WHEEL[tool.args.direction], count: tool.args.amount }];
+    case "desktop_key":
+      return [{ kind: "key", combo: tool.args.keys, times: tool.args.times }];
+    case "desktop_type":
+      return [
+        ...(located.kind === "at" ? [...at, CLICKS.left] : []),
+        ...(tool.args.replace ? [{ kind: "key" as const, combo: SELECT_ALL, times: 1 }] : []),
+        { kind: "type", text: tool.args.text },
+        ...(tool.args.submit ? [{ kind: "key" as const, combo: ENTER, times: 1 }] : []),
+      ];
+  }
+}
+
+export function elementLabel(element: Pick<Element, "role" | "name">): string {
+  return `${element.role} ${JSON.stringify(element.name)}`;
+}
+
+function windowLabel(window: WindowRef | null): string {
+  return window === null ? "no window" : window.kind === "panel" ? "the panel" : window.app;
+}
+
+// Names, never mark numbers, because the numbers belong to a look that is now old. Typed text is counted, not repeated.
+export function summaryOf(tool: AimedInvocation, located: Exclude<Located, { kind: "stale" }>): string {
+  const target = located.kind === "at" ? `${elementLabel(located.element)} in ${windowLabel(located.window)}` : `where the keyboard focus is in ${windowLabel(located.window)}`;
+  switch (tool.name) {
+    case "desktop_click":
+      return `${{ left: "Clicked", right: "Right-clicked", middle: "Middle-clicked", double: "Double-clicked" }[tool.args.button]} ${target}.`;
+    case "desktop_scroll":
+      return `Scrolled ${tool.args.direction} ${tool.args.amount} over ${target}.`;
+    case "desktop_key":
+      return `Pressed ${tool.args.keys}${tool.args.times > 1 ? ` ${tool.args.times} times` : ""} in ${windowLabel(located.window)}.`;
+    case "desktop_type": {
+      const replaced = tool.args.replace ? "Replaced the text and typed" : "Typed";
+      return `${replaced} ${tool.args.text.length} characters ${located.kind === "at" ? `into ${target}` : target}${tool.args.submit ? ", then pressed Enter" : ""}.`;
+    }
+  }
 }
