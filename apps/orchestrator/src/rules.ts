@@ -236,7 +236,8 @@ function parseShell(command: string): ShellParse {
       return { ok: false };
     }
     if (char === "$") {
-      if (next === "(") {
+      // $'…' and $"…" are decoded by bash, so the text the rules read is not the text that runs.
+      if (next === "(" || next === "'" || next === '"') {
         return { ok: false };
       }
       token += char;
@@ -318,8 +319,16 @@ function segmentAllowed(words: string[]): boolean {
   return check !== undefined && check(rest);
 }
 
+// GNU tools take any unambiguous prefix of a long option, as in sort --out=file, so a long token that starts a forbidden name counts.
 const has = (rest: string[], ...flags: string[]): boolean =>
-  rest.some((token) => flags.some((flag) => token === flag || token.startsWith(`${flag}=`)));
+  rest.some((token) => flags.some((flag) => token === flag || token.startsWith(`${flag}=`) || abbreviates(token, flag)));
+function abbreviates(token: string, flag: string): boolean {
+  if (!flag.startsWith("--") || !token.startsWith("--")) {
+    return false;
+  }
+  const name = token.split("=", 1)[0]!;
+  return name.length > 2 && flag.startsWith(name);
+}
 // Short flags combine and take their value attached, as in sort -uo out or -ofile, so any single-dash token holding the letter counts.
 const hasShort = (rest: string[], letter: string): boolean => rest.some((token) => /^-[^-]/.test(token) && token.includes(letter));
 const operands = (rest: string[]): string[] => rest.filter((token) => !token.startsWith("-") || token === "-");
@@ -383,7 +392,7 @@ const GIT_VALUE_OPTIONS: ReadonlySet<string> = new Set(["-C", "--git-dir", "--wo
 
 // git runs with only the listed read subcommands, and never with an option that makes it run a program or write a file.
 function gitAllowed(rest: string[]): boolean {
-  if (rest.some((token) => token === "-c" || token.startsWith("-c=") || token === "--exec-path" || token.startsWith("--exec-path=") || token === "--output" || token.startsWith("--output=") || token === "--ext-diff")) {
+  if (rest.some((token) => token === "-c" || token.startsWith("-c=")) || has(rest, "--exec-path", "--output", "--ext-diff")) {
     return false;
   }
   let index = 0;
@@ -440,19 +449,19 @@ const BUILT_IN_RULES = {
   },
   onPath: {
     reason: "This writes a program where the shell finds commands, so a later command could run it.",
-    applies: (input) => input.invocation.name === "write_file" && onPath(resolvePath(input.workspace, input.invocation.args.path)),
+    applies: (input) => input.invocation.name === "write_file" && pathForms(input.invocation.args.path, input.workspace).some(onPath),
   },
   ownerLogins: {
     reason: "This action reaches your browser's logins or your computer's own records.",
-    applies: (input) => stringArgsOf(input.invocation.args).some((value) => OWNER_LOGIN_PATHS.some((pattern) => pattern.test(value))),
+    applies: (input) => argForms(input).some((value) => OWNER_LOGIN_PATHS.some((pattern) => pattern.test(value))),
   },
   credentialFiles: {
     reason: "This reads or copies saved logins, keys, or credential files.",
-    applies: (input) => stringArgsOf(input.invocation.args).some((value) => reachesCredentialFile(value, input.workspace)),
+    applies: (input) => argForms(input).some((value) => reachesCredentialFile(value, input.workspace)),
   },
   otherBot: {
     reason: "This action reaches another bot's files.",
-    applies: (input) => stringArgsOf(input.invocation.args).some((value) => reachesOtherBot(value, input.workspace)),
+    applies: (input) => argForms(input).some((value) => reachesOtherBot(value, input.workspace)),
   },
 } as const satisfies Record<string, BuiltInRule>;
 
@@ -523,15 +532,31 @@ function reachesOtherBot(value: string, workspace: string): boolean {
   return false;
 }
 
+// A path can name one file many ways, such as .git/./config or /home//browser. Every path rule reads the raw text and the
+// normalized form of each word in it, so a different spelling of a guarded path still matches.
+function pathForms(value: string, workspace: string): string[] {
+  return [value, canonical(workspace, value), ...tokens(value).map((token) => canonical(workspace, token))];
+}
+
+function canonical(workspace: string, token: string): string {
+  const home = /^(~|\$HOME|\$\{HOME\})(?=\/|$)/.exec(token);
+  if (home !== null) {
+    return `~${normalize(token.slice(home[0].length))}`;
+  }
+  return resolvePath(workspace, token);
+}
+
 function shellCommands(input: RuleInput): string[] {
   return input.invocation.name === "shell" ? [input.invocation.args.command] : [];
 }
 
 function writtenPlaces(input: RuleInput): string[] {
-  if (input.invocation.name === "write_file") {
-    return [input.invocation.args.path];
-  }
-  return shellCommands(input).filter((command) => WRITES.test(command));
+  const places = input.invocation.name === "write_file" ? [input.invocation.args.path] : shellCommands(input).filter((command) => WRITES.test(command));
+  return places.flatMap((place) => pathForms(place, input.workspace));
+}
+
+function argForms(input: RuleInput): string[] {
+  return stringArgsOf(input.invocation.args).flatMap((value) => pathForms(value, input.workspace));
 }
 
 const DOWNLOADER = "(?:curl|wget|fetch)";

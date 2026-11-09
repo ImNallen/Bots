@@ -140,6 +140,30 @@ describe("holes found in review stay closed", () => {
     expect(decideByRules({ invocation: { name: "desktop_type", args: { text: "hello", replace: false, submit: false } }, aim: aim({ role: "entry", name: "Search" }, "Chromium"), workspace: WS }).run).toBe(false);
   });
 
+  it("asks on quoting that bash decodes, such as $'-delete'", () => {
+    expect(runsShell("find . $'-delete'")).toBe(false);
+    expect(runsShell('find . $"-delete"')).toBe(false);
+  });
+
+  it("catches an abbreviated long option that writes or runs a program", () => {
+    for (const command of ["sort --out=result.txt input.txt", "sort --outp result.txt input.txt", "rg --pr cat x", "git log --out=x", "git diff --ext", "date --se '2020-01-01'"]) {
+      expect(runsShell(command), command).toBe(false);
+    }
+    expect(runsShell("sort --unique in.txt")).toBe(true);
+  });
+
+  it("matches a guarded path however it is spelled", () => {
+    const write = (path: string) => decideByRules({ invocation: { name: "write_file", args: { path, content: "[core]\n\tfsmonitor = ./x\n" } }, aim: null, workspace: WS });
+    expect(write(".git/./config").rule).toBe("gitConfig");
+    expect(write(".git//config").rule).toBe("gitConfig");
+    expect(write("~/.config/./git/config").rule).toBe("gitConfig");
+    expect(write("~/./.local/bin/ls").rule).toBe("onPath");
+    expect(write("$HOME/.local/./bin/ls").rule).toBe("onPath");
+    expect(decideByRules(sh("cat /var/lib/./computerd/journal")).rule).toBe("ownerLogins");
+    expect(decideByRules(sh("cat /home//browser/profile/Preferences")).rule).toBe("ownerLogins");
+    expect(decideByRules(sh("cat ~/./.ssh/id_rsa")).rule).toBe("credentialFiles");
+  });
+
   it("asks on the commit words a reply, comment, or share button carries", () => {
     for (const name of ["Comment", "Reply all", "Share", "Upload files", "Move to Trash", "Merge pull request"]) {
       expect(decideByRules(click(name, "thunar")).run, name).toBe(false);
