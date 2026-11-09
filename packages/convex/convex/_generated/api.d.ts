@@ -20,6 +20,7 @@ import type * as crons from "../crons.js";
 import type * as identity from "../identity.js";
 import type * as memories from "../memories.js";
 import type * as profile from "../profile.js";
+import type * as routineText from "../routineText.js";
 import type * as runEnd from "../runEnd.js";
 import type * as runs from "../runs.js";
 import type * as scheduleChecks from "../scheduleChecks.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   identity: typeof identity;
   memories: typeof memories;
   profile: typeof profile;
+  routineText: typeof routineText;
   runEnd: typeof runEnd;
   runs: typeof runs;
   scheduleChecks: typeof scheduleChecks;

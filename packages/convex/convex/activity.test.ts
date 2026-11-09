@@ -120,7 +120,7 @@ describe("the Activity page's rows", () => {
   const rawRun = { ...run, _id: "raw" as Id<"runs">, trigger: "schedule" as const, scheduleId };
   const reportRow = { ...run, _id: "report" as Id<"runs">, trigger: "schedule" as const };
   const row = (overrides: Partial<Parameters<typeof runRow>[0]>) =>
-    runRow({ run, bot, instructionOf: () => "Check the news", newestEvents: [], blocked: false, ...overrides });
+    runRow({ run, bot, titleOf: () => "Check the news", newestEvents: [], blocked: false, ...overrides });
 
   describe("listingOf", () => {
     const listed = (runs: readonly (typeof run | typeof rawRun | typeof reportRow)[]) => runs.flatMap((candidate) => listingOf(candidate, botOf)?.run._id ?? []);
@@ -147,18 +147,18 @@ describe("the Activity page's rows", () => {
   });
 
   describe("runRow", () => {
-    it("names a routine's run by its instruction, on one line", () => {
-      expect(row({ run: rawRun, instructionOf: () => "Check\n\n  the news" }).instruction).toBe("Check the news");
+    it("names a routine's run by its title", () => {
+      expect(row({ run: rawRun, titleOf: () => "Morning news" }).title).toBe("Morning news");
     });
 
     it("names a chat run by nothing", () => {
-      expect(row({}).instruction).toBeNull();
+      expect(row({}).title).toBeNull();
     });
 
     it("has no name for a routine that was deleted, and the row still builds", () => {
-      const shown = row({ run: rawRun, instructionOf: () => undefined });
+      const shown = row({ run: rawRun, titleOf: () => undefined });
       expect(shown.trigger).toBe("schedule");
-      expect(shown.instruction).toBeNull();
+      expect(shown.title).toBeNull();
     });
 
     it("has no text for a run with none, and for a routine's run that only holds its instruction", () => {
@@ -192,18 +192,23 @@ describe("the Activity page's rows", () => {
     const routine = {
       _id: scheduleId,
       botId: bot._id,
+      title: undefined as string | undefined,
       instruction: "Check the news",
       cadence: { kind: "everyHours" as const, hours: 6 },
       nextFireAt: NOW,
       pausedBecause: undefined,
       lastMissed: undefined,
     };
-    const named = (instruction: string, nextFireAt: number | undefined) => ({ ...routine, instruction, nextFireAt });
+    const named = (title: string, nextFireAt: number | undefined) => ({ ...routine, title, nextFireAt });
     const upcoming = (routines: Parameters<typeof upcomingRows>[0]["routines"]) => upcomingRows({ routines, botOf, timeZone: "UTC" });
 
     it("puts the soonest first and paused routines last, in the order they came", () => {
       const routines = [named("paused one", undefined), named("later", NOW + 2), named("paused two", undefined), named("soon", NOW + 1)];
-      expect(upcoming(routines).map((row) => row.instruction)).toEqual(["soon", "later", "paused one", "paused two"]);
+      expect(upcoming(routines).map((row) => row.title)).toEqual(["soon", "later", "paused one", "paused two"]);
+    });
+
+    it("names a routine made before titles by the start of its instruction", () => {
+      expect(upcoming([{ ...routine, instruction: "Check\n\n  the news" }])[0]?.title).toBe("Check the news");
     });
 
     it("has words for when, and an absent next time for a paused routine", () => {

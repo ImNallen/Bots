@@ -38,7 +38,7 @@ function RunRow({ row, clock }: { row: Page["runs"][number]; clock: Clock }) {
         <span className="activity-line">
           {isRoutine ? "Routine" : "Chat"}. <span data-tone={tone}>{words}</span>
         </span>
-        {isRoutine && <span className="activity-line activity-clip">{row.instruction ?? "A routine you deleted"}</span>}
+        {isRoutine && <span className="activity-line activity-clip">{row.title ?? "A routine you deleted"}</span>}
         {row.blocked && (
           <span className="activity-blocked">
             <Icon name="shield" />
@@ -56,7 +56,7 @@ function UpcomingRow({ row, clock, timeZone }: { row: Page["upcoming"][number]; 
     <li>
       <RowLink bot={row.bot} atRoutines>
         <span className="row-name">{row.bot.name}</span>
-        <span className="activity-said">{row.instruction}</span>
+        <span className="activity-said">{row.title}</span>
         <span className="activity-line">
           {row.when}. {routineStatus(row, { ...clock, timeZone })}
         </span>

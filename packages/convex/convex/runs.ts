@@ -6,10 +6,10 @@ import { capText } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
 import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
-import { EARLIER_REPORTS, applyScheduleCreate } from "./schedules.js";
+import { EARLIER_REPORTS, applyScheduleCall } from "./schedules.js";
 import { ensureChatThread } from "./threads.js";
 import { keepScreen } from "./screens.js";
-import { memoryCall, runEventBody, scheduleCreate, terminalRunState, toolResultWithScreen, type RunEventBody, type TerminalRunState } from "./validators.js";
+import { memoryCall, runEventBody, scheduleCall, terminalRunState, toolResultWithScreen, type RunEventBody, type TerminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
@@ -23,7 +23,7 @@ export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
 }
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
-const appendBody = v.union(runEventBody, memoryCall, scheduleCreate, toolResultWithScreen);
+const appendBody = v.union(runEventBody, memoryCall, scheduleCall, toolResultWithScreen);
 
 async function requireLease(
   ctx: MutationCtx,
@@ -88,7 +88,9 @@ async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody
     case "descriptionSet":
       return await applyMemoryCall(ctx, run, body);
     case "scheduleCreate":
-      return await applyScheduleCreate(ctx, run, body);
+    case "scheduleUpdate":
+    case "scheduleDelete":
+      return await applyScheduleCall(ctx, run, body);
     case "toolResult": {
       if (!("screen" in body)) {
         return body;

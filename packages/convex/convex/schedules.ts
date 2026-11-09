@@ -4,11 +4,11 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { capText } from "./activity.js";
 import { requireIdentity } from "./identity.js";
-import { textProblem, type TextProblem } from "./memories.js";
 import { endRunsPastDeadline } from "./runEnd.js";
+import { parseRoutineText, routineTitle } from "./routineText.js";
 import { FALLBACK_ZONE, describeCadence, nextFireAfter, parseCadence } from "./scheduleTime.js";
 import { activeRunOfBot, publicState, purgeRunBatch, purgeThreadBatch } from "./threads.js";
-import type { RunEventBody, RunState, ScheduleCreate } from "./validators.js";
+import type { Cadence, RunEventBody, RunState, ScheduleCall } from "./validators.js";
 
 const RUN_LIMIT_MS = 30 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -20,11 +20,11 @@ const MAX_ROUTINES_PER_BOT = 10;
 const MAX_ROUTINES_PER_OWNER = 20;
 const MAX_SCHEDULED_RUNS_A_DAY = 48;
 const FAILURES_THAT_PAUSE = 3;
-const MAX_INSTRUCTION_LENGTH = 2000;
 const MAX_PAUSE_REASON_LENGTH = 500;
 const RECENT_RUNS_SHOWN = 5;
 const KEEP_RUNS = 20;
 export const EARLIER_REPORTS = 3;
+export const UNDO_MS = 8000;
 
 const LIMIT_REASON = `You reached the limit of ${MAX_SCHEDULED_RUNS_A_DAY} routine runs in 24 hours`;
 const BUSY_REASON = "The bot was busy for more than 15 minutes after this time";
@@ -88,6 +88,37 @@ export async function actOnDue<Row>(due: readonly Row[], consider: (row: Row) =>
       acted += 1;
     }
   }
+}
+
+type Lifecycle = Pick<Doc<"schedules">, "botId" | "nextFireAt" | "deleting">;
+
+export function isLive(routine: Pick<Doc<"schedules">, "deleting">): boolean {
+  return routine.deleting === undefined;
+}
+
+// A deleted routine has no nextFireAt, so fireDue never reads it, and it keeps the time it had for an undo.
+export function softDeleted(routine: Lifecycle, now: number): Pick<Doc<"schedules">, "nextFireAt" | "deleting"> {
+  return { nextFireAt: undefined, deleting: { until: now + UNDO_MS, ...(routine.nextFireAt === undefined ? {} : { nextFireAt: routine.nextFireAt }) } };
+}
+
+// An undo puts back the time the routine had, so an everyHours routine keeps its place. A time that passed during the undo window
+// is at most seconds late, and the next tick fires it.
+export function restored(routine: Lifecycle): Pick<Doc<"schedules">, "nextFireAt" | "deleting"> {
+  return { nextFireAt: routine.deleting?.nextFireAt, deleting: undefined };
+}
+
+// A routine that was restored, or deleted again with a later end, is not this delete's to finish.
+export function hardDeleteDue(routine: Lifecycle | null, now: number): boolean {
+  return routine?.deleting !== undefined && routine.deleting.until <= now;
+}
+
+export function routineOfBot<Routine extends Lifecycle>(routine: Routine | null, botId: Id<"bots">): Routine | null {
+  return routine !== null && routine.botId === botId && isLive(routine) ? routine : null;
+}
+
+// A paused routine stays paused. An active one counts its next time from now under the new cadence.
+export function retimed(routine: Lifecycle, cadence: Cadence, timeZone: string, now: number): Pick<Doc<"schedules">, "cadence" | "nextFireAt"> {
+  return { cadence, nextFireAt: routine.nextFireAt === undefined ? undefined : nextFireAfter(cadence, timeZone, now) };
 }
 
 const RUNS_THAT_HOLD_A_PURGE = KEEP_RUNS + EARLIER_REPORTS + 1;
@@ -224,69 +255,129 @@ export const purgeThread = internalMutation({
   },
 });
 
-export const INSTRUCTION_PROBLEMS: Record<TextProblem | "empty", string> = {
-  empty: "A routine needs an instruction, so nothing was created.",
-  tooLong: `A routine's instruction cannot be longer than ${MAX_INSTRUCTION_LENGTH.toLocaleString("en-US")} characters, so nothing was created. Write a shorter one.`,
-  characters: "A routine's instruction cannot hold invisible or control characters, so nothing was created. Write it without them.",
-  secret: "This looks like a password, key, token, or card number, so nothing was created. Do not try again. A routine browses logged out, so it needs no login.",
+const SCHEDULE_TOOLS: Record<ScheduleCall["kind"], string> = {
+  scheduleCreate: "schedule_create",
+  scheduleUpdate: "schedule_update",
+  scheduleDelete: "schedule_delete",
 };
 
-export function instructionProblem(instruction: string): TextProblem | "empty" | null {
-  return instruction === "" ? "empty" : textProblem(instruction, MAX_INSTRUCTION_LENGTH);
+const NO_ZONE = "Your owner has no time zone set, so nothing changed. Ask them to set one in Settings, under General, and then to ask you again.";
+const BAD_CADENCE =
+  "This schedule is not one a routine can have, so nothing changed. A weekly routine needs its weekdays, an hour, and a minute. An everyHours routine needs 1 to 24 whole hours.";
+const NO_SUCH_ROUTINE = "You have no routine with that id, so nothing changed. Your system prompt lists your routines.";
+
+async function softDeleteRoutine(ctx: MutationCtx, routine: Doc<"schedules">, now: number): Promise<"deleted" | "running"> {
+  if ((await activeRunOfBot(ctx, routine.botId))?.scheduleId === routine._id) {
+    return "running";
+  }
+  const patch = softDeleted(routine, now);
+  await ctx.db.patch(routine._id, patch);
+  await ctx.scheduler.runAt(patch.deleting?.until ?? now, internal.schedules.finishDelete, { scheduleId: routine._id });
+  return "deleted";
 }
 
-export async function applyScheduleCreate(ctx: MutationCtx, run: Doc<"runs">, call: ScheduleCreate): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
+function whenWords(routine: Pick<Doc<"schedules">, "cadence" | "nextFireAt">, timeZone: string): string {
+  const next = routine.nextFireAt === undefined ? "It is paused." : `Next run: ${new Date(routine.nextFireAt).toISOString()}.`;
+  return `When: ${describeCadence(routine.cadence, timeZone)}. ${next}`;
+}
+
+// A routine outlives the run that made it, so Convex checks every change here, in the same mutation that writes it.
+export async function applyScheduleCall(ctx: MutationCtx, run: Doc<"runs">, call: ScheduleCall): Promise<Extract<RunEventBody, { kind: "toolResult" }>> {
   const result = (outcome: "ok" | "error" | "cancelled" | "rejected", output: string) => ({
     kind: "toolResult" as const,
     toolCallId: call.toolCallId,
-    name: "schedule_propose",
+    name: SCHEDULE_TOOLS[call.kind],
     outcome,
     output,
     truncated: false,
   });
   if (run.capability !== "full") {
-    return result("rejected", "This run is read-only, so it cannot create a routine, and this call did not run.");
+    return result("rejected", "This run is read-only, so it cannot change your routines, and this call did not run.");
   }
   if (run.cancelRequested) {
-    return result("cancelled", "The run was cancelled before this call created a routine, so it did not run.");
+    return result("cancelled", "The run was cancelled before this call changed your routines, so it did not run.");
   }
+  // The runner asks only at some levels and after untrusted text. When it did ask, only an approved answer for this tool counts.
   const approval = await ctx.db
     .query("approvals")
     .withIndex("by_run_call", (q) => q.eq("runId", run._id).eq("toolCallId", call.toolCallId))
     .unique();
-  if (approval?.state !== "approved" || approval.toolName !== "schedule_propose") {
-    return result("error", "Your owner did not approve this routine, so nothing was created.");
+  if (approval !== null && (approval.state !== "approved" || approval.toolName !== SCHEDULE_TOOLS[call.kind])) {
+    return result("error", "Your owner did not approve this, so nothing changed.");
   }
   const timeZone = (await ctx.db.get(run.ownerId))?.timeZone;
-  if (timeZone === undefined) {
-    return result("error", "Your owner has no time zone set, so nothing was created. Ask them to set one in Settings, under General, and then to ask you again.");
+  const now = Date.now();
+  switch (call.kind) {
+    case "scheduleCreate": {
+      if (timeZone === undefined) {
+        return result("error", NO_ZONE);
+      }
+      const text = parseRoutineText({ title: call.title, summary: call.summary, steps: call.steps, instruction: call.instruction });
+      if (text.kind === "refused") {
+        return result("error", `${text.reason} Nothing was created.`);
+      }
+      const cadence = parseCadence(call.cadence);
+      if (cadence === null) {
+        return result("error", BAD_CADENCE);
+      }
+      const ofOwner = (
+        await ctx.db
+          .query("schedules")
+          .withIndex("by_owner", (q) => q.eq("ownerId", run.ownerId))
+          .collect()
+      ).filter(isLive);
+      if (ofOwner.length >= MAX_ROUTINES_PER_OWNER) {
+        return result("error", `Your owner already has ${MAX_ROUTINES_PER_OWNER} routines, so nothing was created. Delete one with schedule_delete if they ask you to.`);
+      }
+      if (ofOwner.filter((schedule) => schedule.botId === run.botId).length >= MAX_ROUTINES_PER_BOT) {
+        return result("error", `You already have ${MAX_ROUTINES_PER_BOT} routines, so nothing was created. Change one with schedule_update, or delete one if your owner asks you to.`);
+      }
+      const nextFireAt = nextFireAfter(cadence, timeZone, now);
+      const threadId = await ctx.db.insert("threads", { botId: run.botId, ownerId: run.ownerId, kind: "routine" });
+      const scheduleId = await ctx.db.insert("schedules", { ownerId: run.ownerId, botId: run.botId, threadId, ...text.text, cadence, nextFireAt });
+      return result("ok", `Created routine ${scheduleId}, titled ${JSON.stringify(text.text.title)}. ${whenWords({ cadence, nextFireAt }, timeZone)} Your owner sees it in your info panel.`);
+    }
+    case "scheduleUpdate": {
+      const scheduleId = ctx.db.normalizeId("schedules", call.routineId);
+      const routine = routineOfBot(scheduleId === null ? null : await ctx.db.get(scheduleId), run.botId);
+      if (routine === null) {
+        return result("error", NO_SUCH_ROUTINE);
+      }
+      const { kind: _kind, toolCallId: _toolCallId, routineId: _routineId, cadence: rawCadence, ...changes } = call;
+      if (rawCadence === undefined && Object.values(changes).every((value) => value === undefined)) {
+        return result("error", "Name at least one thing to change, so nothing changed.");
+      }
+      const text = parseRoutineText(changes);
+      if (text.kind === "refused") {
+        return result("error", `${text.reason} Nothing changed.`);
+      }
+      let timing = {};
+      if (rawCadence !== undefined) {
+        const cadence = parseCadence(rawCadence);
+        if (cadence === null) {
+          return result("error", BAD_CADENCE);
+        }
+        if (timeZone === undefined) {
+          return result("error", NO_ZONE);
+        }
+        timing = retimed(routine, cadence, timeZone, now);
+      }
+      await ctx.db.patch(routine._id, { ...text.text, ...timing });
+      const updated = { ...routine, ...text.text, ...timing };
+      return result("ok", `Updated routine ${routine._id}, titled ${JSON.stringify(routineTitle(updated))}. ${whenWords(updated, timeZone ?? FALLBACK_ZONE)}`);
+    }
+    case "scheduleDelete": {
+      const scheduleId = ctx.db.normalizeId("schedules", call.routineId);
+      const routine = routineOfBot(scheduleId === null ? null : await ctx.db.get(scheduleId), run.botId);
+      if (routine === null) {
+        return result("error", NO_SUCH_ROUTINE);
+      }
+      if ((await softDeleteRoutine(ctx, routine, now)) === "running") {
+        return result("error", "This routine is running now, so it was not deleted.");
+      }
+      return result("ok", `Deleted routine ${routine._id}, titled ${JSON.stringify(routineTitle(routine))}. Your owner can undo this in your info panel for ${UNDO_MS / 1000} seconds.`);
+    }
   }
-  const instruction = call.instruction.trim();
-  const problem = instructionProblem(instruction);
-  if (problem !== null) {
-    return result("error", INSTRUCTION_PROBLEMS[problem]);
-  }
-  const cadence = parseCadence(call.cadence);
-  if (cadence === null) {
-    return result("error", "This schedule is not one a routine can have, so nothing was created. A weekly routine needs its weekdays, an hour, and a minute. An everyHours routine needs 1 to 24 whole hours.");
-  }
-  const ofOwner = await ctx.db
-    .query("schedules")
-    .withIndex("by_owner", (q) => q.eq("ownerId", run.ownerId))
-    .collect();
-  if (ofOwner.length >= MAX_ROUTINES_PER_OWNER) {
-    return result("error", `Your owner already has ${MAX_ROUTINES_PER_OWNER} routines, so nothing was created. They can delete one in a bot's info panel.`);
-  }
-  if (ofOwner.filter((schedule) => schedule.botId === run.botId).length >= MAX_ROUTINES_PER_BOT) {
-    return result("error", `You already have ${MAX_ROUTINES_PER_BOT} routines, so nothing was created. Your owner can delete one in your info panel.`);
-  }
-  const nextFireAt = nextFireAfter(cadence, timeZone, Date.now());
-  const threadId = await ctx.db.insert("threads", { botId: run.botId, ownerId: run.ownerId, kind: "routine" });
-  const scheduleId = await ctx.db.insert("schedules", { ownerId: run.ownerId, botId: run.botId, threadId, instruction, cadence, nextFireAt });
-  return result(
-    "ok",
-    `Created routine ${scheduleId}. When: ${describeCadence(cadence, timeZone)}. First run: ${new Date(nextFireAt).toISOString()}. Your owner can pause, test, and delete it in your info panel.`,
-  );
 }
 
 async function requireOwnedSchedule(ctx: QueryCtx, scheduleId: Id<"schedules">): Promise<Doc<"schedules">> {
@@ -298,6 +389,15 @@ async function requireOwnedSchedule(ctx: QueryCtx, scheduleId: Id<"schedules">):
   return schedule;
 }
 
+async function requireLiveSchedule(ctx: QueryCtx, scheduleId: Id<"schedules">): Promise<Doc<"schedules">> {
+  const schedule = await requireOwnedSchedule(ctx, scheduleId);
+  if (!isLive(schedule)) {
+    throw new ConvexError("Routine not found");
+  }
+  return schedule;
+}
+
+// Every routine of the bot, deleted ones too, because deleting a bot takes them all.
 export async function routinesOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<Doc<"schedules">[]> {
   return await ctx.db
     .query("schedules")
@@ -306,7 +406,9 @@ export async function routinesOfBot(ctx: QueryCtx, botId: Id<"bots">): Promise<D
 }
 
 export function promptRoutines(routines: readonly Doc<"schedules">[], timeZone: string | undefined) {
-  return routines.map((routine) => ({
+  return routines.filter(isLive).map((routine) => ({
+    id: routine._id,
+    title: routineTitle(routine),
     when: describeCadence(routine.cadence, timeZone ?? FALLBACK_ZONE),
     next: routine.nextFireAt === undefined ? "paused" : new Date(routine.nextFireAt).toISOString(),
     instruction: routine.instruction,
@@ -326,19 +428,26 @@ export const listForBot = query({
       limit: MAX_ROUTINES_PER_BOT,
       timeZone: user.timeZone,
       routines: await Promise.all(
-        routines.toReversed().map(async (routine) => ({
-          _id: routine._id,
-          instruction: routine.instruction,
-          cadence: routine.cadence,
-          nextFireAt: routine.nextFireAt,
-          pausedBecause: routine.pausedBecause,
-          lastMissed: routine.lastMissed,
-          recentRuns: (await newestRunsOf(ctx, routine._id, RECENT_RUNS_SHOWN)).map((run) => ({
-            _id: run._id,
-            createdAt: run._creationTime,
-            state: publicState(run.state),
-          })),
-        })),
+        routines.toReversed().map(async (routine) =>
+          routine.deleting === undefined
+            ? {
+                kind: "live" as const,
+                _id: routine._id,
+                title: routineTitle(routine),
+                summary: routine.summary,
+                steps: routine.steps,
+                cadence: routine.cadence,
+                nextFireAt: routine.nextFireAt,
+                pausedBecause: routine.pausedBecause,
+                lastMissed: routine.lastMissed,
+                recentRuns: (await newestRunsOf(ctx, routine._id, RECENT_RUNS_SHOWN)).map((run) => ({
+                  _id: run._id,
+                  createdAt: run._creationTime,
+                  state: publicState(run.state),
+                })),
+              }
+            : { kind: "deleted" as const, _id: routine._id, title: routineTitle(routine), deletingUntil: routine.deleting.until },
+        ),
       ),
     };
   },
@@ -347,7 +456,7 @@ export const listForBot = query({
 export const pause = mutation({
   args: { scheduleId: v.id("schedules") },
   handler: async (ctx, { scheduleId }) => {
-    await requireOwnedSchedule(ctx, scheduleId);
+    await requireLiveSchedule(ctx, scheduleId);
     await ctx.db.patch(scheduleId, { nextFireAt: undefined });
   },
 });
@@ -355,7 +464,7 @@ export const pause = mutation({
 export const resume = mutation({
   args: { scheduleId: v.id("schedules") },
   handler: async (ctx, { scheduleId }) => {
-    const schedule = await requireOwnedSchedule(ctx, scheduleId);
+    const schedule = await requireLiveSchedule(ctx, scheduleId);
     if (schedule.nextFireAt !== undefined) {
       return;
     }
@@ -368,31 +477,41 @@ export const resume = mutation({
   },
 });
 
-export const runNow = mutation({
-  args: { scheduleId: v.id("schedules") },
-  handler: async (ctx, { scheduleId }) => {
-    const schedule = await requireOwnedSchedule(ctx, scheduleId);
-    const now = Date.now();
-    const bot = await ctx.db.get(schedule.botId);
-    if ((bot?.takeoverUntil ?? 0) > now) {
-      throw new ConvexError("Give back this bot's screen first");
-    }
-    if ((await scheduledRunsInADay(ctx, schedule.ownerId, now)) >= MAX_SCHEDULED_RUNS_A_DAY) {
-      throw new ConvexError(LIMIT_REASON);
-    }
-    return await fireRoutine(ctx, schedule);
-  },
-});
-
 export const remove = mutation({
   args: { scheduleId: v.id("schedules") },
   handler: async (ctx, { scheduleId }) => {
     const schedule = await requireOwnedSchedule(ctx, scheduleId);
-    if ((await activeRunOfBot(ctx, schedule.botId))?.scheduleId === scheduleId) {
+    if (!isLive(schedule)) {
+      return;
+    }
+    if ((await softDeleteRoutine(ctx, schedule, Date.now())) === "running") {
       throw new ConvexError("This routine is running. Stop it before you delete it");
     }
-    await ctx.db.delete(scheduleId);
-    await ctx.scheduler.runAfter(0, internal.schedules.purgeThread, { threadId: schedule.threadId });
+  },
+});
+
+export const restore = mutation({
+  args: { scheduleId: v.id("schedules") },
+  handler: async (ctx, { scheduleId }) => {
+    const { user } = await requireIdentity(ctx);
+    const schedule = await ctx.db.get(scheduleId);
+    if (user === null || schedule === null || schedule.ownerId !== user._id) {
+      throw new ConvexError("This routine is already gone");
+    }
+    if (!isLive(schedule)) {
+      await ctx.db.patch(scheduleId, restored(schedule));
+    }
+  },
+});
+
+export const finishDelete = internalMutation({
+  args: { scheduleId: v.id("schedules") },
+  handler: async (ctx, { scheduleId }) => {
+    const schedule = await ctx.db.get(scheduleId);
+    if (schedule !== null && hardDeleteDue(schedule, Date.now())) {
+      await ctx.db.delete(scheduleId);
+      await ctx.scheduler.runAfter(0, internal.schedules.purgeThread, { threadId: schedule.threadId });
+    }
   },
 });
 
