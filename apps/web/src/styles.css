@@ -1567,7 +1567,7 @@ button.card-row:hover {
 .routine-swipe { position: relative; overflow: hidden; border-radius: 20px; }
 .routine-swipe-delete { position: absolute; inset: 0 0 0 auto; width: 96px; background: var(--danger); color: var(--on-danger); font-size: 13px; font-weight: 500; visibility: hidden; }
 .routine-swipe[data-open="true"] .routine-swipe-delete { visibility: visible; }
-.routine-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 88px; padding: 16px; background: var(--raised); border-radius: 20px; touch-action: pan-y; transition: transform 180ms ease-out, background-color 120ms; }
+.routine-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 88px; padding: 16px; background: var(--raised); border-radius: 20px; touch-action: pan-y; transition: transform 180ms ease-out; }
 .routine-row[data-dragging="true"] { transition: none; }
 .routine-item[data-selected="true"] .routine-row { background: var(--sel); }
 .routine-menu { position: absolute; z-index: 5; top: calc(100% - 16px); right: 32px; padding: 6px; background: var(--raised); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shot-lg); }
