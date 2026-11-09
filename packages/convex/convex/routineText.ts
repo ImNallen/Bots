@@ -39,7 +39,6 @@ function reasonFor(field: Field, problem: Problem): string {
 
 export type ParsedRoutineText<T> = { kind: "ok"; text: T } | { kind: "refused"; reason: string };
 
-// Every field that is present is trimmed and checked, so an update checks only what it changes.
 export function parseRoutineText<T extends Partial<RoutineText>>(text: T): ParsedRoutineText<T> {
   const parsed: Partial<RoutineText> = { ...text };
   for (const field of ["title", "summary", "instruction"] as const) {
@@ -69,7 +68,6 @@ export function parseRoutineText<T extends Partial<RoutineText>>(text: T): Parse
   return { kind: "ok", text: parsed as T };
 }
 
-// A routine made before titles existed shows the start of its instruction.
 export function routineTitle(routine: { title?: string; instruction: string }): string {
   if (routine.title !== undefined) {
     return routine.title;

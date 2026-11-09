@@ -116,7 +116,6 @@ export function routineOfBot<Routine extends Lifecycle>(routine: Routine | null,
   return routine !== null && routine.botId === botId && isLive(routine) ? routine : null;
 }
 
-// A paused routine stays paused. An active one counts its next time from now under the new cadence.
 export function retimed(routine: Lifecycle, cadence: Cadence, timeZone: string, now: number): Pick<Doc<"schedules">, "cadence" | "nextFireAt"> {
   return { cadence, nextFireAt: routine.nextFireAt === undefined ? undefined : nextFireAfter(cadence, timeZone, now) };
 }
