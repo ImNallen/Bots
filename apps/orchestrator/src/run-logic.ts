@@ -147,7 +147,8 @@ function endUnansweredTurn(messages: MistralMessage[]): void {
   }
 }
 
-// Only the newest look carries its picture and marks, so a request holds one picture however long the history is.
+// Only the newest look carries its picture and marks, so a request holds one picture however long the history is. A call that
+// brought nothing back showed no look, and a hint to look again would invite the model to repeat a call the owner denied.
 function toolMessage(event: ToolResultBody, screen: ShownScreen | undefined): MistralMessage {
   const base = { role: "tool" as const, tool_call_id: event.toolCallId, name: event.name };
   const text = toolResultContent(event);
@@ -155,7 +156,8 @@ function toolMessage(event: ToolResultBody, screen: ShownScreen | undefined): Mi
     const picture = screen.imageUrl === null ? [] : [{ type: "image_url" as const, image_url: screen.imageUrl }];
     return { ...base, content: [{ type: "text", text: `${text}\n\n${screen.text}` }, ...picture] };
   }
-  return { ...base, content: event.name.startsWith("desktop_") ? `${text}\n${OLDER_LOOK}` : text };
+  const showedALook = event.name.startsWith("desktop_") && !BROUGHT_NOTHING_BACK.has(event.outcome);
+  return { ...base, content: showedALook ? `${text}\n${OLDER_LOOK}` : text };
 }
 
 export function toMistralMessages(args: {

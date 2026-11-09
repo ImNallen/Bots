@@ -318,6 +318,14 @@ describe("toMistralMessages with looks at the screen", () => {
     }
   });
 
+  it("gives a desktop call that brought nothing back no hint to look again", () => {
+    for (const outcome of ["denied", "invalid", "rejected"] as const) {
+      const clicked: RunEventBody = { kind: "toolResult", toolCallId: "click", name: "desktop_click", outcome, output: "It did not run.", truncated: false };
+      const messages = toMistralMessages({ system: "s", events: [...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked], screen });
+      expect(messages.at(-1)).toEqual({ role: "tool", tool_call_id: "click", name: "desktop_click", content: `outcome: ${outcome}\n\nIt did not run.` });
+    }
+  });
+
   it("gives a look with no picture its text alone", () => {
     const messages = toMistralMessages({ system: "s", events, screen: { ...screen, imageUrl: null } });
     expect(messages.find((message) => message.role === "tool" && message.tool_call_id === "new")?.content).toEqual([

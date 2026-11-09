@@ -109,7 +109,7 @@ function findFreePort(): Promise<number> {
   });
 }
 
-type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string }[]; tool_call_id?: string };
+type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string }[]; tool_call_id?: string; name?: string };
 type FakeRequest = {
   at: number;
   authorization: string;
@@ -1014,8 +1014,14 @@ try {
     });
     await check("the next model call replays the failed look with the line that only the newest look shows", () => {
       const request = fake.requests(lookText)[1];
-      const tool = request?.body.messages.find((message) => message.role === "tool");
+      const tool = request?.body.messages.find((message) => message.role === "tool" && message.name === "desktop_look");
       assert.match(JSON.stringify(tool?.content), /Only the newest look/);
+    });
+    await check("it replays the invalid click with no hint to look again, because that call showed no look", () => {
+      const request = fake.requests(lookText)[1];
+      const tool = request?.body.messages.find((message) => message.role === "tool" && message.name === "desktop_click");
+      assert.match(JSON.stringify(tool?.content), /outcome: invalid/);
+      assert.doesNotMatch(JSON.stringify(tool?.content), /Only the newest look/);
     });
   });
 

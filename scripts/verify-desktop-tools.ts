@@ -71,15 +71,16 @@ report(!results.some((result) => result.output.includes("data:image")), "no pict
 const asker = await newBot("card", "outside");
 const askerRunId = await client.mutation(api.threads.send, { threadId: asker.threadId, text: MENU_TASK });
 let card: { subject: string | null; picture: boolean } | null = null;
+let cards = 0;
 const askerRun = await settled(asker.threadId, askerRunId, async () => {
-  const pending = await client.query(api.approvals.pendingForThread, { threadId: asker.threadId });
-  const first = pending[0];
-  if (first === undefined || card !== null) {
-    return;
+  for (const pending of await client.query(api.approvals.pendingForThread, { threadId: asker.threadId })) {
+    if (card === null) {
+      const target = await client.query(api.screens.forApproval, { approvalId: pending._id });
+      card = { subject: pending.subject, picture: target !== null && target.image.bytes.byteLength > 0 };
+    }
+    cards += 1;
+    await client.mutation(api.approvals.decide, { approvalId: pending._id, decision: "denied" });
   }
-  const target = await client.query(api.screens.forApproval, { approvalId: first._id });
-  card = { subject: first.subject, picture: target !== null && target.image.bytes.byteLength > 0 };
-  await client.mutation(api.approvals.decide, { approvalId: first._id, decision: "denied" });
 });
 const shown = card as { subject: string | null; picture: boolean } | null;
 report(shown?.subject?.startsWith("Click ") === true && shown.subject.includes("Chromium"), "the default level asks before a click, and the card says what it clicks", shown?.subject ?? "no card");
@@ -88,6 +89,7 @@ report(
   askerRun.events.some(({ body }) => body.kind === "toolResult" && body.name === "desktop_click" && body.outcome === "denied"),
   "a denied click is recorded as denied, and nothing was clicked",
 );
+report(cards === 1, "the bot does not ask again for a click the owner denied", `${cards} card(s)`);
 
 // A failed run keeps its bots, because their threads show what went wrong.
 if (failures === 0) {
