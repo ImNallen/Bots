@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@bots/protocol": "workspace:*",
+    "htmlparser2": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },
