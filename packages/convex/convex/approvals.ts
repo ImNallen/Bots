@@ -9,8 +9,8 @@ const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 // A restarted runner asks again with the same call, and it must find the same row and the same answer.
 export const request = mutation({
-  args: { runId: v.id("runs"), toolCallId: v.string(), toolName: v.string(), subject: v.optional(v.string()), box: v.optional(screenBox) },
-  handler: async (ctx, { runId, toolCallId, toolName, subject, box }) => {
+  args: { runId: v.id("runs"), toolCallId: v.string(), toolName: v.string(), subject: v.optional(v.string()), box: v.optional(screenBox), reason: v.optional(v.string()) },
+  handler: async (ctx, { runId, toolCallId, toolName, subject, box, reason }) => {
     await requireService(ctx);
     const run = await ctx.db.get(runId);
     if (run === null) {
@@ -38,6 +38,7 @@ export const request = mutation({
       requestedAt,
       ...(subject === undefined ? {} : { subject }),
       ...(box === undefined ? {} : { box }),
+      ...(reason === undefined ? {} : { reason }),
     });
     return { approvalId, state: "pending" as const, expiresAt: requestedAt + APPROVAL_TTL_MS };
   },
@@ -103,7 +104,7 @@ export const pendingForThread = query({
       .withIndex("by_thread_state", (q) => q.eq("threadId", threadId).eq("state", "pending"))
       .collect();
     const mine = rows.filter((row) => row.ownerId === user._id);
-    return (await pendingOnActiveRuns(ctx, mine)).map(({ _id, runId, toolCallId, subject }) => ({ _id, runId, toolCallId, subject: subject ?? null }));
+    return (await pendingOnActiveRuns(ctx, mine)).map(({ _id, runId, toolCallId, subject, reason }) => ({ _id, runId, toolCallId, subject: subject ?? null, reason: reason ?? null }));
   },
 });
 

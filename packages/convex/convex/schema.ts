@@ -46,7 +46,7 @@ export default defineSchema({
     name: v.string(),
     // While this is in the future, the owner controls the bot's screen and the bot starts no tool.
     takeoverUntil: v.optional(v.number()),
-    // A bot with no value uses the default, which is "outside".
+    // A bot with no value uses the default, which is "automatic".
     approvalLevel: v.optional(approvalLevel),
     // A bot with no value takes its look from its id.
     shape: v.optional(botShape),
@@ -79,6 +79,8 @@ export default defineSchema({
     // A desktop input's card: what it does in words, and the box that the card outlines on the run's newest look.
     subject: v.optional(v.string()),
     box: v.optional(screenBox),
+    // One plain sentence from the Automatic rules saying why this call needs a card. Absent at the other levels.
+    reason: v.optional(v.string()),
   })
     .index("by_run_call", ["runId", "toolCallId"])
     .index("by_owner_state", ["ownerId", "state"])

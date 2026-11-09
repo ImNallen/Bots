@@ -111,7 +111,7 @@ export const observedVm = v.object({
   at: v.number(),
 });
 
-export const approvalLevel = v.union(v.literal("everything"), v.literal("outside"), v.literal("shell"), v.literal("nothing"));
+export const approvalLevel = v.union(v.literal("everything"), v.literal("outside"), v.literal("shell"), v.literal("nothing"), v.literal("automatic"));
 export type ApprovalLevel = Infer<typeof approvalLevel>;
 
 export const approvalState = v.union(v.literal("pending"), v.literal("approved"), v.literal("denied"), v.literal("expired"));
