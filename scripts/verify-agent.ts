@@ -2185,7 +2185,7 @@ try {
     await second.mutation(api.users.ensureCurrent, {});
     const DEADLINE_REASON = "The routine ran past its 30 minute limit";
     const NO_REPORT_REASON = "The routine ended without a report";
-    const READ_TOOLS = ["browser_navigate", "browser_snapshot", "read_file"];
+    const READ_TOOLS = ["browser_navigate", "browser_snapshot", "read_file", "web_fetch"];
     const FORBIDDEN = ["browser_click", "browser_press", "browser_type", "description_set", "memory_forget", "memory_save", "shell", "write_file"];
     const USAGE = { promptTokens: 1, completionTokens: 1 };
     const chats: Chat[] = [];

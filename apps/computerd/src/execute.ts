@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { WORKSPACE_ROOT, createOutputCollector, type BrowserInvocation, type DesktopInvocation, type ToolInvocation, type ToolResult } from "@bots/protocol";
+import { WORKSPACE_ROOT, createOutputCollector, type BrowserInvocation, type DesktopInvocation, type ToolInvocation, type ToolResult, type WebInvocation } from "@bots/protocol";
 
 const FILE_TOOL_TIMEOUT_SECONDS = 60;
 // Output printed just before the exit is still in the pipe, but a surviving background child may hold the pipe open forever.
@@ -9,7 +9,7 @@ const EXIT_AFTER_KILL_MS = 5000;
 // The workspace is created on demand and the path never touches a shell string, so a path needs no quoting.
 const PREPARE = 'mkdir -p -- "$1" && cd -- "$1"';
 
-export type SystemInvocation = Exclude<ToolInvocation, BrowserInvocation | DesktopInvocation>;
+export type SystemInvocation = Exclude<ToolInvocation, BrowserInvocation | DesktopInvocation | WebInvocation>;
 
 const SCRIPTS: Record<SystemInvocation["name"], string> = {
   shell: `${PREPARE} && exec bash -c "$2"`,

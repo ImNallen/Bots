@@ -9,6 +9,7 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
   shell: { everything: true, outside: true, shell: true, nothing: false },
   read_file: { everything: true, outside: false, shell: false, nothing: false },
   write_file: { everything: true, outside: false, shell: false, nothing: false },
+  web_fetch: { everything: true, outside: false, shell: false, nothing: false },
   browser_navigate: { everything: true, outside: false, shell: false, nothing: false },
   browser_snapshot: { everything: true, outside: false, shell: false, nothing: false },
   browser_click: { everything: true, outside: true, shell: false, nothing: false },
@@ -27,7 +28,7 @@ const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
 const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set"];
 
-const READS: ToolName[] = ["read_file", "browser_navigate", "browser_snapshot"];
+const READS: ToolName[] = ["read_file", "web_fetch", "browser_navigate", "browser_snapshot"];
 
 describe("decideTool for a read-only run", () => {
   it.each(LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((touchedComputer) => ({ level, toolName, touchedComputer })))))(

@@ -20,6 +20,7 @@ import {
   parseJsonMessage,
   isBrowserInvocation,
   isComputerTool,
+  isWebInvocation,
   isMemoryInvocation,
   parseToolCall,
   toolDefinitions,
@@ -175,6 +176,34 @@ describe("browser tools", () => {
   });
 });
 
+describe("web_fetch", () => {
+  const parse = (args: unknown) => parseToolCall({ name: "web_fetch", arguments: JSON.stringify(args) });
+
+  it("takes an http or https URL, and a start that defaults to 0", () => {
+    expect(parse({ url: "https://example.com/a?b=c" })).toEqual({ kind: "ok", invocation: { name: "web_fetch", args: { url: "https://example.com/a?b=c", start: 0 } } });
+    expect(parse({ url: "http://example.com/", start: 16384 })).toEqual({ kind: "ok", invocation: { name: "web_fetch", args: { url: "http://example.com/", start: 16384 } } });
+  });
+
+  it.each([
+    ["a file URL", { url: "file:///etc/passwd" }],
+    ["a script", { url: "javascript:alert(1)" }],
+    ["a bare host", { url: "example.com" }],
+    ["a user name", { url: "https://user@example.com/" }],
+    ["a password", { url: "https://user:secret@example.com/" }],
+    ["a negative start", { url: "https://example.com/", start: -1 }],
+    ["a fractional start", { url: "https://example.com/", start: 1.5 }],
+  ])("refuses %s", (_label, args) => {
+    expect(parse(args).kind).toBe("invalid");
+  });
+
+  it("is a web invocation, not a browser one, so it never gets a browsing context", () => {
+    const tool: ToolInvocation = { name: "web_fetch", args: { url: "https://example.com/", start: 0 } };
+    expect(isWebInvocation(tool)).toBe(true);
+    expect(isBrowserInvocation(tool)).toBe(false);
+    expect(isWebInvocation({ name: "browser_snapshot", args: {} })).toBe(false);
+  });
+});
+
 describe("a routine's cadence", () => {
   const propose = (cadence: unknown) => parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "Read the news.", cadence }) });
 
@@ -233,6 +262,7 @@ describe("parseToolCall", () => {
       "shell",
       "read_file",
       "write_file",
+      "web_fetch",
       "browser_navigate",
       "browser_snapshot",
       "browser_click",
@@ -271,6 +301,7 @@ describe("toolEffect", () => {
       shell: "controlsComputer",
       read_file: "reads",
       write_file: "changesVm",
+      web_fetch: "reads",
       browser_navigate: "reads",
       browser_snapshot: "reads",
       browser_click: "changesOutside",
@@ -342,7 +373,7 @@ describe("memory tools", () => {
 
   it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
     const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
-    expect(computerTools).toEqual(["shell", "read_file", "write_file", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
+    expect(computerTools).toEqual(["shell", "read_file", "write_file", "web_fetch", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
     expect(isComputerTool("constructor")).toBe(false);
   });
 

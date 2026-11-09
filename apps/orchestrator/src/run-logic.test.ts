@@ -699,7 +699,7 @@ describe("modelRequest", () => {
   });
 
   it("offers a read-only run only the tools that read", () => {
-    expect(offered({ capability: "readOnly", final: false, reports: [] })).toEqual(["read_file", "browser_navigate", "browser_snapshot"]);
+    expect(offered({ capability: "readOnly", final: false, reports: [] })).toEqual(["read_file", "web_fetch", "browser_navigate", "browser_snapshot"]);
   });
 
   it("offers a final call no tool", () => {
@@ -741,6 +741,7 @@ describe("how a call browses", () => {
     shell: { name: "shell", args: { command: "ls", timeoutSeconds: 1 } },
     read_file: { name: "read_file", args: { path: "a" } },
     write_file: { name: "write_file", args: { path: "a", content: "" } },
+    web_fetch: { name: "web_fetch", args: { url: "https://example.com/", start: 0 } },
     browser_navigate: { name: "browser_navigate", args: { url: "https://example.com/" } },
     browser_snapshot: { name: "browser_snapshot", args: {} },
     browser_click: { name: "browser_click", args: { ref: 1 } },
@@ -806,6 +807,10 @@ describe("touchedComputer", () => {
 
   it.each(["denied", "invalid", "rejected"] as const)("is false after a computer tool's result with outcome %s, because it brought nothing back", (outcome) => {
     expect(touchedComputer([user, turn([call("a")]), body("shell", outcome)])).toBe(false);
+  });
+
+  it("is true after a web page was read, because its text can tell the bot what to save", () => {
+    expect(touchedComputer([user, turn([call("a")]), body("web_fetch", "ok")])).toBe(true);
   });
 
   it("does not count a memory tool's result", () => {

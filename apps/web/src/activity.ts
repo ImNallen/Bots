@@ -28,6 +28,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   shell: "Running a command",
   read_file: "Reading a file",
   write_file: "Saving a file",
+  web_fetch: "Reading a web page",
   browser_navigate: "Opening a page",
   browser_snapshot: "Reading the page",
   browser_click: "Clicking on the page",

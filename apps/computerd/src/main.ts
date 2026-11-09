@@ -1,4 +1,4 @@
-import { isBrowserInvocation, isDesktopInvocation } from "@bots/protocol";
+import { isBrowserInvocation, isDesktopInvocation, isWebInvocation } from "@bots/protocol";
 import { createBrowser, webSocketConnector } from "./browser.ts";
 import { createCalls } from "./calls.ts";
 import { createDesktop } from "./desktop.ts";
@@ -10,6 +10,7 @@ import { connectLink } from "./link.ts";
 import { log } from "./log.ts";
 import { createLogins } from "./logins.ts";
 import { relayScreen } from "./screens.ts";
+import { createWeb, nodeNetwork } from "./web.ts";
 
 const STATE_DIR = "/var/lib/computerd";
 const JOURNAL_DIR = `${STATE_DIR}/journal`;
@@ -44,6 +45,7 @@ setInterval(() => {
 
 const browser = createBrowser({ desktops, takeoverSettled: logins.settled, personHasScreen: logins.hasInputStream });
 const desktop = createDesktop({ desktops, takeoverSettled: logins.settled, personHasScreen: logins.hasInputStream });
+const web = createWeb({ network: nodeNetwork });
 const calls = createCalls({
   journal,
   // Every tool holds the bot's desktop, so a long shell tool cannot lose the page that the bot left open.
@@ -55,6 +57,9 @@ const calls = createCalls({
       }
       if (isDesktopInvocation(tool)) {
         return await desktop.execute({ botId, tool, signal });
+      }
+      if (isWebInvocation(tool)) {
+        return await web.execute({ tool, signal });
       }
       return await executeSystemTool({ botId, tool, signal });
     } finally {
