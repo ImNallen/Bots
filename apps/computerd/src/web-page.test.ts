@@ -240,4 +240,12 @@ describe("a long page", () => {
     expect(bytes(output)).toBeLessThanOrEqual(OUTPUT_CAP_BYTES);
     expect(output).toMatch(/This part is characters 0 to \d+ of 40000\./);
   });
+
+  it("reads a page of 250,000 tiny elements in a few seconds at most, because a page cannot hold computerd's event loop", { timeout: 60_000 }, () => {
+    const started = performance.now();
+    const { outcome, output } = read(`<p>${"<span>x</span><br>".repeat(250_000)}</p>`);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(outcome).toBe("ok");
+    expect(output).toMatch(/^x\nx\nx\n/);
+  });
 });

@@ -134,6 +134,14 @@ function isHidden(name: string, attribs: Record<string, string>): boolean {
   );
 }
 
+function trailingBreaks(text: string): number {
+  let count = 0;
+  while (count < text.length && text[text.length - 1 - count] === "\n") {
+    count += 1;
+  }
+  return count;
+}
+
 /** Builds the run of pieces, owing line breaks, spaces, and a line's prefix until real text arrives, so nothing trails or doubles. */
 function createWriter() {
   const pieces: Piece[] = [];
@@ -142,8 +150,13 @@ function createWriter() {
   let owedSpace = false;
   let prefix: string | null = null;
   let separator: string | null = null;
+  // Counted as pieces arrive, because rescanning the merged text for each text node is quadratic, and the parse holds computerd's
+  // one event loop.
+  let ended = 0;
 
   function push(piece: Piece): void {
+    const tail = piece.kind === "text" ? trailingBreaks(piece.text) : 0;
+    ended = piece.kind === "text" && tail === piece.text.length ? ended + tail : tail;
     const last = pieces.at(-1);
     if (piece.kind === "text" && last?.kind === "text") {
       last.text += piece.text;
@@ -153,8 +166,6 @@ function createWriter() {
   }
 
   function lead(): string {
-    const last = pieces.at(-1);
-    const ended = last?.kind === "text" ? (/\n*$/.exec(last.text)?.[0].length ?? 0) : 0;
     const breaks = "\n".repeat(Math.max(0, owedBreaks - ended));
     const gap = !started ? "" : owedBreaks > 0 ? breaks : (separator ?? (owedSpace ? " " : ""));
     const text = gap + (prefix ?? "");
