@@ -129,6 +129,10 @@ These facts come from running commands in a terminal on its VM. Everything runs 
 
    Always allowing shell would turn approvals off for that bot, so it needs care. Keep the Approve lock on a long command until this replaces it.
 
+   A model reviewer was built and measured on 277 held-out cases before any rule was written. The best Mistral model let about one in eight non-critical dangerous actions through, and it answered the same case both ways, so on 2026-11-09 the owner chose fixed, deterministic rules instead. A new Automatic level, now the default for a bot with no level of its own, runs reads and routine steps and asks only before actions that commit something or run something unknown.
+
+   PR 1 of 4 is done in code. It adds the Automatic level and the rules for shell and the desktop in `apps/orchestrator/src/rules.ts`, a pure table with no model call. The rules ask before the research set's built-in dangers, allow a read-only shell command parsed by a conservative tokenizer, allow a named desktop click, scroll, navigation key, or non-submitting type outside a terminal, and keep a page action and a file write where Outside left them. A test drives `decideByRules` from the 277 ported cases, holds a safety bar that no dangerous case runs at Automatic when Outside would have asked, and reports the card rate on the safe cases. `VERIFY_SCENARIOS=A,approvals pnpm verify:agent` checks it end to end. The later PRs add browser targets named from the snapshot, structured Always allow, and a grant for the rest of a task.
+
 
 ## After step 4: the redesign
 
@@ -321,6 +325,9 @@ Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tail
 
 These are open on purpose. Fix each one when the work reaches it.
 
+- At Automatic, git reads a repository's own config when it runs an allowed command such as `git status`, and that config could carry a setting the rules never saw. The rules match a `git config` that sets one and a write to a config file, not what an existing file already holds.
+- At Automatic, a page action still asks, because the page's own buttons aren't named yet. The next PR names them from the snapshot so a safe page action can run.
+- At Automatic, the rules read the call and its desktop aim, not the state the call lands in, so a click's real effect can still depend on what the app shows at that moment.
 - Deleting a routine removes its runs, so they stop counting toward the limit of 48 scheduled runs a day.
 - Unsaved text in the panel's profile section survives closing the panel, and it goes on a reload or a move to another bot. It stays in that page only, so a second tab can save over the same field.
 - The profile's fields, About you, and a note's box are read-only while a save is in flight, so an edit cannot be lost to the save's end. On a lost connection they stay read-only until the save finishes, with the text still on screen.

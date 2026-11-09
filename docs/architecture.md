@@ -488,28 +488,41 @@ The orchestrator decides on every tool call before it sends the call to a comput
 
 | Level | What asks first |
 |---|---|
+| Automatic, the default | The rules below. Reads and a look run, a memory tool or `description_set` asks once this run has read untrusted text, a routine's proposal asks, and a shell command, a desktop input, a page action, or a file write asks only when a rule says so |
 | Everything | Every tool |
-| Outside, the default | Shell commands, desktop input, browser actions that change something, a memory tool or `description_set` once this run has read untrusted text, and a routine's proposal |
+| Outside | Shell commands, desktop input, browser actions that change something, a memory tool or `description_set` once this run has read untrusted text, and a routine's proposal |
 | Shell | Anything that can run a program, which is shell commands and desktop input, and a routine's proposal |
 | Nothing | Only a routine's proposal |
 
-Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. `ASKS` in `apps/orchestrator/src/approvals.ts` gives one answer for each level and effect, and a new effect or level fails the typecheck until it has a row there.
+Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool without one fails the typecheck. So a tool added later has to choose an effect, instead of asking by default. `ASKS` in `apps/orchestrator/src/approvals.ts` gives one answer for each level and effect, and a new effect or level fails the typecheck until it has a row there. At Automatic the three effects that change things answer `byRules`, which sends the call to `decideByRules` in `apps/orchestrator/src/rules.ts`.
 
-| Effect | Tools | Everything | Outside | Shell | Nothing | Read-only run |
-|---|---|---|---|---|---|---|
-| `reads` | `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot` | ask | run | run | run | run |
-| `readsScreen` | `desktop_look` | ask | run | run | run | reject |
-| `changesVm` | `write_file` | ask | run | run | run | reject |
-| `changesOutside` | `browser_click`, `browser_type`, `browser_press` | ask | ask | run | run | reject |
-| `controlsComputer` | `shell`, `desktop_click`, `desktop_type`, `desktop_key`, `desktop_scroll` | ask | ask | ask | run | reject |
-| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | ask | after untrusted text | run | run | reject |
-| `changesSchedule` | `schedule_propose` | ask | ask | ask | ask | reject |
+| Effect | Tools | Automatic | Everything | Outside | Shell | Nothing | Read-only run |
+|---|---|---|---|---|---|---|---|
+| `reads` | `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot` | run | ask | run | run | run | run |
+| `readsScreen` | `desktop_look` | run | ask | run | run | run | reject |
+| `changesVm` | `write_file` | by rules | ask | run | run | run | reject |
+| `changesOutside` | `browser_click`, `browser_type`, `browser_press` | by rules | ask | ask | run | run | reject |
+| `controlsComputer` | `shell`, `desktop_click`, `desktop_type`, `desktop_key`, `desktop_scroll` | by rules | ask | ask | ask | run | reject |
+| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | after untrusted text | ask | after untrusted text | run | run | reject |
+| `changesSchedule` | `schedule_propose` | ask | ask | ask | ask | ask | reject |
 
 `controlsComputer` means that the call can make the VM do anything its user can. A click can press a launcher on the panel, and typing into a terminal runs a command, so desktop input asks at the Shell level, as `shell` does. The Shell level used to name the `shell` tool, and it now names this effect. A look is a read, but the desktop shows the owner's logged-in pages, so it has an effect of its own that a routine never gets. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A proposal asks at every level, as [How a routine fires](#how-a-routine-fires) explains.
 
-A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent.
+A request is a row in Convex, keyed by the run and the call, so a restarted orchestrator finds the same request and the same answer. Only the bot's owner can answer, and the first answer stands. If the orchestrator cannot read the answer, it keeps waiting, so an outage never runs a call. A refusal, an expired request, and a cancel all leave the call unsent. A card from the rules carries a `reason`, one plain sentence shown under the question.
 
 Approvals are a check on what a bot asks to do, not a sandbox. An approved shell command runs as a user with `sudo`, and what it starts is not asked about again. The network rules still hold, and step 8 adds the independent reviewer.
+
+### What the Automatic rules decide
+
+`decideByRules` in `apps/orchestrator/src/rules.ts` is a pure function of data Convex has stored: the parsed call, the desktop aim from the run's newest look, and the bot's workspace path. So a resumed run decides the same way, and no verdict is stored. It returns run, or ask with a one-sentence reason. The rules are a table, read in order.
+
+First come the built-in ask rules, which fire even over an allow rule. They ask before hidden characters in an action, an action too long to check, a download piped into a shell, a write that sets something to run later such as cron or a shell startup file, a change to a git setting that makes git run a program of its own, a `write_file` into a directory on the `PATH`, a path into the browser's logins or the computer's own records, a saved login or key, and another bot's files.
+
+Then an allow rule per tool lets the safe calls through. `write_file` runs, as it does at Outside. A shell command runs only when a conservative tokenizer can parse it and every segment is a read-only program with none of that program's forbidden flags, such as `ls`, `cat`, `grep`, `find` without `-delete` or `-exec`, and `git status`, `diff`, or `log`. Each line counts as its own command, as it does in bash, and a short flag counts inside a combined one, so `sort -uo out` writes and asks. It asks on a command substitution, including one inside double quotes, a here-doc, any redirection other than `2>&1` and `>/dev/null`, an interpreter such as `sh` or `python`, and a test, build, or package runner such as `npm` or `pytest`, because those run files the bot may have written. A desktop scroll runs. A left or right click runs on a named control outside a terminal and the browser whose name holds no commit word such as send, delete, pay, comment, or continue. Typing runs when it does not submit, has no newline, and is outside a terminal and the browser. A click or typing in Chromium asks, because a web page names its own controls, so a page could call its Post button Read more. A key runs only for plain navigation. Anything else asks.
+
+### What the rules don't cover
+
+A page action still asks at Automatic, because the page's own targets aren't named yet, and so does a desktop click or typing in Chromium, including on Chromium's own menu. A later PR names a page's targets from the snapshot and tells the browser's own controls from the page's. A commit word is a list, so a control that commits under another name, such as Book or Done, runs. Outside Chromium, an app names its own controls, so this matters only for apps that show other people's text as controls. The rules read the call and its aim, not the state the call lands in, so a click's real effect can still depend on what the app shows at that moment. git reads a repository's own config when it runs an allowed command, and that config could carry a setting the rules never saw. The rules replace no earlier level. An owner who picked Everything, Outside, Shell, or Nothing keeps it.
 
 ## Who can write a description, and what limits it
 

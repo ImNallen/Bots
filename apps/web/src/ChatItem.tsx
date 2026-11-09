@@ -168,6 +168,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
   return (
     <section className="ask" data-done={sent !== null} aria-label="This call needs your approval">
       <h3>{sent === "approved" ? "Approved · Continuing" : sent === "denied" ? "Skipped · Nothing was run" : item.title}</h3>
+      {item.reason !== null && <p className="ask-reason">{item.reason}</p>}
       {item.arguments.map((argument, index) => (
         <div className="ask-argument" key={argument.label ?? index}>
           {argument.label !== null && <span className="ask-label">{argument.label}</span>}

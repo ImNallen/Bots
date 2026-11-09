@@ -566,7 +566,7 @@ type Chat = {
 async function newChat(args: {
   client: ConvexHttpClient;
   name: string;
-  level?: "everything" | "outside" | "shell" | "nothing";
+  level?: "everything" | "outside" | "shell" | "nothing" | "automatic";
 }): Promise<Chat> {
   const { client } = args;
   await client.mutation(api.users.ensureCurrent, {});
@@ -4415,9 +4415,33 @@ try {
         },
       });
 
-    await check("a new bot defaults to asking before shell commands", async () => {
+    await check("a new bot defaults to Automatic", async () => {
       const botId = await first.mutation(api.bots.create, { name: `default-level-${nonce}` });
-      assert.equal(await service.query(api.bots.approvalLevelFor, { botId }), "outside");
+      assert.equal(await service.query(api.bots.approvalLevelFor, { botId }), "automatic");
+    });
+
+    await check("at Automatic, a read-only shell command runs with no card", async () => {
+      const auto = await newChat({ client: first, name: "approval-auto-read", level: "automatic" });
+      const text = `approval auto read ${nonce}`;
+      scriptedShell(text, "ls -la && pwd");
+      const run = await auto.settled(await auto.send(text));
+      assert.deepEqual(await pendingFor(auto), []);
+      assert.equal(resultsOf(run)[0]?.outcome, "ok");
+    });
+
+    await check("at Automatic, a writing command makes a card with its reason, and a denial runs nothing", async () => {
+      const auto = await newChat({ client: first, name: "approval-auto-write", level: "automatic" });
+      const text = `approval auto write ${nonce}`;
+      const file = workspaceFile(auto, "auto-write.txt");
+      scriptedShell(text, "echo ran >> auto-write.txt");
+      const run = await auto.send(text);
+      const card = await waitForPending(auto);
+      assert.ok(typeof card.reason === "string" && card.reason.length > 0, "the card carries a one-sentence reason");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: file }), []);
+      await first.mutation(api.approvals.decide, { approvalId: card._id, decision: "denied" });
+      const done = await auto.settled(run);
+      assert.equal(resultsOf(done)[0]?.outcome, "denied");
+      assert.deepEqual(linesOf({ container: mainContainer.id, path: file }), []);
     });
 
     const denied = await newChat({ client: first, name: "approval-denied", level: "outside" });

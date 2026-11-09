@@ -129,6 +129,25 @@ describe("calls", () => {
     expect((await running).outcome).toBe("cancelled");
   });
 
+  it("never runs a call cancelled while its journal entry is still being written", async () => {
+    const journal = await openJournal({ dir });
+    let release = () => {};
+    const written = new Promise<void>((done) => (release = done));
+    const slow = { ...journal, markStarted: async (entry: Parameters<typeof journal.markStarted>[0]) => {
+      await written;
+      await journal.markStarted(entry);
+    } };
+    const { counter, execute } = counting();
+    const calls = createCalls({ journal: slow, execute });
+    const running = calls.call(request);
+    await new Promise((done) => setTimeout(done, 20));
+    const cancelled = calls.cancel(request.callId);
+    release();
+    expect((await running).outcome).toBe("cancelled");
+    expect((await cancelled).outcome).toBe("cancelled");
+    expect(counter.runs).toBe(0);
+  });
+
   it("cancelling before the start stops the call from ever running", async () => {
     const { counter, execute } = counting();
     const calls = createCalls({ journal: await openJournal({ dir }), execute });

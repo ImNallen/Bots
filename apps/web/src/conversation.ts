@@ -32,8 +32,9 @@ export type DisplayItem = { key: string } & (
       note: string | null;
       output: ToolOutput | null;
     }
-  // picture is true for a desktop input, whose card shows the run's newest look with the target outlined.
-  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean }
+  // picture is true for a desktop input, whose card shows the run's newest look with the target outlined. reason is the Automatic
+  // rules' one sentence, or null at the other levels.
+  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean; reason: string | null }
   | { kind: "denied"; text: string }
   | { kind: "failed"; reason: string }
   | { kind: "stopped" }
@@ -173,7 +174,7 @@ function callItem(args: {
   call: ToolCall;
   result: ToolResult | undefined;
   active: boolean;
-  approval: Pick<PendingApproval, "_id" | "subject"> | undefined;
+  approval: Pick<PendingApproval, "_id" | "subject" | "reason"> | undefined;
   timeZone: string;
 }): DisplayItem {
   const { key, call, result, active, approval, timeZone } = args;
@@ -192,6 +193,7 @@ function callItem(args: {
         title: routine?.title ?? (known === null ? `Run ${call.name}?` : TOOL_WORDS[known].ask),
         arguments: routine?.arguments ?? desktop ?? callArguments(call.arguments),
         picture: desktop !== null,
+        reason: approval.reason,
       };
     }
     // A row that is still running must not claim the past tense.

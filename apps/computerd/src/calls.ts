@@ -42,6 +42,10 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
         return await settle(callId, { outcome: "interrupted", output: INTERRUPTED_OUTPUT, truncated: false });
       case "absent":
         await journal.markStarted({ callId, botId, toolName: tool.name });
+        // A cancel can land while the journal is written, and an execute handed an aborted signal may never see the abort.
+        if (signal.aborted) {
+          return await settle(callId, { outcome: "cancelled", output: CANCELLED_BEFORE_START_OUTPUT, truncated: false });
+        }
         return await settle(callId, await execute({ botId, tool, browsing, signal }));
     }
   }
