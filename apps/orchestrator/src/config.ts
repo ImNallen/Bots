@@ -89,6 +89,11 @@ function parseUrl(args: { value: string; name: string }): string {
   return args.value.replace(/\/+$/, "");
 }
 
+// verify:web reads it the same way, so its search checks ask the SearXNG that this orchestrator asks.
+export function parseSearxngUrl(env: Env): string {
+  return parseUrl({ value: env.SEARXNG_URL || DEFAULT_SEARXNG_URL, name: "SEARXNG_URL" });
+}
+
 function parseIssuer(env: Env): string {
   const issuer = required({ env, name: "JWT_ISSUER" });
   if (!URL.canParse(issuer)) {
@@ -170,7 +175,7 @@ export function parseConfig(env: Env): Config {
       model: env.MISTRAL_MODEL || DEFAULT_MISTRAL_MODEL,
     },
     transcriptionModel: env.MISTRAL_TRANSCRIPTION_MODEL || "voxtral-mini-transcribe-3-0",
-    searxngUrl: parseUrl({ value: env.SEARXNG_URL || DEFAULT_SEARXNG_URL, name: "SEARXNG_URL" }),
+    searxngUrl: parseSearxngUrl(env),
     webDistDir: WEB_DIST_DIR,
     proxmox: parseProxmox(env),
   };

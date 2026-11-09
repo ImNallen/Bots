@@ -1,8 +1,11 @@
-// Checks web_search and web_fetch against the real internet. The network checks run inside a computerd: in its Docker container,
-// fed to node over stdin, or with --inside in this process from a computerd's release root, as on a VM. With an address, a real
-// model then works through the deployed orchestrator, like verify:browser, and must reach for the text tools by itself.
+// Checks web_search and web_fetch against the real internet. The search checks run in this process, through the orchestrator's own
+// search module, against the SearXNG that pnpm bootstrap started on this machine. The fetch checks run inside a computerd: in its
+// Docker container, fed to node over stdin, or with --inside in this process from a computerd's release root, as on a VM. With an
+// address, a real model then works through the deployed orchestrator, like verify:browser, and must reach for the text tools by
+// itself.
 //
 //   pnpm verify:web [<container>] [https://<machine>.<tailnet>.ts.net]
+//   node scripts/verify-web.ts --search
 //   node scripts/verify-web.ts --inside
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -23,10 +26,29 @@ function report(ok: boolean, name: string, detail = ""): void {
   console.log(`${ok ? "ok  " : "FAIL"}  ${name}${detail === "" ? "" : `: ${detail.slice(0, 300).replaceAll("\n", " | ")}`}`);
 }
 
+const SEARCHES = ["sqlite wal mode", "solar eclipse 2027 path", "rust tokio select macro"];
 const ARTICLE = "https://en.wikipedia.org/wiki/SQLite";
 const REFUSED = ["http://127.0.0.1:9301/json/version", "http://10.78.0.2:8788/", "http://localtest.me:9301/json/version"];
 
-async function networkChecks(): Promise<void> {
+async function searchChecks(): Promise<void> {
+  const { parseSearxngUrl } = await import("../apps/orchestrator/src/config.ts");
+  const { createSearch } = await import("../apps/orchestrator/src/search.ts");
+  const url = parseSearxngUrl(process.env);
+  const search = createSearch({ url, fetch });
+  for (const query of SEARCHES) {
+    const words = query.toLowerCase().split(/\s+/).filter((word) => word.length >= 3);
+    const result = await search({ query, signal: new AbortController().signal });
+    const results = result.output.split("\n\n").slice(1);
+    const about = results.filter((entry) => words.some((word) => entry.toLowerCase().includes(word))).length;
+    report(
+      result.outcome === "ok" && results.length >= 5 && about >= results.length * 0.8,
+      `web_search through ${url} finds at least 5 results for "${query}", and at least 80% share a word with it`,
+      `${results.length} results, ${about} share a word: ${result.outcome === "ok" ? (result.output.split("\n")[2] ?? "") : result.output}`,
+    );
+  }
+}
+
+async function fetchChecks(): Promise<void> {
   const module = pathToFileURL(`${process.cwd()}/apps/computerd/src/web.ts`).href;
   const { createWeb, nodeNetwork } = (await import(module)) as typeof import("../apps/computerd/src/web.ts");
   const web = createWeb({ network: nodeNetwork });
@@ -119,18 +141,23 @@ async function modelChecks(origin: string): Promise<void> {
 
 const args = process.argv.slice(2);
 if (args.includes("--inside")) {
-  await networkChecks();
+  await fetchChecks();
+  process.exit(failures === 0 ? 0 : 1);
+}
+await searchChecks();
+if (args.includes("--search")) {
+  console.log(failures === 0 ? "verify:web passed" : `verify:web failed with ${failures} failure(s)`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
 const origin = args.find((arg) => URL.canParse(arg));
 const container = args.find((arg) => !URL.canParse(arg)) ?? DEFAULT_CONTAINER;
-console.log(`network checks inside ${container}`);
+console.log(`web_fetch checks inside ${container}`);
 const inside = spawnSync("docker", ["exec", "-i", "-w", "/app", container, "node", "--input-type=module-typescript", "-", "--inside"], {
   input: readFileSync(new URL(import.meta.url)),
   stdio: ["pipe", "inherit", "inherit"],
 });
-report(inside.status === 0, `the network checks pass inside ${container}`, inside.error?.message ?? `exit ${inside.status}`);
+report(inside.status === 0, `the web_fetch checks pass inside ${container}`, inside.error?.message ?? `exit ${inside.status}`);
 if (origin === undefined) {
   console.log("no address given, so no real model ran");
 } else {
