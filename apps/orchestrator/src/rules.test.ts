@@ -100,6 +100,53 @@ describe("the built-in ask rules", () => {
 const aim = (element: DesktopAim["element"], app: string, kind: WindowKind = "frame"): DesktopAim => ({ element, window: { app, kind } });
 const click = (name: string, app: string, button: "left" | "right" | "middle" | "double" = "left"): RuleInput => ({ invocation: { name: "desktop_click", args: { mark: 1, button } }, aim: aim({ role: "button", name }, app), workspace: WS });
 
+describe("holes found in review stay closed", () => {
+  it("treats each line as its own command", () => {
+    expect(runsShell("ls\nrm -rf ~")).toBe(false);
+    expect(runsShell("ls\npwd")).toBe(true);
+    expect(runsShell("ls\r\nrm x")).toBe(false);
+    expect(runsShell("ls \\\nrm")).toBe(false);
+  });
+
+  it("asks on a substitution inside double quotes, and still reads single quotes as plain text", () => {
+    expect(runsShell('echo "$(rm -rf ~)"')).toBe(false);
+    expect(runsShell('echo "`id`"')).toBe(false);
+    expect(runsShell("echo '$(not run)'")).toBe(true);
+  });
+
+  it("catches a writing flag combined with others or with its value attached", () => {
+    for (const command of ["sort -uo out.txt in.txt", "sort -oout.txt in.txt", "tree -ao out.txt", "date -us '2020-01-01'"]) {
+      expect(runsShell(command), command).toBe(false);
+    }
+    expect(runsShell("sort -u in.txt")).toBe(true);
+  });
+
+  it("asks before writing any file git reads its settings from", () => {
+    for (const path of ["~/.config/git/config", "/etc/gitconfig", ".git/config", "/home/agent/.gitconfig"]) {
+      expect(decideByRules({ invocation: { name: "write_file", args: { path, content: "[core]\n\tfsmonitor = ./x\n" } }, aim: null, workspace: WS }).rule, path).toBe("gitConfig");
+    }
+  });
+
+  it("asks before writing into a directory on PATH", () => {
+    for (const path of ["~/.local/bin/ls", "/home/agent/bin/cat", "/usr/local/bin/git", `../../home/agent/.local/bin/grep`]) {
+      expect(decideByRules({ invocation: { name: "write_file", args: { path, content: "#!/bin/sh\n" } }, aim: null, workspace: WS }).rule, path).toBe("onPath");
+    }
+    expect(decideByRules({ invocation: { name: "write_file", args: { path: "bin/tool.sh", content: "x" } }, aim: null, workspace: WS }).run).toBe(true);
+  });
+
+  it("asks before a click or typing in the browser, where the page names its own controls", () => {
+    expect(decideByRules(click("Read more", "Chromium")).run).toBe(false);
+    expect(decideByRules(click("Bookmarks", "Chromium", "right")).run).toBe(false);
+    expect(decideByRules({ invocation: { name: "desktop_type", args: { text: "hello", replace: false, submit: false } }, aim: aim({ role: "entry", name: "Search" }, "Chromium"), workspace: WS }).run).toBe(false);
+  });
+
+  it("asks on the commit words a reply, comment, or share button carries", () => {
+    for (const name of ["Comment", "Reply all", "Share", "Upload files", "Move to Trash", "Merge pull request"]) {
+      expect(decideByRules(click(name, "thunar")).run, name).toBe(false);
+    }
+  });
+});
+
 describe("the desktop allow rules", () => {
   it("runs a scroll", () => {
     expect(decideByRules({ invocation: { name: "desktop_scroll", args: { mark: 1, direction: "down", amount: 3 } }, aim: aim({ role: "document", name: "" }, "Chromium"), workspace: WS }).run).toBe(true);
@@ -107,7 +154,7 @@ describe("the desktop allow rules", () => {
 
   it("runs a left or right click on a named control outside a terminal", () => {
     expect(decideByRules(click("Files", "xfce4-panel")).run).toBe(true);
-    expect(decideByRules(click("Bookmarks", "Chromium", "right")).run).toBe(true);
+    expect(decideByRules(click("Open Folder", "thunar", "right")).run).toBe(true);
   });
 
   it("asks on a commit word, an empty name, a terminal, and a double or middle click", () => {
@@ -132,9 +179,9 @@ describe("the desktop allow rules", () => {
 
   it("runs typing only when it does not submit, has no newline, and is outside a terminal", () => {
     const type = (text: string, submit: boolean, app: string): RuleInput => ({ invocation: { name: "desktop_type", args: { text, replace: false, submit } }, aim: aim({ role: "entry", name: "Search" }, app), workspace: WS });
-    expect(decideByRules(type("hello", false, "Chromium")).run).toBe(true);
-    expect(decideByRules(type("hello", true, "Chromium")).run).toBe(false);
-    expect(decideByRules(type("a\nb", false, "Chromium")).run).toBe(false);
+    expect(decideByRules(type("hello", false, "thunar")).run).toBe(true);
+    expect(decideByRules(type("hello", true, "thunar")).run).toBe(false);
+    expect(decideByRules(type("a\nb", false, "thunar")).run).toBe(false);
     expect(decideByRules(type("hello", false, "xfce4-terminal")).run).toBe(false);
   });
 
@@ -172,11 +219,19 @@ describe("the Automatic level over the labelled cases", () => {
   });
 
   it("lets the routine reads and navigation run with no card", () => {
-    const shouldRun = ["cat-package-json", "ls-explore", "grep-explore", "git-status", "git-diff", "read-build-log", "web-fetch-wikipedia", "navigate-dashboard", "desktop-open-files", "desktop-open-menu", "desktop-scroll-down", "desktop-type-search"];
+    const shouldRun = ["cat-package-json", "ls-explore", "grep-explore", "git-status", "git-diff", "read-build-log", "web-fetch-wikipedia", "navigate-dashboard", "desktop-open-files", "desktop-scroll-down"];
     for (const id of shouldRun) {
       const testCase = RULE_CASES.find((entry) => entry.id === id);
       expect(testCase, id).toBeDefined();
       expect(automaticAsks(testCase!), id).toBe(false);
+    }
+  });
+
+  it("still asks before a click or typing in the browser, which PR 2 is meant to let through", () => {
+    for (const id of ["desktop-open-menu", "desktop-type-search"]) {
+      const testCase = RULE_CASES.find((entry) => entry.id === id);
+      expect(testCase, id).toBeDefined();
+      expect(automaticAsks(testCase!), id).toBe(true);
     }
   });
 

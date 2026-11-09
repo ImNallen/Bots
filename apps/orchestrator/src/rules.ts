@@ -83,12 +83,22 @@ function allow(input: RuleInput): RuleOutcome {
 const COMMIT_WORDS: readonly string[] = [
   "send", "post", "publish", "submit", "confirm", "delete", "remove", "discard", "erase", "wipe", "close account", "replace",
   "overwrite", "save", "pay", "buy", "purchase", "order", "checkout", "subscribe", "donate", "transfer", "sign", "accept", "agree",
-  "allow", "grant", "install", "uninstall", "apply", "reset", "format", "empty trash", "export", "continue",
+  "allow", "grant", "install", "uninstall", "apply", "reset", "format", "empty trash", "export", "continue", "comment", "reply",
+  "share", "forward", "upload", "invite", "merge", "approve", "archive", "unsubscribe", "trash", "log out", "restart", "shut down",
 ];
 const COMMIT_WORD_RES: readonly RegExp[] = COMMIT_WORDS.map((word) => new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"));
 
 // The terminal emulators on a bot's desktop. A click or typed line in one of them runs a command, so it is never an allowed target.
 const TERMINAL_APPS: ReadonlySet<string> = new Set(["xfce4-terminal", "xterm", "uxterm"]);
+
+// A web page names its own controls, so a name is no guide to what a click or typed text does there. Desktop input in the browser
+// asks, as a browser_* action does, until a later PR tells the browser's own controls from the page's.
+const WEB_APPS: ReadonlySet<string> = new Set(["Chromium", "chromium", "chromium-browser"]);
+const WEB_REASON = "This acts on a web page, whose controls the page names itself, so it needs your approval.";
+
+function isWeb(aim: DesktopAim): boolean {
+  return aim.window !== null && WEB_APPS.has(aim.window.app);
+}
 
 // The keys that only move around. Enter and Return commit, so they always ask.
 const NAVIGATION_KEYS: ReadonlySet<string> = new Set([
@@ -117,6 +127,9 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
   if (isTerminal(aim)) {
     return { run: false, rule: "desktopClick", reason: "This clicks inside a terminal, so it needs your approval." };
   }
+  if (isWeb(aim)) {
+    return { run: false, rule: "desktopClick", reason: WEB_REASON };
+  }
   if (hasCommitWord(name)) {
     return { run: false, rule: "desktopClick", reason: "This looks like it commits or confirms something, so it needs your approval." };
   }
@@ -133,6 +146,9 @@ function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim 
   }
   if (aim !== null && isTerminal(aim)) {
     return { run: false, rule: "desktopType", reason: "This types into a terminal, so it needs your approval." };
+  }
+  if (aim === null || isWeb(aim)) {
+    return { run: false, rule: "desktopType", reason: WEB_REASON };
   }
   return { run: true, rule: "desktopType" };
 }
@@ -173,6 +189,18 @@ function parseShell(command: string): ShellParse {
     const char = chars[index]!;
     const next = chars[index + 1];
     if (quote !== "") {
+      // Inside double quotes bash still expands $( and backticks, and a backslash still escapes.
+      if (quote === '"' && (char === "`" || (char === "$" && next === "("))) {
+        return { ok: false };
+      }
+      if (quote === '"' && char === "\\") {
+        if (next === undefined || next === "\n") {
+          return { ok: false };
+        }
+        token += next;
+        index += 1;
+        continue;
+      }
       if (char === quote) {
         quote = "";
       } else {
@@ -185,16 +213,24 @@ function parseShell(command: string): ShellParse {
       continue;
     }
     if (char === "\\") {
-      if (next === undefined) {
+      if (next === undefined || next === "\n") {
         return { ok: false };
       }
       token += next;
       index += 1;
       continue;
     }
-    if (char === " " || char === "\t" || char === "\n") {
+    if (char === " " || char === "\t") {
       endToken();
       continue;
+    }
+    // bash runs each line as its own command.
+    if (char === "\n") {
+      endSegment();
+      continue;
+    }
+    if (char === "\r") {
+      return { ok: false };
     }
     if (char === "`" || char === "(" || char === ")" || char === "{" || char === "}" || char === "<") {
       return { ok: false };
@@ -284,6 +320,8 @@ function segmentAllowed(words: string[]): boolean {
 
 const has = (rest: string[], ...flags: string[]): boolean =>
   rest.some((token) => flags.some((flag) => token === flag || token.startsWith(`${flag}=`)));
+// Short flags combine and take their value attached, as in sort -uo out or -ofile, so any single-dash token holding the letter counts.
+const hasShort = (rest: string[], letter: string): boolean => rest.some((token) => /^-[^-]/.test(token) && token.includes(letter));
 const operands = (rest: string[]): string[] => rest.filter((token) => !token.startsWith("-") || token === "-");
 
 // Each program maps to a test that returns true when the call is read-only. A test built from forbidden flags returns false when one
@@ -308,10 +346,10 @@ const READ_ONLY_PROGRAMS: Readonly<Record<string, (rest: string[]) => boolean>> 
   df: () => true,
   which: () => true,
   type: () => true,
-  tree: (rest) => !has(rest, "-o", "--output"),
+  tree: (rest) => !hasShort(rest, "o") && !has(rest, "--output"),
   diff: () => true,
   cmp: () => true,
-  sort: (rest) => !has(rest, "-o", "--output", "--compress-program"),
+  sort: (rest) => !hasShort(rest, "o") && !has(rest, "--output", "--compress-program"),
   uniq: (rest) => operands(rest).length <= 1,
   cut: () => true,
   tr: () => true,
@@ -319,7 +357,7 @@ const READ_ONLY_PROGRAMS: Readonly<Record<string, (rest: string[]) => boolean>> 
   basename: () => true,
   dirname: () => true,
   realpath: () => true,
-  date: (rest) => !has(rest, "-s", "--set"),
+  date: (rest) => !hasShort(rest, "s") && !has(rest, "--set"),
   whoami: () => true,
   id: () => true,
   uname: () => true,
@@ -400,6 +438,10 @@ const BUILT_IN_RULES = {
     reason: "This changes a git setting that makes git run a program of its own.",
     applies: (input) => writtenPlaces(input).some((value) => GIT_CONFIG_FILE.test(value)) || shellCommands(input).some((command) => GIT_CONFIG_SET.test(command)),
   },
+  onPath: {
+    reason: "This writes a program where the shell finds commands, so a later command could run it.",
+    applies: (input) => input.invocation.name === "write_file" && onPath(resolvePath(input.workspace, input.invocation.args.path)),
+  },
   ownerLogins: {
     reason: "This action reaches your browser's logins or your computer's own records.",
     applies: (input) => stringArgsOf(input.invocation.args).some((value) => OWNER_LOGIN_PATHS.some((pattern) => pattern.test(value))),
@@ -438,8 +480,14 @@ const STARTS_LATER: readonly RegExp[] = [
 ];
 
 // git itself runs these settings, so setting one is as powerful as a command. A write to its config file does the same.
-const GIT_CONFIG_FILE = /(?:^|\/)\.git\/config\b|(?:^|\/|~|\$HOME\/|\bHOME\/)\.gitconfig\b/;
+const GIT_CONFIG_FILE = /(?:^|\/)\.git\/config\b|(?:^|\/|~|\$HOME\/|\bHOME\/)\.gitconfig\b|\.config\/git\/config\b|^\/etc\/gitconfig\b/;
 const GIT_CONFIG_SET = /\bgit\b[^\n]*\bconfig\b[^\n]*(?:\bcore\.fsmonitor\b|\bcore\.pager\b|\bcore\.sshCommand\b|\bcore\.hooksPath\b|\balias\.)/i;
+
+// The directories on a bot's PATH. A free write_file over an executable there would let a read-only command run it.
+const PATH_DIRS = /^(?:~|\$HOME|\/home\/[^/]+|\/root)\/(?:bin|\.local\/bin)\/|^\/(?:usr\/(?:local\/)?)?s?bin\/|^\/opt\/[^/]+\/bin\//;
+function onPath(path: string): boolean {
+  return PATH_DIRS.test(path);
+}
 
 const OWNER_LOGIN_PATHS: readonly RegExp[] = [
   /\/home\/browser(\/|\b)/,
