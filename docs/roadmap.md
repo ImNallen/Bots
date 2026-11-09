@@ -291,6 +291,19 @@ Step 5 was accepted on 2026-11-07, after these checks on the real system:
 
 The step's check itself, that the orchestrator rejects a write attempt from a scheduled run, has only run with a scripted fake model, because a real model has no reason to attempt one. So nothing shows that Mistral accepts a history that holds a call to a tool it was not offered. `pnpm verify:browser`, `pnpm verify:screen`, and `pnpm verify:takeover` passed on 2026-11-08 against `1dc9f04`, which includes this stack.
 
+### Routines by title, managed in chat
+
+Done in code on 2026-11-09, with a scripted fake model, and not deployed. The owner approved the Figma redesign of the Routines panel, file `uHL0QLe51riKivmYXo2o4q`, section "03b · Routine detail", and asked that a bot create, change, and delete routines with no card when the owner asks in chat. [How a routine fires](architecture.md#how-a-routine-fires) gives the design.
+
+- A routine has a title, a one-line description, and 1 to 6 steps beside the instruction it runs. The panel shows those and never the instruction. A routine made before this shows the start of its instruction as its title, with no description and no steps.
+- `schedule_propose` is gone. `schedule_create`, `schedule_update`, and `schedule_delete` ask at Everything, and at the other levels only once the run has read untrusted text. The prompt lists each routine's id and title, and tells the bot to update a routine rather than create a second one. Stored `schedule_propose` calls replay to the model as `schedule_create` and show in the chat as a created routine.
+- The details have no buttons. Test now and `schedules.runNow` are gone, and the owner asks the bot to try something instead. Delete is a context menu on a computer, by right-click, Shift+F10, or the context menu key, and a swipe on a phone.
+- A delete, by the owner or by the bot, leaves an Undo line for 8 seconds. The routine cannot fire in that time and counts toward no limit, and Convex removes it for good when the window ends.
+
+`pnpm verify:routines` drives the panel in Chromium in light and dark, at 1440 wide and on a 390 wide touch phone, and it passed against the local app on 2026-11-09. Its swipe is Chromium's touch emulation. `pnpm verify:design` passed with its routine steps rewritten for the menu and Undo. `pnpm verify:agent` passed in full on 2026-11-09, all 31 scenarios and 522 checks, against a separate local backend. Its `schedule` scenario now covers a create in chat with no card, a card at Everything and after a read at every other level, an update that moves the next run and one that leaves a paused routine paused, a bot that cannot reach another bot's routine, a bot's delete that the owner sees with Undo, a deleted routine that never fires and counts toward no limit, an Undo, the end of a window after an Undo, and the delete that lands when the window ends. Nobody ran these new checks against the code before this change, so they have not been seen to fail. A real model, the control VM, and a real phone are untested, so nothing shows how Mistral fills the title, description, and steps, or whether it accepted `schedule_propose` in history before the rename.
+
+This changes `packages/protocol`, so deploying it restarts `computerd` on every VM. Going back to a commit before this one needs `title`, `summary`, `steps`, and `deleting` cleared from every `schedules` row, because the older schema has none of them and Convex checks every stored row at a deploy.
+
 ### The description
 
 The owner said on 2026-11-07 that a description is a generic information field, and that like memories and routines it is meant for the AI to edit and update. `bots.description` has the old field's 8,000 character limit. The owner still edits it in the panel, and a bot replaces it with `description_set`, which works like the memory tools at every approval level. [The architecture document](architecture.md#who-can-write-a-description-and-what-limits-it) gives the reasons and the limits.
@@ -378,8 +391,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A report reaches later chat runs as the bot's own words, and a page can plant its text. A chat run's first save after such a report shows no card at the default level, because `readUntrustedText` covers only the run itself.
 - An assistant turn with no text and no call replays as an empty message, and Mistral's own validator refuses that in some of its versions. A read-only run's report is never empty, so this affects only a chat run.
 - A chat row calls a refused routine "Created a routine" with "failed" beside it, as it does for any tool that failed. The expanded row says why.
-- A proposal that breaks a rule, such as an owner with no time zone or a bot with 10 routines, shows its card, and it fails only after the owner approves. The prompt lists a bot's routines, so a bot can see that limit first.
-- The limit of 48 scheduled runs counts stored rows, and retention deletes them. So Test now on one routine can pass 48 runs in a day, because that routine keeps only 20. Two routines or more on a schedule reach the limit as designed.
+- A routine change that breaks a rule, such as an owner with no time zone or a bot with 10 routines, shows its card when it asks, and it fails only after the owner approves. The prompt lists a bot's routines, so a bot can see that limit first.
 - `fireDue` takes 32 due rows in a tick, oldest first. If 32 routines wait for busy bots at once, the rows behind them wait with them, and they can miss their 15 minutes. With 20 routines for each owner, this needs several owners at once.
 - An owner who keeps chatting keeps a routine waiting, because a run that ended under 2 minutes ago counts as busy. After 15 minutes that fire is missed, and the panel says so.
 - A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. At the Shell and Nothing levels, `description_set` shows no card, and the chat row and the panel are the only signs.
@@ -390,7 +402,12 @@ These are open on purpose. Fix each one when the work reaches it.
 - An `everyHours` routine moves later by the cron's delay at each fire, about 30 seconds on average, so an hourly routine moves about 12 minutes in a day.
 - The panel shows a routine's run states and failure reasons. No page shows a routine's raw pages, so the owner reads only its report.
 - The panel and Activity give the next run in the zone from Settings, and past runs in the device's zone, so the two can differ.
-- Routine list titles show at most two lines; the full instruction remains available in the routine details panel.
+- The panel never shows a routine's instruction. Its title, description, and steps are the bot's words about it, and no code checks that they match. The owner can ask the bot what a routine runs, because the prompt holds each instruction.
+- A routine tool's check on untrusted text covers one run, as a note's does. So an injection still in replayed history passes it, and the first routine change of a later run has no card below Everything.
+- A delete's card shows only the routine's id, as a forget's does.
+- The Undo line shows only in the panel, so a bot's delete while the panel is closed leaves only its chat row. The line counts down on the device's clock against Convex's end, so a wrong clock moves the bar and not the delete.
+- An Undo does not check the limit of 10, so a routine created during another's window can leave a bot with 11.
+- A delete from the keyboard leaves focus on the page, not on Undo.
 - A held message stays in a read-only box until the held run ends. If no runner holds that run, that can last until the next tick after its 30 minute limit.
 - A message held during a routine lives only in that page, so closing the page loses it.
 - A routine whose owner has no orchestrator on a shared dev backend keeps its bot busy for 30 minutes at each fire, until 3 failures pause it.

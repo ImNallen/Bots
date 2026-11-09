@@ -1,11 +1,18 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server.js";
 import { startReadOnlyRun } from "./schedules.js";
-import { runState } from "./validators.js";
+import { cadence, runState } from "./validators.js";
 
 export const createForCheck = internalMutation({
-  args: { botId: v.id("bots"), instruction: v.string(), title: v.optional(v.string()), summary: v.optional(v.string()), steps: v.optional(v.array(v.string())) },
-  handler: async (ctx, { botId, instruction, title, summary, steps }) => {
+  args: {
+    botId: v.id("bots"),
+    instruction: v.string(),
+    title: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    steps: v.optional(v.array(v.string())),
+    cadence: v.optional(cadence),
+  },
+  handler: async (ctx, { botId, instruction, title, summary, steps, cadence }) => {
     const bot = await ctx.db.get(botId);
     if (bot === null) {
       throw new ConvexError("Bot not found");
@@ -19,7 +26,7 @@ export const createForCheck = internalMutation({
       title,
       summary,
       steps,
-      cadence: { kind: "everyHours", hours: 24 },
+      cadence: cadence ?? { kind: "everyHours", hours: 24 },
     });
     return { scheduleId, threadId };
   },
