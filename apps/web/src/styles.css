@@ -996,23 +996,6 @@ button.card-row:hover {
   padding: 10px;
 }
 
-/* Routines */
-.routine-runs {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  list-style: none;
-  overflow-wrap: anywhere;
-}
-
-.routine-runs [data-tone="bad"] {
-  color: var(--danger);
-}
-
 .activity {
   flex: 1;
   min-width: 0;
@@ -1580,24 +1563,52 @@ button.card-row:hover {
 .routines-heading h2 { font-size: 16px; font-weight: 500; }
 .routines-heading .btn { min-height: 34px; padding-inline: 14px; }
 .routine-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.routine-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-height: 88px; padding: 16px; background: var(--raised); border-radius: 20px; }
+.routine-item { position: relative; }
+.routine-swipe { position: relative; overflow: hidden; border-radius: 20px; }
+.routine-swipe-delete { position: absolute; inset: 0 0 0 auto; width: 96px; background: var(--danger); color: var(--on-danger); font-size: 13px; font-weight: 500; visibility: hidden; }
+.routine-swipe[data-open="true"] .routine-swipe-delete { visibility: visible; }
+.routine-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 88px; padding: 16px; background: var(--raised); border-radius: 20px; touch-action: pan-y; transition: transform 180ms ease-out, background-color 120ms; }
+.routine-row[data-dragging="true"] { transition: none; }
+.routine-item[data-selected="true"] .routine-row { background: var(--sel); }
+.routine-menu { position: absolute; z-index: 5; top: calc(100% - 16px); right: 32px; padding: 6px; background: var(--raised); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shot-lg); }
+.routine-menu button { display: block; min-width: 160px; min-height: 32px; padding: 0 12px; text-align: left; color: var(--danger); font-size: 13px; border-radius: var(--radius-pill); }
+.routine-menu button:hover, .routine-menu button:focus-visible { background: var(--sel); }
+.routine-deleted { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 8px 10px 8px 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; }
+.routine-deleted p { min-width: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.routine-deleted .btn { min-height: 32px; padding-inline: 14px; }
+.routine-undo-bar { position: absolute; inset: auto 16px 0; height: 2px; background: var(--muted); transform-origin: left; animation: routine-undo linear forwards; }
+@keyframes routine-undo { from { transform: scaleX(var(--undo-from, 1)); } to { transform: scaleX(0); } }
 .routine-content { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; text-align: left; }
 .routine-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
 .routine-cadence { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .routine-toggle { display: grid; flex: none; place-items: center; width: 44px; height: 44px; margin-right: -6px; border-radius: var(--radius-pill); }
 .routine-toggle img { display: block; width: 32px; height: 20px; }
 :root[data-theme="dark"] .routine-toggle img { filter: invert(1); }
-.routine-row > .error { flex-basis: 100%; }
 .routine-empty { display: flex; flex-direction: column; gap: 12px; padding: 24px; }
 .routine-empty h3 { font-size: 15px; font-weight: 500; }
 .routine-empty p { color: var(--muted); font-size: 13px; }
-.routine-detail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.routine-detail h3 { font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
-.routine-detail-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.routine-detail-field h4 { margin: 0; color: var(--muted); font-size: 11px; font-weight: 400; }
-.routine-detail-field p { padding: 12px 14px; background: var(--raised); border-radius: var(--radius-field); font-size: 13px; overflow-wrap: anywhere; }
-.routine-status { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
-.routine-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.routine-detail { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.routine-head { display: flex; flex-direction: column; gap: 6px; }
+.routine-head h3 { font-size: 20px; font-weight: 500; overflow-wrap: anywhere; }
+.routine-head p { color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.routine-when { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: var(--raised); border: 1px solid var(--line); border-radius: 20px; }
+.routine-when > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.routine-when-cadence { font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.routine-when-next { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.routine-part { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.routine-part h4 { margin: 0; color: var(--muted); font-size: 11px; font-weight: 400; }
+.routine-steps, .routine-runs { display: flex; flex-direction: column; margin: 0; padding: 16px; list-style: none; background: var(--raised); border: 1px solid var(--line); border-radius: 20px; overflow-wrap: anywhere; }
+.routine-steps { gap: 14px; font-size: 13px; line-height: 1.5; }
+.routine-steps li { display: flex; align-items: flex-start; gap: 12px; }
+.routine-step-number { display: grid; flex: none; place-items: center; width: 20px; height: 20px; margin-top: 1px; background: var(--sel); border-radius: 50%; font-size: 10.5px; line-height: 1; }
+.routine-limits { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.routine-limits li { padding: 6px 10px; background: var(--sel); border-radius: var(--radius-pill); font-size: 11px; }
+.routine-runs { gap: 10px; padding-block: 14px; font-size: 12px; }
+.routine-runs li { display: flex; align-items: center; gap: 10px; }
+.routine-runs [data-tone="bad"] { color: var(--danger); }
+.routine-run-dot { flex: none; width: 5px; height: 5px; background: currentColor; border-radius: 50%; }
+.routine-run-words { flex: 1; min-width: 0; }
+.routine-run-time { flex: none; color: var(--muted); }
 .routine-back { align-self: flex-start; }
 
 /* Settings */

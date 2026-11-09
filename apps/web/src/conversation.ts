@@ -64,8 +64,24 @@ const TOOL_WORDS = {
   memory_save: { done: "Saved a note", ask: "Save this note?", icon: "text" },
   memory_forget: { done: "Forgot a note", ask: "Forget this note?", icon: "close" },
   description_set: { done: "Updated its description", ask: "Update this description?", icon: "text" },
-  schedule_propose: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
+  schedule_create: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
+  schedule_update: { done: "Changed a routine", ask: "Change this routine?", icon: "lines" },
+  schedule_delete: { done: "Deleted a routine", ask: "Delete this routine?", icon: "close" },
 } as const satisfies Record<ToolName, { done: string; ask: string; icon: IconName }>;
+
+type ToolWords = (typeof TOOL_WORDS)[ToolName];
+
+// Threads stored before schedule_create hold calls to schedule_propose, which did the same thing.
+const RENAMED_TOOLS: Readonly<Record<string, ToolName>> = { schedule_propose: "schedule_create" };
+
+function knownTool(name: string): ToolName | null {
+  if (isToolName(name)) {
+    return name;
+  }
+  return Object.hasOwn(RENAMED_TOOLS, name) ? (RENAMED_TOOLS[name] ?? null) : null;
+}
+
+const ROUTINE_TOOLS: ReadonlySet<ToolName> = new Set(["schedule_create", "schedule_update", "schedule_delete"]);
 
 // A denied result has no row at all, so this table has no entry for it.
 const OUTCOMES: Record<Exclude<ToolResult["outcome"], "denied">, { status: ToolStatus; note: string | null }> = {
@@ -134,12 +150,50 @@ function desktopCard(subject: string, raw: string): CallArgument[] {
   return [{ label: null, value: subject }, ...(typeof text === "string" ? [{ label: "text", value: text }] : [])];
 }
 
-function routineCard(raw: string, timeZone: string): { title: string; arguments: CallArgument[] } | null {
-  const parsed = parseObject(raw) as { instruction?: unknown; cadence?: unknown } | null;
-  const cadence = parseCadence(parsed?.cadence);
-  return cadence === null || typeof parsed?.instruction !== "string"
-    ? null
-    : { title: `${TOOL_WORDS.schedule_propose.ask} ${describeCadence(cadence, timeZone)}.`, arguments: [{ label: null, value: parsed.instruction }] };
+type RoutineArgs = { routineId?: unknown; title?: unknown; summary?: unknown; steps?: unknown; instruction?: unknown; cadence?: unknown };
+
+function stepsText(steps: unknown): string | null {
+  return Array.isArray(steps) && steps.every((step) => typeof step === "string") ? steps.map((step, index) => `${index + 1}. ${step}`).join("\n") : null;
+}
+
+// A routine's card shows what the owner reads in the panel, its title, schedule, and steps, and not the instruction behind them,
+// unless the instruction is the only thing a change touches. A call the card cannot read falls back to every argument.
+function routineCard(tool: ToolName, raw: string, timeZone: string): { title: string; arguments: CallArgument[] } | null {
+  const parsed = parseObject(raw) as RoutineArgs | null;
+  if (parsed === null) {
+    return null;
+  }
+  const cadence = parsed.cadence === undefined ? undefined : parseCadence(parsed.cadence);
+  const steps = parsed.steps === undefined ? undefined : stepsText(parsed.steps);
+  if (cadence === null || steps === null) {
+    return null;
+  }
+  const ask = TOOL_WORDS[tool].ask;
+  const title = cadence === undefined ? ask : `${ask} ${describeCadence(cadence, timeZone)}.`;
+  const text = (label: string | null, value: unknown): CallArgument[] => (typeof value === "string" ? [{ label, value }] : []);
+  switch (tool) {
+    case "schedule_create":
+      return typeof parsed.title === "string" && steps !== undefined ? { title, arguments: [...text(null, parsed.title), { label: "steps", value: steps }] } : null;
+    case "schedule_update":
+      return {
+        title,
+        arguments: [
+          ...text("routine", parsed.routineId),
+          ...text("title", parsed.title),
+          ...text("description", parsed.summary),
+          ...(steps === undefined ? text("instruction", parsed.instruction) : [{ label: "steps", value: steps }]),
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
+// A routine call's row names the routine by its title. A schedule_propose call has no title, so its row shows its instruction.
+function routineSummary(raw: string): string {
+  const parsed = parseObject(raw) as RoutineArgs | null;
+  const named = [parsed?.title, parsed?.instruction].find((value) => typeof value === "string");
+  return typeof named === "string" ? named : "";
 }
 
 function startOfDay(at: number): number {
@@ -178,19 +232,21 @@ function callItem(args: {
   timeZone: string;
 }): DisplayItem {
   const { key, call, result, active, approval, timeZone } = args;
-  const known = isToolName(call.name) ? call.name : null;
-  const icon: IconName = known === null ? "gear" : TOOL_WORDS[known].icon;
-  const row = { key, kind: "tool" as const, icon, summary: callSummary(call.arguments) };
-  const doneName = known === null ? call.name : TOOL_WORDS[known].done;
+  const known = knownTool(call.name);
+  const words: ToolWords | null = known === null ? null : TOOL_WORDS[known];
+  const icon: IconName = words?.icon ?? "gear";
+  const isRoutine = known !== null && ROUTINE_TOOLS.has(known);
+  const row = { key, kind: "tool" as const, icon, summary: isRoutine ? routineSummary(call.arguments) : callSummary(call.arguments) };
+  const doneName = words?.done ?? call.name;
   if (result === undefined) {
     if (approval !== undefined) {
-      const routine = known === "schedule_propose" ? routineCard(call.arguments, timeZone) : null;
+      const routine = isRoutine ? routineCard(known, call.arguments, timeZone) : null;
       const desktop = approval.subject === null ? null : desktopCard(approval.subject, call.arguments);
       return {
         key,
         kind: "approval",
         approvalId: approval._id,
-        title: routine?.title ?? (known === null ? `Run ${call.name}?` : TOOL_WORDS[known].ask),
+        title: routine?.title ?? words?.ask ?? `Run ${call.name}?`,
         arguments: routine?.arguments ?? desktop ?? callArguments(call.arguments),
         picture: desktop !== null,
         reason: approval.reason,

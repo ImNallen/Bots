@@ -426,6 +426,7 @@ export const listForBot = query({
     const routines = await routinesOfBot(ctx, botId);
     return {
       limit: MAX_ROUTINES_PER_BOT,
+      undoMs: UNDO_MS,
       timeZone: user.timeZone,
       routines: await Promise.all(
         routines.toReversed().map(async (routine) =>
