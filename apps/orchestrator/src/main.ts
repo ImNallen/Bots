@@ -13,6 +13,7 @@ import { createProxmox } from "./proxmox.ts";
 import { startReconciler } from "./reconciler.ts";
 import { startRunner } from "./runner.ts";
 import { attachScreens } from "./screens.ts";
+import { createSearch } from "./search.ts";
 import { hashComputerToken } from "./secrets.ts";
 import { createService } from "./service.ts";
 import { loadStaticFiles, resolveStaticFile } from "./static.ts";
@@ -56,7 +57,15 @@ const link = startLink({
   log,
 });
 
-startRunner({ service, link, masterKey: config.masterKey, mistral: config.mistral, ownerScope, log });
+startRunner({
+  service,
+  link,
+  search: createSearch({ url: config.searxngUrl, fetch }),
+  masterKey: config.masterKey,
+  mistral: config.mistral,
+  ownerScope,
+  log,
+});
 
 if (config.proxmox !== null) {
   const { url, node, token, caFile } = config.proxmox;

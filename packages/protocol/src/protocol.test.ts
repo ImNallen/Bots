@@ -19,10 +19,11 @@ import {
   orchestratorMessage,
   parseJsonMessage,
   isBrowserInvocation,
-  isComputerTool,
   isWebInvocation,
   isMemoryInvocation,
+  isSearchInvocation,
   parseToolCall,
+  returnsUntrustedText,
   toolDefinitions,
   toolEffect,
   toolInvocation,
@@ -209,7 +210,14 @@ describe("web_search", () => {
 
   it("takes a query", () => {
     expect(parse({ query: "solar eclipse 2027" })).toEqual({ kind: "ok", invocation: { name: "web_search", args: { query: "solar eclipse 2027" } } });
-    expect(isWebInvocation({ name: "web_search", args: { query: "a" } })).toBe(true);
+    expect(isSearchInvocation({ name: "web_search", args: { query: "a" } })).toBe(true);
+    expect(isSearchInvocation({ name: "web_fetch", args: { url: "https://example.com/", start: 0 } })).toBe(false);
+  });
+
+  it("stays off the link, in the wire type and in the static type, because the orchestrator runs it", () => {
+    expectTypeOf<Extract<ToolInvocation, { name: "web_search" }>>().toBeNever();
+    expect(toolInvocation.safeParse({ name: "web_search", args: { query: "a" } }).success).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("web_search");
   });
 
   it.each([
@@ -383,19 +391,23 @@ describe("memory tools", () => {
   it("keeps a description call off the link, in the wire type and in the static type", () => {
     expectTypeOf<Extract<ToolInvocation, { name: "description_set" }>>().toBeNever();
     expect(toolInvocation.safeParse({ name: "description_set", args: { text: "a" } }).success).toBe(false);
-    expect(isComputerTool("description_set")).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("description_set");
   });
 
   it("stays off the link's wire type, so a computerd closes the link on a routine call", () => {
     const propose = { name: "schedule_propose", args: { instruction: "a", cadence: { kind: "everyHours", hours: 1 } } };
     expect(toolInvocation.safeParse(propose).success).toBe(false);
-    expect(isComputerTool("schedule_propose")).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("schedule_propose");
   });
 
-  it("counts every published tool but the memory tools and the routine tool as a computer tool, and no unknown name", () => {
-    const computerTools = toolDefinitions.map((tool) => tool.function.name).filter(isComputerTool);
-    expect(computerTools).toEqual(["shell", "read_file", "write_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
-    expect(isComputerTool("constructor")).toBe(false);
+  it("names every published tool but the memory tools, the routine tool, and web_search as a computer tool", () => {
+    expect(COMPUTER_TOOL_NAMES).toEqual(["shell", "read_file", "write_file", "web_fetch", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
+  });
+
+  it("counts every published tool's result as untrusted text but a memory tool's and the routine tool's, and no unknown name", () => {
+    const untrusted = toolDefinitions.map((tool) => tool.function.name).filter(returnsUntrustedText);
+    expect(untrusted).toEqual(["shell", "read_file", "write_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
+    expect(returnsUntrustedText("constructor")).toBe(false);
   });
 
   it("stays off the link's wire type, so a computerd closes the link on a memory call", () => {
@@ -453,7 +465,8 @@ describe("hello", () => {
   });
 
   it("keeps every tool from before the announcement on the link", () => {
-    expect(TOOLS_BEFORE_ANNOUNCEMENT.filter((name) => !isComputerTool(name))).toEqual([]);
+    const onTheLink = new Set<string>(COMPUTER_TOOL_NAMES);
+    expect(TOOLS_BEFORE_ANNOUNCEMENT.filter((name) => !onTheLink.has(name))).toEqual([]);
   });
 });
 

@@ -32,7 +32,8 @@ function world() {
     },
   } as unknown as Service;
   const link = { sendBrowsingEnd: (args: unknown) => browsingEnds.push(args) } as unknown as Link;
-  startRunner({ service, link, masterKey: Buffer.alloc(32), mistral: { baseUrl: "http://127.0.0.1:1", model: "m" }, ownerScope: "owner" as Id<"users">, log: () => {} });
+  const search = () => Promise.reject(new Error("no run here reaches a tool"));
+  startRunner({ service, link, search, masterKey: Buffer.alloc(32), mistral: { baseUrl: "http://127.0.0.1:1", model: "m" }, ownerScope: "owner" as Id<"users">, log: () => {} });
   return {
     claims,
     browsingEnds,

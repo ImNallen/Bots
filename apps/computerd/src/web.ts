@@ -1,5 +1,5 @@
-// The web tools run inside the computerd process, never through sudo and never near a desktop, so they work on a VM and in Docker on
-// a Mac alike.
+// web_fetch runs inside the computerd process, never through sudo and never near a desktop, so it works on a VM and in Docker on a
+// Mac alike.
 import { lookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -9,7 +9,6 @@ import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { capText, webUrl, type ToolResult, type WebInvocation } from "@bots/protocol";
 import { publicAddressFor, type PublicAddress, type Resolve } from "./addresses.ts";
 import { showPage, type Fetched } from "./web-page.ts";
-import { searchUrl, showSearch } from "./web-search.ts";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -18,8 +17,7 @@ const MAX_REDIRECTS = 5;
 const FETCH_DEADLINE_MS = 30_000;
 const REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
-// Bing answered this User-Agent with results on 2026-11-09. No Cookie, no Authorization, and no Referer, ever. Only encodings that
-// node:zlib decodes are offered.
+// No Cookie, no Authorization, and no Referer, ever. Only encodings that node:zlib decodes are offered.
 const REQUEST_HEADERS = {
   "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
   accept: "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
@@ -38,7 +36,7 @@ export type Opened = {
 };
 
 /**
- * The only I/O the web tools do, so a test replaces it whole and opens no socket. open sends one GET for url to exactly address,
+ * The only I/O web_fetch does, so a test replaces it whole and opens no socket. open sends one GET for url to exactly address,
  * with the name in the Host header and in TLS's server name, so the certificate is checked against the name.
  */
 export type Network = {
@@ -50,15 +48,6 @@ export type Web = {
   /** Never rejects. Every failure is a tool result. */
   execute: (args: { tool: WebInvocation; signal: AbortSignal }) => Promise<ToolResult>;
 };
-
-function planFor(tool: WebInvocation): { url: string; show: (fetched: Fetched) => ToolResult } {
-  switch (tool.name) {
-    case "web_fetch":
-      return { url: tool.args.url, show: (fetched) => showPage(fetched, tool.args.start) };
-    case "web_search":
-      return { url: searchUrl(tool.args.query), show: (fetched) => showSearch(tool.args.query, fetched) };
-  }
-}
 
 type Loaded = { kind: "fetched"; fetched: Fetched } | { kind: "refused"; reason: string } | { kind: "failed"; host: string; error: unknown };
 
@@ -110,8 +99,7 @@ export function createWeb(args: { network: Network }): Web {
       const combined = AbortSignal.any([signal, deadline.signal]);
       const stopped = new Promise<"stopped">((resolve) => combined.addEventListener("abort", () => resolve("stopped"), { once: true }));
       try {
-        const plan = planFor(tool);
-        const loaded = await Promise.race([load(plan.url, combined), stopped]);
+        const loaded = await Promise.race([load(tool.args.url, combined), stopped]);
         if (signal.aborted) {
           return { outcome: "cancelled", output: "The call was cancelled.", truncated: false };
         }
@@ -124,7 +112,7 @@ export function createWeb(args: { network: Network }): Web {
           case "failed":
             return failed(networkFailure(loaded.error, loaded.host));
           case "fetched": {
-            const shown = plan.show(loaded.fetched);
+            const shown = showPage(loaded.fetched, tool.args.start);
             const capped = capText(shown.output);
             return { ...shown, output: capped.output, truncated: shown.truncated || capped.truncated };
           }

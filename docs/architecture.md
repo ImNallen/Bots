@@ -9,7 +9,8 @@ Web, Tauri, and Expo clients
 Control VM, the only machine on the tailnet
 	tailscale serve    TLS and user identity
 	Convex             users, threads, runs, events, approvals
-	Orchestrator       tokens, secrets, policy, agent loop, Proxmox control, web files
+	Orchestrator       tokens, secrets, policy, agent loop, web search, Proxmox control, web files
+	SearXNG            metasearch for web_search, on loopback only
 	^
 	|  computerd connects outbound over an isolated network
 User VMs, one per user
@@ -406,17 +407,17 @@ On VM 950 on 2026-11-08, with Debian 13, Xvfb at 1280x800, and the helper starte
 
 ## Reading the web without the screen
 
-A bot searches and reads the web with two tools that never touch its desktop. `web_search` returns a numbered list of results, and `web_fetch` returns one page as text. Both have the effect `reads`, so they run with no card at Outside, and a routine gets them too. Both kinds of run read the same two lines of prompt. They say to search with `web_search` and read with `web_fetch`, and to open a page with `browser_navigate` when `web_fetch` gets almost no text or the page asks for JavaScript. A chat run also reads that the `browser_*` tools are for a page that needs JavaScript, a login, or a form, or that the user asks to see, and that the `desktop_*` tools are for what the browser tools cannot reach. Nothing in code sends a call to the quiet tool. The model chooses from those lines and the descriptions.
+A bot searches and reads the web with two tools that never touch its desktop. `web_search` returns a numbered list of results, and `web_fetch` returns one page as text. `web_search` runs in the orchestrator and asks SearXNG on the same machine, and `web_fetch` runs in `computerd`. Both have the effect `reads`, so they run with no card at Outside, and a routine gets them too. Both kinds of run read the same two lines of prompt. They say to search with `web_search` and read with `web_fetch`, and to open a page with `browser_navigate` when `web_fetch` gets almost no text or the page asks for JavaScript. A chat run also reads that the `browser_*` tools are for a page that needs JavaScript, a login, or a form, or that the user asks to see, and that the `desktop_*` tools are for what the browser tools cannot reach. Nothing in code sends a call to the quiet tool. The model chooses from those lines and the descriptions.
 
 ### Where a fetch runs
 
-`apps/computerd/src/web.ts` fetches inside the `computerd` process, with `node:http` and `node:https`. It never goes through `sudo`, never starts a desktop, and never touches Chromium, so it also works in Docker on a Mac, where the browser tools cannot run. A call holds the bot's desktop like every other tool, and holding never starts one. It sends no cookies, no `Authorization`, and no `Referer`, and it keeps no cache. It runs on the VM rather than the orchestrator, so it stays behind the VM's network rules, and its result counts toward `touchedComputer`, so a later memory save asks at Outside.
+`apps/computerd/src/web.ts` fetches inside the `computerd` process, with `node:http` and `node:https`. It never goes through `sudo`, never starts a desktop, and never touches Chromium, so it also works in Docker on a Mac, where the browser tools cannot run. A call holds the bot's desktop like every other tool, and holding never starts one. It sends no cookies, no `Authorization`, and no `Referer`, and it keeps no cache. It runs on the VM rather than the orchestrator, so it stays behind the VM's network rules. Its result is untrusted text, so a later memory save asks at Outside.
 
 A call follows at most 5 redirects, reads at most 4 MiB of a page, and gives up after 30 seconds, which is under the link's 60 seconds for a tool that is not `shell`. It speaks HTTP/1.1 only.
 
 ### Which addresses it opens
 
-The network rules refuse private and LAN addresses for the whole computer. They leave loopback open, and they allow the link at `10.78.0.2:8788`. Chromium's CDP on `127.0.0.1`, at port 9300 plus the slot, and the VNC streams answer a plain GET there. A tool that needs no card, and that a page can point anywhere, must not reach them, so the web tools check every address themselves:
+The network rules refuse private and LAN addresses for the whole computer. They leave loopback open, and they allow the link at `10.78.0.2:8788`. Chromium's CDP on `127.0.0.1`, at port 9300 plus the slot, and the VNC streams answer a plain GET there. A tool that needs no card, and that a page can point anywhere, must not reach them, so `web_fetch` checks every address itself:
 
 - `apps/computerd/src/addresses.ts` accepts only globally routable unicast. For IPv4 it refuses the IANA special-purpose ranges. For IPv6 it allows only `2000::/3`, less Teredo, documentation, and 6to4, so a v4-mapped, NAT64, or 6to4 address is refused rather than unwrapped.
 - A name resolves once. If any of its answers is not public, the whole name is refused, so `localtest.me`, which resolves to loopback, is refused.
@@ -441,9 +442,29 @@ Every tool result replays on every later model call, so a part is at most 16 KiB
 
 ### How it searches
 
-`web_search` fetches `https://www.bing.com/search?q=<query>&mkt=en-US` through the same checked path, and `apps/computerd/src/web-search.ts` reads each result as a title, an address, and a snippet. A title links through Bing's `/ck/a`, which answers with a JavaScript redirect that a plain fetch cannot follow. So the address comes from the link's `u` parameter, which is `a1` and then the address in base64url, or else from the result's `cite` when that is a whole address. When no result can be read, the tool answers `error` and names the results page, so the bot can open it with `browser_navigate`. That covers a block, a change to Bing's markup, and a query with no results, with an honest message.
+`web_search` runs in the orchestrator, next to the memory and routine calls. `apps/orchestrator/src/search.ts` sends `GET /search?q=<query>&format=json` to `SEARXNG_URL`, which defaults to `http://127.0.0.1:8789`. It gives up when the run stops or after 15 seconds. It parses the answer with zod and keeps at most 10 results whose address `web_fetch` could open. Each result reads as a title, an address, and a snippet, in SearXNG's order, and nothing names an engine.
 
-These were measured on 2026-11-09, from the home connection, with Node's TLS on the Mac and in the `computerd` container:
+A search that finds nothing answers `error`. It names each engine that failed, with the reason that SearXNG gave, and it names DuckDuckGo's and Bing's results pages for `browser_navigate`. A SearXNG that is down, or that answers something other than its JSON, gives an `error` that says search is unavailable, with the same two pages. Which of those pages a real browser can read from the home IP address is untested.
+
+The search runs where the orchestrator runs, not on the user's VM, because SearXNG has to stay off every network. Anything that reaches it can search from the home IP address, and a user VM reaches the control VM only on the link port. `searchInvocation` in `packages/protocol/src/tools.ts` is part of `ToolName` and `ModelInvocation` and not of `toolInvocation`, so a search passed to `Link.call` fails the typecheck. A search reads nothing on the computer, so it does not wait while the owner has the screen. A crash can repeat a search, which costs one more search and changes nothing.
+
+A search's result is untrusted text, because any page can put words in its title or its snippet. `returnsUntrustedText` counts every tool's result as untrusted but a memory or routine call's, because Convex writes those. So a memory save after a search asks at Outside, as it does after a computer tool, and a tool added later counts unless it is a memory or routine call.
+
+SearXNG is metasearch. It asks other engines from the home IP address and merges what they return, so one engine that blocks the address no longer breaks a search. What happens when every engine blocks the address at once is untested. `infra/control-vm/compose.yaml` runs `searxng/searxng:2026.11.9-57ff753ad`, pinned by its digest, in the `bots-control` project. It listens only on `127.0.0.1:8789`. `infra/control-vm/searxng/settings.yml` keeps the default engines, turns the limiter off, because the orchestrator is its one client, and turns JSON on. Its secret key is not in the repository. `pnpm bootstrap` generates it once into `.env.local` and passes it to Compose as `SEARXNG_SECRET`.
+
+These were measured on 2026-11-09, from the home connection, with the default engines:
+
+| What | Result |
+|---|---|
+| 20 queries in a row, straight to SearXNG | Every query got at least 20 results, all about the query, in about 1 second each |
+| Which engines answered them | Google and Brave answered the first 13 queries. Brave then stopped answering, and Google answered the rest alone |
+| DuckDuckGo | CAPTCHA every time |
+| Wikidata | Failed on some queries |
+| Three queries in a row through `search.ts`, in `pnpm verify:web` | 10 results each, and all 10 shared a word with the query |
+
+### Why it no longer reads one results page
+
+`web_search` used to fetch Bing's results page from `computerd` and read it with htmlparser2. These were measured on 2026-11-09, from the home connection, with Node's TLS on the Mac and in the `computerd` container:
 
 | Results page | Answer |
 |---|---|
@@ -455,11 +476,11 @@ These were measured on 2026-11-09, from the home connection, with Node's TLS on 
 | Bing, with `mkt=en-US` | 32 of 35 results were about the query, across five queries |
 | Bing, after a few hundred requests in half an hour | Unrelated results for some queries, and then "There are no results" for every query, for 16 to 20 minutes |
 
-So Bing is the one results page that works, and it works only while it is not asked too often. A bot that searches a few times in a chat, or a routine every hour, asks far less often than that measurement did.
+About 35 minutes after the last of those requests, Bing answered the Mac and VM 201 with results about other things, such as Baltimore Ravens pages for "solar eclipse 2027 path". `web_search` reported them as ok, so only the bot could tell that they were wrong. No results page answered plain requests well enough, so the owner chose a self-hosted SearXNG, which needs no paid API.
 
 ### A `computerd` from before the web tools
 
-The link never sends a call for a tool that the connected `computerd` did not name in its `hello`, as [A `computerd` from before the desktop tools](#a-computerd-from-before-the-desktop-tools) explains. So until a VM updates, a call to `web_search` or `web_fetch` answers `error` and says that the computer runs an older `computerd`, and the bot can still open the page on its screen.
+The link never sends a call for a tool that the connected `computerd` did not name in its `hello`, as [A `computerd` from before the desktop tools](#a-computerd-from-before-the-desktop-tools) explains. So until a VM updates, a call to `web_fetch` answers `error` and says that the computer runs an older `computerd`, and the bot can still open the page on its screen. A search does not depend on the VM's version. A `computerd` from before SearXNG still names `web_search` in its `hello`, which is harmless, because the orchestrator never sends a search to a computer.
 
 ## How approvals work
 
@@ -468,7 +489,7 @@ The orchestrator decides on every tool call before it sends the call to a comput
 | Level | What asks first |
 |---|---|
 | Everything | Every tool |
-| Outside, the default | Shell commands, desktop input, browser actions that change something, a memory tool or `description_set` once a computer tool has a result in this run, and a routine's proposal |
+| Outside, the default | Shell commands, desktop input, browser actions that change something, a memory tool or `description_set` once this run has read untrusted text, and a routine's proposal |
 | Shell | Anything that can run a program, which is shell commands and desktop input, and a routine's proposal |
 | Nothing | Only a routine's proposal |
 
@@ -481,7 +502,7 @@ Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool witho
 | `changesVm` | `write_file` | ask | run | run | run | reject |
 | `changesOutside` | `browser_click`, `browser_type`, `browser_press` | ask | ask | run | run | reject |
 | `controlsComputer` | `shell`, `desktop_click`, `desktop_type`, `desktop_key`, `desktop_scroll` | ask | ask | ask | run | reject |
-| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | ask | after a computer tool | run | run | reject |
+| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | ask | after untrusted text | run | run | reject |
 | `changesSchedule` | `schedule_propose` | ask | ask | ask | ask | reject |
 
 `controlsComputer` means that the call can make the VM do anything its user can. A click can press a launcher on the panel, and typing into a terminal runs a command, so desktop input asks at the Shell level, as `shell` does. The Shell level used to name the `shell` tool, and it now names this effect. A look is a read, but the desktop shows the owner's logged-in pages, so it has an effect of its own that a routine never gets. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A proposal asks at every level, as [How a routine fires](#how-a-routine-fires) explains.
@@ -503,7 +524,7 @@ Both paths use `parseDescription`, which allows up to 8,000 characters and uses 
 
 A description that a bot wrote reaches every later model call, so a page that persuades a bot can change it. These things limit that:
 
-- `description_set` has the effect `changesMemory`, so it gets a memory tool's answer at each level. At the default level it asks once a computer tool has a result in this run, and the card shows the exact text.
+- `description_set` has the effect `changesMemory`, so it gets a memory tool's answer at each level. At the default level it asks once this run has read untrusted text, and the card shows the exact text.
 - The prompt labels the text as data that informs and does not instruct, the same way as a note with `by: "you"`. The text goes in as one JSON string on one line, so a fake closing line stays inside the string, and it cannot override the fixed rules above it. It has no rank over the chat, and a bot's notes do not rank below it, because text that a bot writes must not gain authority.
 - Every change is a row in the chat. The result's output holds the previous text and the new text, because a description keeps no history of its own, so the owner can trace a change and undo it from there.
 - It reaches only that bot's model calls.
@@ -547,7 +568,7 @@ A note that breaks a rule is a tool result with outcome `error`, not a failed mu
 
 A page that a bot reads can tell it to save a note, and every later model call reads that note. The harm outlasts the run, so these limits sit in code:
 
-- At the default level, a memory tool asks once a computer tool has a result in this run. The card shows the exact text. `touchedComputer` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied`, `invalid`, or `rejected` does not count, because it brought nothing back.
+- At the default level, a memory tool asks once this run has read untrusted text, which is any tool's result but a memory or routine call's, so a computer tool's or a search's. The card shows the exact text. `readUntrustedText` reads this run's stored events, so a resumed run decides the same way. A result with outcome `denied`, `invalid`, or `rejected` does not count, because it brought nothing back.
 - A note reaches only the bot that saved it, so one page cannot reach the owner's other bots.
 - A bot cannot change or forget a note whose source is the owner, and it cannot write `users.about`. It can write its own description, which has its own limits.
 - Size and count are capped, so notes' text adds at most 20,000 characters to a model call.
@@ -601,7 +622,7 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 ### What decides a call
 
-`decideTool` in `apps/orchestrator/src/approvals.ts` answers `run`, `ask`, or `reject`. It reads only the run's capability, the bot's level, the tool, and `touchedComputer`, so a resumed run decides the same way. A read-only run runs a tool whose effect is `reads` and rejects every other tool, at every level. It never asks.
+`decideTool` in `apps/orchestrator/src/approvals.ts` answers `run`, `ask`, or `reject`. It reads only the run's capability, the bot's level, the tool, and `readUntrustedText`, so a resumed run decides the same way. A read-only run runs a tool whose effect is `reads` and rejects every other tool, at every level. It never asks.
 
 | Runs | Rejected |
 |---|---|
@@ -670,7 +691,7 @@ Read-only stops the bot's own tools from changing anything. It is not a sandbox,
 - A run can read any file that the `agent` user can read on its VM, including another bot's workspace. Those bots have one owner.
 - Opening a page sends a GET and runs the page's scripts. A careless site can change something on a GET.
 - A URL can carry out what the run holds, which is its description, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
-- Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `touchedComputer` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
+- Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `readUntrustedText` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
 - A process that an earlier chat run left in the background keeps running during a routine.
 
 ### How a read-only run browses
@@ -879,6 +900,8 @@ The transcript appends to the current draft with a functional state update, so e
 The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.
 
 The orchestrator signs a short-lived JWT with the subject `service:orchestrator` for its own Convex calls, and every service function checks that exact subject. User subjects always start with `dev:` or `tailscale:`, so a user token cannot pass that check.
+
+SearXNG's secret key is in `.env.local`, and `pnpm bootstrap` passes it to SearXNG's container. The orchestrator loads the same file, so the key is also in its environment, and it never uses it.
 
 `computerd` holds only its link token. A VM is untrusted, so the orchestrator validates every link message, closes the socket on an invalid one, accepts a result only for a call it sent on that socket, and caps output again.
 

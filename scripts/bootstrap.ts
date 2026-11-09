@@ -49,7 +49,7 @@ async function generatePrivateJwk(): Promise<PrivateJwk> {
   return parsePrivateJwk(JSON.stringify({ ...jwk, kid }));
 }
 
-type RootEnv = { privateJwk: PrivateJwk; issuer: string; computerToken: string; linkPort: string };
+type RootEnv = { privateJwk: PrivateJwk; issuer: string; computerToken: string; linkPort: string; searxngSecret: string };
 
 async function ensureRootEnv(): Promise<RootEnv> {
   const existing = readEnvFile(paths.rootEnv);
@@ -82,6 +82,10 @@ async function ensureRootEnv(): Promise<RootEnv> {
   if (existing.COMPUTER_TOKEN === undefined) {
     missing.COMPUTER_TOKEN = computerToken;
   }
+  const searxngSecret = existing.SEARXNG_SECRET ?? randomBytes(32).toString("base64url");
+  if (existing.SEARXNG_SECRET === undefined) {
+    missing.SEARXNG_SECRET = searxngSecret;
+  }
   const added = Object.keys(missing);
   if (added.length > 0) {
     addMissingEnvValues({ path: paths.rootEnv, missing });
@@ -95,6 +99,7 @@ async function ensureRootEnv(): Promise<RootEnv> {
     issuer: existing.JWT_ISSUER ?? DEFAULT_ISSUER,
     computerToken,
     linkPort: existing.LINK_PORT ?? DEFAULT_LINK_PORT,
+    searxngSecret,
   };
 }
 
@@ -107,27 +112,25 @@ function ensureWebEnv(): void {
   report({ step: "apps/web/.env.local", outcome: "added VITE_CONVEX_URL" });
 }
 
-function startContainers(): void {
-  requireOk({
-    step: "docker compose up",
+function controlCompose(args: { step: string; argv: string[]; searxngSecret: string }): string {
+  return requireOk({
+    step: args.step,
     result: runCommand({
       command: "docker",
-      argv: ["compose", "up", "--detach", "--wait"],
+      argv: ["compose", ...args.argv],
       cwd: paths.composeDir,
+      env: { SEARXNG_SECRET: args.searxngSecret },
     }),
   });
+}
+
+function startContainers(searxngSecret: string): void {
+  controlCompose({ step: "docker compose up", argv: ["up", "--detach", "--wait"], searxngSecret });
   report({ step: "containers", outcome: "healthy" });
 }
 
-function generateAdminKey(): string {
-  const stdout = requireOk({
-    step: "generate_admin_key.sh",
-    result: runCommand({
-      command: "docker",
-      argv: ["compose", "exec", "-T", "backend", "./generate_admin_key.sh"],
-      cwd: paths.composeDir,
-    }),
-  });
+function generateAdminKey(searxngSecret: string): string {
+  const stdout = controlCompose({ step: "generate_admin_key.sh", argv: ["exec", "-T", "backend", "./generate_admin_key.sh"], searxngSecret });
   const key = stdout.trim().split("\n").at(-1);
   if (key === undefined || !key.includes("|")) {
     throw new Error("generate_admin_key.sh did not print an admin key");
@@ -146,7 +149,7 @@ function adminKeyIsAccepted(): boolean {
   throw new Error(`convex env list failed:\n${result.output}`);
 }
 
-function ensureAdminKey(): void {
+function ensureAdminKey(searxngSecret: string): void {
   const existing = readEnvFile(paths.convexEnv);
   if (existing.CONVEX_SELF_HOSTED_ADMIN_KEY !== undefined && adminKeyIsAccepted()) {
     report({ step: "packages/convex/.env.local", outcome: "unchanged" });
@@ -155,7 +158,7 @@ function ensureAdminKey(): void {
   // A key the backend refuses belongs to a deleted volume, so replacing it rotates nothing.
   writeEnvFile({
     path: paths.convexEnv,
-    content: `CONVEX_SELF_HOSTED_URL='${CONVEX_URL}'\nCONVEX_SELF_HOSTED_ADMIN_KEY='${generateAdminKey()}'\n`,
+    content: `CONVEX_SELF_HOSTED_URL='${CONVEX_URL}'\nCONVEX_SELF_HOSTED_ADMIN_KEY='${generateAdminKey(searxngSecret)}'\n`,
   });
   report({ step: "packages/convex/.env.local", outcome: "wrote a new admin key" });
 }
@@ -213,10 +216,10 @@ function startComputer(args: { computerToken: string; linkPort: string }): void 
   report({ step: "computerd", outcome: "running behind netguard" });
 }
 
-const { privateJwk, issuer, computerToken, linkPort } = await ensureRootEnv();
+const { privateJwk, issuer, computerToken, linkPort, searxngSecret } = await ensureRootEnv();
 ensureWebEnv();
-startContainers();
-ensureAdminKey();
+startContainers(searxngSecret);
+ensureAdminKey(searxngSecret);
 ensureConvexEnv({ privateJwk, issuer });
 deployFunctions();
 // In Tailscale mode, users' computers are VMs, not this machine's containers.
