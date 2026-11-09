@@ -1,0 +1,8 @@
+# The secret key comes from SEARXNG_SECRET, which pnpm bootstrap keeps in .env.local.
+use_default_settings: true
+server:
+  # The one client is the orchestrator on loopback, so nobody needs a rate limit.
+  limiter: false
+search:
+  # web_search reads json. html is for a person who opens the port in a browser.
+  formats: [html, json]

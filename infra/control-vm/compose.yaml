@@ -36,5 +36,20 @@ services:
       backend:
         condition: service_healthy
 
+  # web_search reaches it from the orchestrator, so it listens only on this machine's loopback.
+  searxng:
+    image: searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8789:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?Run pnpm bootstrap}
+    healthcheck:
+      test: wget -q -O /dev/null http://127.0.0.1:8080/healthz
+      interval: 5s
+      start_period: 10s
+
 volumes:
   data:

@@ -23,7 +23,7 @@ Use **Attach files** in chat, drop files onto the composer, or paste an image. A
 
 Use the microphone button to dictate a message. The composer shows a live waveform and a timer. Press **Done** to finish recording and transcribe into the current draft. You can edit the text before pressing **Send**. **Cancel** discards voice input, and **Try again** retries a failed transcription without recording again. Recording stops after two minutes or when you leave the chat. Voice input needs microphone permission, HTTPS or localhost, a supported browser, and your Mistral key. Bots does not save the recording.
 
-`pnpm bootstrap` generates the signing key, the master key, and the computer token, starts the containers, and deploys the Convex functions. It also builds and starts `computerd` behind its `netguard` sidecar, which limits what a bot can reach. It is safe to rerun, and it never replaces a key that still works.
+`pnpm bootstrap` generates the signing key, the master key, the computer token, and SearXNG's secret key, starts the containers, and deploys the Convex functions. It also builds and starts `computerd` behind its `netguard` sidecar, which limits what a bot can reach. It is safe to rerun, and it never replaces a key that still works.
 
 Rerun `pnpm bootstrap` after Docker or the Mac restarts, or after `netguard` restarts. Until then `computerd` stays down or has no network, so a bot's tool calls end as `unavailable`.
 
@@ -85,7 +85,7 @@ CI runs `pnpm typecheck`, `pnpm test`, and `pnpm build` on every pull request an
 
 ```sh
 docker compose --env-file .env.local --file apps/computerd/compose.yaml down
-docker compose --file infra/control-vm/compose.yaml down
+docker compose --env-file .env.local --file infra/control-vm/compose.yaml down
 ```
 
 Add `--volumes` to delete the workspace and journal, or the Convex data, as well.
