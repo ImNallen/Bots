@@ -12,6 +12,7 @@ import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type Pr
 import { errorMessage } from "./session.tsx";
 
 const APPROVAL_LEVELS = [
+  ["automatic", "Automatic"],
   ["outside", "Shell, desktop, and page changes"],
   ["everything", "Everything"],
   ["shell", "Shell and desktop only"],
@@ -239,8 +240,8 @@ export function InfoPanel(props: {
         </section>
         <section className="info-card">
           <h3>Approvals</h3>
-          <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "outside"} />
-          <p className="panel-note">Choose when your bot asks before acting.</p>
+          <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "automatic"} />
+          <p className="panel-note">Choose when your bot asks before acting. Automatic, the default, runs routine steps and asks only before actions that send, delete, or run something unknown.</p>
         </section>
         <DeleteBot botId={bot._id} name={bot.name} />
       </>}

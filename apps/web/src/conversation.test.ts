@@ -48,11 +48,12 @@ function only<K extends DisplayItem["kind"]>(items: DisplayItem[], kind: K): Ext
 }
 
 const kinds = (items: DisplayItem[]) => items.map((item) => item.kind);
-const approval = (toolCallId = "c1", subject: string | null = null): PendingApproval => ({
+const approval = (toolCallId = "c1", subject: string | null = null, reason: string | null = null): PendingApproval => ({
   _id: id<"approvals">("a1"),
   runId: id<"runs">("run1"),
   toolCallId,
   subject,
+  reason,
 });
 
 describe("conversationItems", () => {
@@ -239,6 +240,7 @@ describe("conversationItems", () => {
         title: "Click this?",
         arguments: [{ label: null, value: 'Click entry "Address and search bar" in Chromium' }],
         picture: true,
+        reason: null,
       });
       expect(askOf("desktop_type", { mark: 4, text: "rm -rf ~\nexit", submit: true }, 'Type into entry "x" in Chromium, then press Enter')).toMatchObject({
         title: "Type this?",
@@ -249,6 +251,11 @@ describe("conversationItems", () => {
         picture: true,
       });
       expect(only(itemsOf([pendingRun()], [approval()]), "approval").picture).toBe(false);
+    });
+
+    it("shows the Automatic rules' reason as its own field", () => {
+      const item = only(itemsOf([pendingRun(shell("rm -rf build"))], [approval("c1", null, "This command isn't a known read-only one, so it needs your approval.")]), "approval");
+      expect(item.kind === "approval" && item.reason).toBe("This command isn't a known read-only one, so it needs your approval.");
     });
 
     it("asks about a save with the exact text, and about a forget with its id", () => {

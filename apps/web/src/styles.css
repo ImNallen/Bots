@@ -699,6 +699,11 @@ button.tool:hover {
   font-weight: 500;
 }
 
+.ask-reason {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .ask-argument {
   display: flex;
   flex-direction: column;
