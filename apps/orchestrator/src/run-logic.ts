@@ -3,7 +3,7 @@ import {
   TOOL_CALL_ID,
   WORKSPACE_ROOT,
   isBrowserInvocation,
-  isComputerTool,
+  returnsUntrustedText,
   toolDefinitions,
   toolEffect,
   type Browsing,
@@ -73,9 +73,9 @@ export function nextAction(events: readonly RunEventBody[], capability: RunCapab
 
 const BROUGHT_NOTHING_BACK: ReadonlySet<ToolResultBody["outcome"]> = new Set(["denied", "invalid", "rejected"]);
 
-export function touchedComputer(events: readonly RunEventBody[]): boolean {
+export function readUntrustedText(events: readonly RunEventBody[]): boolean {
   return events.some(
-    (event) => event.kind === "toolResult" && isComputerTool(event.name) && !BROUGHT_NOTHING_BACK.has(event.outcome),
+    (event) => event.kind === "toolResult" && returnsUntrustedText(event.name) && !BROUGHT_NOTHING_BACK.has(event.outcome),
   );
 }
 

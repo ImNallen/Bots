@@ -34,7 +34,7 @@ import {
   browsingToEnd,
   modelRequest,
   nextAction,
-  touchedComputer,
+  readUntrustedText,
   withUniqueToolCallIds,
   type PromptRun,
   type ToolCall,
@@ -284,9 +284,9 @@ async function runTool(args: {
   claim: Claim;
   lease: Lease;
   call: ToolCall;
-  touched: boolean;
+  readUntrusted: boolean;
 }): Promise<AppendBody> {
-  const { deps, runId, claim, lease, call, touched } = args;
+  const { deps, runId, claim, lease, call, readUntrusted } = args;
   const slot = deps.slotFor(runId);
   const base = { kind: "toolResult" as const, toolCallId: call.id, name: call.name };
   const parsed = parseToolCall(call);
@@ -296,7 +296,7 @@ async function runTool(args: {
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   const { invocation } = parsed;
-  const decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, touchedComputer: touched });
+  const decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
     return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
@@ -407,7 +407,7 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
         await finish({ kind: "failed", reason: STEP_LIMIT_REASON });
         return;
       case "runTool":
-        await append(await runTool({ deps, runId, claim, lease, call: action.call, touched: touchedComputer(runEvents) }));
+        await append(await runTool({ deps, runId, claim, lease, call: action.call, readUntrusted: readUntrustedText(runEvents) }));
         break;
       case "rejectCall":
         log({ level: "info", event: "tool-rejected", runId, toolCallId: action.call.id });

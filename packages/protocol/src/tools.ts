@@ -310,10 +310,16 @@ export function isScheduleInvocation(tool: ModelInvocation): tool is ScheduleInv
 
 export const COMPUTER_TOOL_NAMES: readonly ToolInvocation["name"][] = toolInvocation.options.map((option) => option.shape.name.value);
 
-const COMPUTER_TOOLS: ReadonlySet<string> = new Set(COMPUTER_TOOL_NAMES);
+// A memory or routine call's result is what Convex wrote when it stored the call. Every other result carries text from a command, a
+// file, a page, a screen, or a search, which anyone on the internet could have written. A new tool counts unless it is one of those.
+const UNTRUSTED_RESULTS: ReadonlySet<string> = new Set(
+  Object.entries(TOOLS)
+    .filter(([, tool]) => tool.effect !== "changesMemory" && tool.effect !== "changesSchedule")
+    .map(([name]) => name),
+);
 
-export function isComputerTool(name: string): boolean {
-  return COMPUTER_TOOLS.has(name);
+export function returnsUntrustedText(name: string): boolean {
+  return UNTRUSTED_RESULTS.has(name);
 }
 
 export const toolDefinitions = Object.entries(TOOLS).map(([name, tool]) => {

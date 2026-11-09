@@ -7,12 +7,12 @@ export type ToolDecision = "run" | "ask" | "reject";
 
 const POLL_MS = 2000;
 
-type Ask = "ask" | "run" | "askAfterComputer";
+type Ask = "ask" | "run" | "askAfterUntrustedText";
 
 // One answer for each level and effect, so a new effect or level fails the typecheck until it has a row here.
 const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
   everything: { reads: "ask", readsScreen: "ask", changesVm: "ask", changesOutside: "ask", controlsComputer: "ask", changesMemory: "ask", changesSchedule: "ask" },
-  outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterComputer", changesSchedule: "ask" },
+  outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterUntrustedText", changesSchedule: "ask" },
   shell: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
   nothing: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
 };
@@ -27,7 +27,7 @@ export function decideTool(args: {
   capability: RunCapability;
   level: ApprovalLevel;
   toolName: ToolName;
-  touchedComputer: boolean;
+  readUntrustedText: boolean;
 }): ToolDecision {
   switch (args.capability) {
     case "readOnly":
@@ -35,7 +35,7 @@ export function decideTool(args: {
       return toolEffect(args.toolName) === "reads" ? "run" : "reject";
     case "full": {
       const ask = ASKS[args.level][toolEffect(args.toolName)];
-      return ask === "ask" || (ask === "askAfterComputer" && args.touchedComputer) ? "ask" : "run";
+      return ask === "ask" || (ask === "askAfterUntrustedText" && args.readUntrustedText) ? "ask" : "run";
     }
   }
 }

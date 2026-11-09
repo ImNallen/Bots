@@ -12,7 +12,7 @@ import {
   nextAction,
   systemPrompt,
   toMistralMessages,
-  touchedComputer,
+  readUntrustedText,
   withUniqueToolCallIds,
   type PromptNote,
   type PromptReport,
@@ -802,7 +802,7 @@ describe("how a call browses", () => {
   });
 });
 
-describe("touchedComputer", () => {
+describe("readUntrustedText", () => {
   const body = (name: string, outcome: Extract<RunEventBody, { kind: "toolResult" }>["outcome"]): RunEventBody => ({
     kind: "toolResult",
     toolCallId: "a",
@@ -813,37 +813,37 @@ describe("touchedComputer", () => {
   });
 
   it("is false for a run with no tool result", () => {
-    expect(touchedComputer([user, turn([call("a")])])).toBe(false);
+    expect(readUntrustedText([user, turn([call("a")])])).toBe(false);
   });
 
   it.each(["ok", "error", "timeout", "interrupted", "unavailable", "cancelled"] as const)(
     "is true once a computer tool has a result with outcome %s, because it may have brought something back",
     (outcome) => {
-      expect(touchedComputer([user, turn([call("a")]), body("read_file", outcome)])).toBe(true);
+      expect(readUntrustedText([user, turn([call("a")]), body("read_file", outcome)])).toBe(true);
     },
   );
 
   it.each(["denied", "invalid", "rejected"] as const)("is false after a computer tool's result with outcome %s, because it brought nothing back", (outcome) => {
-    expect(touchedComputer([user, turn([call("a")]), body("shell", outcome)])).toBe(false);
+    expect(readUntrustedText([user, turn([call("a")]), body("shell", outcome)])).toBe(false);
   });
 
   it("is true after a web page was read, because its text can tell the bot what to save", () => {
-    expect(touchedComputer([user, turn([call("a")]), body("web_fetch", "ok")])).toBe(true);
+    expect(readUntrustedText([user, turn([call("a")]), body("web_fetch", "ok")])).toBe(true);
   });
 
   it("does not count a memory tool's result", () => {
-    expect(touchedComputer([user, body("memory_save", "ok"), body("memory_forget", "error")])).toBe(false);
+    expect(readUntrustedText([user, body("memory_save", "ok"), body("memory_forget", "error")])).toBe(false);
   });
 
   it("does not count a name that is no tool", () => {
-    expect(touchedComputer([user, body("browse", "error")])).toBe(false);
+    expect(readUntrustedText([user, body("browse", "error")])).toBe(false);
   });
 
   it("stays true after later results, so a resumed run that reads the same events decides the same way", () => {
     const events = [user, body("memory_save", "ok"), body("read_file", "ok"), body("memory_save", "denied"), body("shell", "denied")];
-    expect(touchedComputer(events)).toBe(true);
-    expect(touchedComputer(events.slice(0, 2))).toBe(false);
-    expect(touchedComputer(structuredClone(events))).toBe(true);
+    expect(readUntrustedText(events)).toBe(true);
+    expect(readUntrustedText(events.slice(0, 2))).toBe(false);
+    expect(readUntrustedText(structuredClone(events))).toBe(true);
   });
 });
 

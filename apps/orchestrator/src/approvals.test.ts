@@ -32,51 +32,51 @@ const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_s
 const READS: ToolName[] = ["read_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot"];
 
 describe("decideTool for a read-only run", () => {
-  it.each(LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((touchedComputer) => ({ level, toolName, touchedComputer })))))(
-    "at $level, $toolName with touchedComputer $touchedComputer never asks, and runs only what reads",
+  it.each(LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((readUntrustedText) => ({ level, toolName, readUntrustedText })))))(
+    "at $level, $toolName with readUntrustedText $readUntrustedText never asks, and runs only what reads",
     (args) => {
       expect(decideTool({ capability: "readOnly", ...args })).toBe(READS.includes(args.toolName) ? "run" : "reject");
     },
   );
 
   it("forbids exactly the tools that change something, and every desktop tool, because the desktop shows the owner's logins", () => {
-    const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, touchedComputer: false }) === "reject");
+    const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, readUntrustedText: false }) === "reject");
     expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 });
 
 describe("decideTool for a full run", () => {
-  const needsApproval = (args: { level: ApprovalLevel; toolName: ToolName; touchedComputer: boolean }) => {
+  const needsApproval = (args: { level: ApprovalLevel; toolName: ToolName; readUntrustedText: boolean }) => {
     const decision = decideTool({ capability: "full", ...args });
     expect(decision).not.toBe("reject");
     return decision === "ask";
   };
-  const asked = (level: ApprovalLevel, touchedComputer = false) =>
-    TOOLS.filter((toolName) => needsApproval({ level, toolName, touchedComputer }));
+  const asked = (level: ApprovalLevel, readUntrustedText = false) =>
+    TOOLS.filter((toolName) => needsApproval({ level, toolName, readUntrustedText }));
 
-  it.each(TOOLS)("gives the expected answer at every level for %s, before any computer tool", (toolName) => {
-    const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, touchedComputer: false })]));
+  it.each(TOOLS)("gives the expected answer at every level for %s, before the run reads untrusted text", (toolName) => {
+    const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, readUntrustedText: false })]));
     expect(answers).toEqual(ANSWERS[toolName]);
   });
 
   it.each(TOOLS.filter((toolName) => !MEMORY_TOOLS.includes(toolName)))(
-    "gives %s the same answers after a computer tool",
+    "gives %s the same answers after the run reads untrusted text",
     (toolName) => {
-      const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, touchedComputer: true })]));
+      const answers = Object.fromEntries(LEVELS.map((level) => [level, needsApproval({ level, toolName, readUntrustedText: true })]));
       expect(answers).toEqual(ANSWERS[toolName]);
     },
   );
 
-  it.each(MEMORY_TOOLS)("asks for %s at outside only after a computer tool", (toolName) => {
-    expect(needsApproval({ level: "outside", toolName, touchedComputer: false })).toBe(false);
-    expect(needsApproval({ level: "outside", toolName, touchedComputer: true })).toBe(true);
+  it.each(MEMORY_TOOLS)("asks for %s at outside only after the run reads untrusted text", (toolName) => {
+    expect(needsApproval({ level: "outside", toolName, readUntrustedText: false })).toBe(false);
+    expect(needsApproval({ level: "outside", toolName, readUntrustedText: true })).toBe(true);
   });
 
   it.each(MEMORY_TOOLS)("gives %s the same answer at the other levels, whatever the run has touched", (toolName) => {
-    for (const touchedComputer of [false, true]) {
-      expect(needsApproval({ level: "everything", toolName, touchedComputer })).toBe(true);
-      expect(needsApproval({ level: "shell", toolName, touchedComputer })).toBe(false);
-      expect(needsApproval({ level: "nothing", toolName, touchedComputer })).toBe(false);
+    for (const readUntrustedText of [false, true]) {
+      expect(needsApproval({ level: "everything", toolName, readUntrustedText })).toBe(true);
+      expect(needsApproval({ level: "shell", toolName, readUntrustedText })).toBe(false);
+      expect(needsApproval({ level: "nothing", toolName, readUntrustedText })).toBe(false);
     }
   });
 
@@ -90,7 +90,7 @@ describe("decideTool for a full run", () => {
     expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "schedule_propose"]);
   });
 
-  it("also asks for the memory tools at outside after a computer tool", () => {
+  it("also asks for the memory tools at outside after the run reads untrusted text", () => {
     expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", "schedule_propose"]);
   });
 
