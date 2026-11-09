@@ -187,7 +187,14 @@ async function prepareCall(invocation: ModelInvocation, toolCallId: string, scre
     }
   }
   if (isScheduleInvocation(invocation)) {
-    return { kind: "stored", body: { kind: "scheduleCreate", toolCallId, ...invocation.args } };
+    switch (invocation.name) {
+      case "schedule_create":
+        return { kind: "stored", body: { kind: "scheduleCreate", toolCallId, ...invocation.args } };
+      case "schedule_update":
+        return { kind: "stored", body: { kind: "scheduleUpdate", toolCallId, ...invocation.args } };
+      case "schedule_delete":
+        return { kind: "stored", body: { kind: "scheduleDelete", toolCallId, ...invocation.args } };
+    }
   }
   if (isSearchInvocation(invocation)) {
     return { kind: "search", query: invocation.args.query };

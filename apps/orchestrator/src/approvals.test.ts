@@ -27,10 +27,14 @@ const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
   memory_save: { everything: true, outside: false, shell: false, nothing: false },
   memory_forget: { everything: true, outside: false, shell: false, nothing: false },
   description_set: { everything: true, outside: false, shell: false, nothing: false },
-  schedule_propose: { everything: true, outside: true, shell: true, nothing: true },
+  schedule_create: { everything: true, outside: false, shell: false, nothing: false },
+  schedule_update: { everything: true, outside: false, shell: false, nothing: false },
+  schedule_delete: { everything: true, outside: false, shell: false, nothing: false },
 };
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
-const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set"];
+const SCHEDULE_TOOLS: ToolName[] = ["schedule_create", "schedule_update", "schedule_delete"];
+// A memory or routine write asks once the run has read text that anyone could have written.
+const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS];
 
 const READS: ToolName[] = ["read_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot"];
 
@@ -44,7 +48,7 @@ describe("decideTool for a read-only run", () => {
 
   it("forbids exactly the tools that change something, and every desktop tool, because the desktop shows the owner's logins", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, readUntrustedText: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "schedule_propose"]);
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS]);
   });
 });
 
@@ -75,7 +79,7 @@ describe("decideTool for a full run", () => {
     expect(needsApproval({ level: "outside", toolName, readUntrustedText: true })).toBe(true);
   });
 
-  it.each(MEMORY_TOOLS)("gives %s the same answer at the other levels, whatever the run has touched", (toolName) => {
+  it.each(MEMORY_TOOLS.filter((toolName) => !SCHEDULE_TOOLS.includes(toolName)))("gives %s the same answer at the other levels, whatever the run has touched", (toolName) => {
     for (const readUntrustedText of [false, true]) {
       expect(needsApproval({ level: "everything", toolName, readUntrustedText })).toBe(true);
       expect(needsApproval({ level: "shell", toolName, readUntrustedText })).toBe(false);
@@ -101,21 +105,21 @@ describe("decideTool for a full run", () => {
   const DESKTOP_INPUT: ToolName[] = ["desktop_click", "desktop_type", "desktop_key", "desktop_scroll"];
 
   it("asks for shell, desktop input, and browser actions that change something at outside", () => {
-    expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "schedule_propose"]);
+    expect(asked("outside")).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT]);
   });
 
   it("also asks for the memory tools at outside after the run reads untrusted text", () => {
-    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", "schedule_propose"]);
+    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS]);
   });
 
-  it("asks for anything that can run a program, and a routine, at shell, because a terminal is one click away", () => {
-    expect(asked("shell")).toEqual(["shell", ...DESKTOP_INPUT, "schedule_propose"]);
-    expect(asked("shell", true)).toEqual(["shell", ...DESKTOP_INPUT, "schedule_propose"]);
+  it("asks for anything that can run a program at shell, because a terminal is one click away, and for a routine after untrusted text", () => {
+    expect(asked("shell")).toEqual(["shell", ...DESKTOP_INPUT]);
+    expect(asked("shell", true)).toEqual(["shell", ...DESKTOP_INPUT, ...SCHEDULE_TOOLS]);
   });
 
-  it("asks only for a routine at nothing", () => {
-    expect(asked("nothing")).toEqual(["schedule_propose"]);
-    expect(asked("nothing", true)).toEqual(["schedule_propose"]);
+  it("asks for nothing at nothing until the run reads untrusted text, and then only for a routine, because a routine outlives the run", () => {
+    expect(asked("nothing")).toEqual([]);
+    expect(asked("nothing", true)).toEqual(SCHEDULE_TOOLS);
   });
 });
 
@@ -142,8 +146,9 @@ describe("decideTool at the automatic level", () => {
     expect(at(toolName, true)).toBe("ask");
   });
 
-  it("asks for a routine", () => {
-    expect(at("schedule_propose")).toBe("ask");
+  it.each(SCHEDULE_TOOLS)("runs %s until the run reads untrusted text, then asks", (toolName) => {
+    expect(at(toolName, false)).toBe("run");
+    expect(at(toolName, true)).toBe("ask");
   });
 });
 
