@@ -13,7 +13,7 @@ Control VM, the only machine on the tailnet
 	^
 	|  computerd connects outbound over an isolated network
 User VMs, one per user
-	computerd          shell, files, browser, desktop, screens
+	computerd          shell, files, web, browser, desktop, screens
 	/workspace/<botId>
 ```
 
@@ -404,6 +404,63 @@ On VM 950 on 2026-11-08, with Debian 13, Xvfb at 1280x800, and the helper starte
 | Typing `héllo wörld ✓ 日本` into a field | Reached the page as typed |
 | A kill of the session bus | Chromium and the panel came back in the tree |
 
+## Reading the web without the screen
+
+A bot searches and reads the web with two tools that never touch its desktop. `web_search` returns a numbered list of results, and `web_fetch` returns one page as text. Both have the effect `reads`, so they run with no card at Outside, and a routine gets them too. Both kinds of run read the same two lines of prompt. They say to search with `web_search` and read with `web_fetch`, and to open a page with `browser_navigate` when `web_fetch` gets almost no text or the page asks for JavaScript. A chat run also reads that the `browser_*` tools are for a page that needs JavaScript, a login, or a form, or that the user asks to see, and that the `desktop_*` tools are for what the browser tools cannot reach. Nothing in code sends a call to the quiet tool. The model chooses from those lines and the descriptions.
+
+### Where a fetch runs
+
+`apps/computerd/src/web.ts` fetches inside the `computerd` process, with `node:http` and `node:https`. It never goes through `sudo`, never starts a desktop, and never touches Chromium, so it also works in Docker on a Mac, where the browser tools cannot run. A call holds the bot's desktop like every other tool, and holding never starts one. It sends no cookies, no `Authorization`, and no `Referer`, and it keeps no cache. It runs on the VM rather than the orchestrator, so it stays behind the VM's network rules, and its result counts toward `touchedComputer`, so a later memory save asks at Outside.
+
+A call follows at most 5 redirects, reads at most 4 MiB of a page, and gives up after 30 seconds, which is under the link's 60 seconds for a tool that is not `shell`. It speaks HTTP/1.1 only.
+
+### Which addresses it opens
+
+The network rules refuse private and LAN addresses for the whole computer. They leave loopback open, and they allow the link at `10.78.0.2:8788`. Chromium's CDP on `127.0.0.1`, at port 9300 plus the slot, and the VNC streams answer a plain GET there. A tool that needs no card, and that a page can point anywhere, must not reach them, so the web tools check every address themselves:
+
+- `apps/computerd/src/addresses.ts` accepts only globally routable unicast. For IPv4 it refuses the IANA special-purpose ranges. For IPv6 it allows only `2000::/3`, less Teredo, documentation, and 6to4, so a v4-mapped, NAT64, or 6to4 address is refused rather than unwrapped.
+- A name resolves once. If any of its answers is not public, the whole name is refused, so `localtest.me`, which resolves to loopback, is refused.
+- `publicAddressFor` makes the only `PublicAddress`, and `Network.open` takes nothing else, so a connection to an address that skipped the check does not compile. `open` connects to exactly that address, with the name in the `Host` header and in TLS's server name. The certificate is therefore checked against the name, and a name that changes its answer between two lookups gains nothing.
+- Every redirect is checked the same way before it connects. Only `http` and `https` with no user name or password are followed.
+- `addresses.test.ts` reads `infra/proxmox/bots-guard.nft` and `apps/computerd/netguard/netguard.sh`, and it fails if either refuses a range that the guard accepts. So the three lists cannot drift apart.
+
+This closes the free path only. A bot with root can rewrite the VM's NAT rules so that a public address lands on loopback, but that takes an approved shell call, which can reach CDP directly anyway. `browser_navigate` has no such check, so it can still open loopback, as before.
+
+### What a page reads as
+
+`apps/computerd/src/web-page.ts` turns the bytes into text. htmlparser2 12.0.0 does the tokenizing and the entities, and the rules are ours:
+
+- The text is Markdown. A heading starts with `#`, a list item with `- `, a table row is one line with ` | ` between its cells, and preformatted text keeps its lines.
+- A link reads `[text][n]`, and each part lists `[n]: address` for exactly the links that it cites. A number holds for the whole page, so a link has the same number in every part.
+- Scripts, styles, form controls, `nav`, and anything hidden are left out. A link that is not `http` or `https` keeps its text and gets no number. A link to a place on the same page is left out.
+- The charset comes from a byte order mark, then the header, then a `meta` tag, and UTF-8 stands in for a label that Node does not know.
+- Plain text, JSON, and XML pass through as they are. A PDF, a picture, or any other type answers `error` with its type and size.
+- A status of 400 or more answers `error` with the page's text, because a block page or a 404 page says why.
+
+Every tool result replays on every later model call, so a part is at most 16 KiB of text and link lines. A long page ends each part with the start of the next one, and the model asks again with `start`. Nothing is cached, so each part fetches the page again, and a page that changed in between can shift its parts. On 2026-11-09 the Wikipedia article on SQLite read in 4 parts of 16,524, 16,495, 16,488, and 5,916 bytes.
+
+### How it searches
+
+`web_search` fetches `https://www.bing.com/search?q=<query>&mkt=en-US` through the same checked path, and `apps/computerd/src/web-search.ts` reads each result as a title, an address, and a snippet. A title links through Bing's `/ck/a`, which answers with a JavaScript redirect that a plain fetch cannot follow. So the address comes from the link's `u` parameter, which is `a1` and then the address in base64url, or else from the result's `cite` when that is a whole address. When no result can be read, the tool answers `error` and names the results page, so the bot can open it with `browser_navigate`. That covers a block, a change to Bing's markup, and a query with no results, with an honest message.
+
+These were measured on 2026-11-09, from the home connection, with Node's TLS on the Mac and in the `computerd` container:
+
+| Results page | Answer |
+|---|---|
+| Brave | HTTP 429 to Node's https, Node's http2, Node's fetch, and Debian's curl |
+| DuckDuckGo, html and lite | Results for the first few requests, by GET or POST, and then a 202 block page |
+| Google | No results without JavaScript |
+| Startpage, Mojeek, Qwant, Yandex, Ecosia | No results, or 403 |
+| Bing, with no market | Results for the first word of the query alone. "sqlite wal mode" got SQLite's home page, and "solar eclipse 2027 path" got a Swedish shop named Solar |
+| Bing, with `mkt=en-US` | 32 of 35 results were about the query, across five queries |
+| Bing, after a few hundred requests in half an hour | Unrelated results for some queries, and then "There are no results" for every query, for 16 to 20 minutes |
+
+So Bing is the one results page that works, and it works only while it is not asked too often. A bot that searches a few times in a chat, or a routine every hour, asks far less often than that measurement did.
+
+### A `computerd` from before the web tools
+
+The link never sends a call for a tool that the connected `computerd` did not name in its `hello`, as [A `computerd` from before the desktop tools](#a-computerd-from-before-the-desktop-tools) explains. So until a VM updates, a call to `web_search` or `web_fetch` answers `error` and says that the computer runs an older `computerd`, and the bot can still open the page on its screen.
+
 ## How approvals work
 
 The orchestrator decides on every tool call before it sends the call to a computer. A VM is untrusted, and it never takes part in this decision. Each bot has one level:
@@ -419,7 +476,7 @@ Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool witho
 
 | Effect | Tools | Everything | Outside | Shell | Nothing | Read-only run |
 |---|---|---|---|---|---|---|
-| `reads` | `read_file`, `browser_navigate`, `browser_snapshot` | ask | run | run | run | run |
+| `reads` | `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot` | ask | run | run | run | run |
 | `readsScreen` | `desktop_look` | ask | run | run | run | reject |
 | `changesVm` | `write_file` | ask | run | run | run | reject |
 | `changesOutside` | `browser_click`, `browser_type`, `browser_press` | ask | ask | run | run | reject |
@@ -548,7 +605,7 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_propose` |
+| `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_propose` |
 
 A routine browses logged out, and the desktop shows the owner's logged-in Chromium, so a look at it would hand a routine those pages. `desktop_look` therefore has the effect `readsScreen`, which is not `reads`, and a read-only run rejects it before it loads any screen.
 
@@ -620,7 +677,7 @@ Read-only stops the bot's own tools from changing anything. It is not a sandbox,
 
 A routine may open any site, and nobody is watching it, so a page it reads must not reach the owner's logins. The owner decided on 2026-11-07 that a routine browses logged out. So a read-only run's browser calls use a Chromium browser context of their own, which starts with no cookies and no storage.
 
-`browsingForCall` in `apps/orchestrator/src/run-logic.ts` is the one place that decides this, and `Link.call` requires its answer. A read-only run's `browser_*` call carries `browsing: { kind: "loggedOut", key: runId }`. Its `read_file` and every chat call carry nothing, so their messages stay byte for byte what they were.
+`browsingForCall` in `apps/orchestrator/src/run-logic.ts` is the one place that decides this, and `Link.call` requires its answer. A read-only run's `browser_*` call carries `browsing: { kind: "loggedOut", key: runId }`. Its other tools and every chat call carry nothing, so their messages stay byte for byte what they were.
 
 In `computerd`, a `Connection` holds the bot's own `ContextPages` and at most one `LoggedOutContext` record. `ContextPages` holds a context's id, its pages, and the exact parameters for a new page there. Every page lookup and every new page goes through it, including the page that replaces a frozen one. So a logged-out call has no code path to a page of the bot's own. If its context cannot be made or its downloads cannot be denied, the tool fails.
 
