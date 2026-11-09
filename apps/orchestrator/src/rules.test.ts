@@ -143,6 +143,7 @@ describe("holes found in review stay closed", () => {
   it("asks on quoting that bash decodes, such as $'-delete'", () => {
     expect(runsShell("find . $'-delete'")).toBe(false);
     expect(runsShell('find . $"-delete"')).toBe(false);
+    expect(runsShell("find . $'-exec' sh -c 'id' sh '{}' +")).toBe(false);
   });
 
   it("catches an abbreviated long option that writes or runs a program", () => {
