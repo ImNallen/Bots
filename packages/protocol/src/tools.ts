@@ -213,7 +213,7 @@ const TOOLS = {
   },
   browser_navigate: {
     description:
-      "Open a URL on this bot's screen, in a browser that all of this user's bots share logins with. Returns a snapshot of the page. The user can watch this screen and take it over. If a page needs a login, ask the user to take over the screen and log in. Never ask for a password in the chat.",
+      "Open this bot's screen and load a URL in its browser, which all of this user's bots share logins with. This starts the screen if it is off, and the user can watch it and take it over. Returns a snapshot of the page. If a page needs a login, ask the user to take over the screen and log in. Never ask for a password in the chat.",
     args: browserNavigateArgs,
     effect: "reads",
   },
