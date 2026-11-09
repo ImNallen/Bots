@@ -13,6 +13,7 @@ export type Config = {
   convexUrl: string;
   mistral: { baseUrl: string; model: string };
   transcriptionModel: string;
+  searxngUrl: string;
   webDistDir: string;
   proxmox: ProxmoxConfig | null;
 };
@@ -25,6 +26,8 @@ const DEFAULT_LINK_PORT = 8788;
 const DEFAULT_COMPUTER_WAIT_SECONDS = 5 * 60;
 const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai";
 const DEFAULT_MISTRAL_MODEL = "mistral-large-4";
+// The port that infra/control-vm/compose.yaml publishes SearXNG on.
+const DEFAULT_SEARXNG_URL = "http://127.0.0.1:8789";
 const MASTER_KEY_BYTES = 32;
 const DEFAULT_DEV_LOGIN = "dev@localhost";
 const WEB_DIST_DIR = fileURLToPath(new URL("../../web/dist", import.meta.url));
@@ -167,6 +170,7 @@ export function parseConfig(env: Env): Config {
       model: env.MISTRAL_MODEL || DEFAULT_MISTRAL_MODEL,
     },
     transcriptionModel: env.MISTRAL_TRANSCRIPTION_MODEL || "voxtral-mini-transcribe-3-0",
+    searxngUrl: parseUrl({ value: env.SEARXNG_URL || DEFAULT_SEARXNG_URL, name: "SEARXNG_URL" }),
     webDistDir: WEB_DIST_DIR,
     proxmox: parseProxmox(env),
   };

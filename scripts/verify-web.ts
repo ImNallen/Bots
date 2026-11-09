@@ -23,11 +23,6 @@ function report(ok: boolean, name: string, detail = ""): void {
   console.log(`${ok ? "ok  " : "FAIL"}  ${name}${detail === "" ? "" : `: ${detail.slice(0, 300).replaceAll("\n", " | ")}`}`);
 }
 
-const SEARCHES: readonly [string, RegExp][] = [
-  ["sqlite wal mode", /\bwal\b|write-ahead/i],
-  ["solar eclipse 2027 path", /eclipse/i],
-  ["rust tokio select macro", /tokio|select!/i],
-];
 const ARTICLE = "https://en.wikipedia.org/wiki/SQLite";
 const REFUSED = ["http://127.0.0.1:9301/json/version", "http://10.78.0.2:8788/", "http://localtest.me:9301/json/version"];
 
@@ -36,13 +31,6 @@ async function networkChecks(): Promise<void> {
   const { createWeb, nodeNetwork } = (await import(module)) as typeof import("../apps/computerd/src/web.ts");
   const web = createWeb({ network: nodeNetwork });
   const run = (tool: WebInvocation): Promise<ToolResult> => web.execute({ tool, signal: new AbortController().signal });
-
-  for (const [query, about] of SEARCHES) {
-    const result = await run({ name: "web_search", args: { query } });
-    const results = result.output.split("\n\n").slice(1);
-    const relevant = results.filter((entry) => about.test(entry)).length;
-    report(result.outcome === "ok" && results.length >= 5 && relevant >= 3, `web_search finds at least 5 results, most of them about "${query}"`, `${results.length} results, ${relevant} about it: ${result.output.split("\n")[2] ?? result.output}`);
-  }
 
   const parts: ToolResult[] = [];
   let start: number | null = 0;

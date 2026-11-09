@@ -4,6 +4,7 @@ import {
   isDesktopInputRequest,
   isMemoryInvocation,
   isScheduleInvocation,
+  isSearchInvocation,
   makeCallId,
   parseToolCall,
   screenView,
@@ -39,6 +40,7 @@ import {
   type PromptRun,
   type ToolCall,
 } from "./run-logic.ts";
+import type { Search } from "./search.ts";
 import { decryptApiKey } from "./secrets.ts";
 import type { Service } from "./service.ts";
 import { createStreamWriter } from "./stream-writer.ts";
@@ -72,6 +74,7 @@ export type RunnerDeps = {
   slotFor: (runId: Id<"runs">) => Slot;
   service: Service;
   link: Link;
+  search: Search;
   masterKey: Buffer;
   mistral: { baseUrl: string; model: string };
   ownerScope: Id<"users"> | undefined;
@@ -161,11 +164,12 @@ async function loadScreen(service: Service, runId: Id<"runs">): Promise<StoredSc
 
 type ToolResultBase = { kind: "toolResult"; toolCallId: string; name: string };
 
-// What a valid call becomes before any approval. A memory or routine call is stored by Convex. A computer call goes to the link,
-// and a desktop input goes there with the aim that the owner approves.
+// What a valid call becomes before any approval. A memory or routine call is stored by Convex. A search goes to SearXNG from here.
+// A computer call goes to the link, and a desktop input goes there with the aim that the owner approves.
 type Prepared =
   | { kind: "invalid"; reason: string }
   | { kind: "stored"; body: AppendBody }
+  | { kind: "search"; query: string }
   | { kind: "computer"; tool: ToolInvocation; detail: { subject?: string; box?: Box } };
 
 async function prepareCall(invocation: ModelInvocation, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
@@ -181,6 +185,9 @@ async function prepareCall(invocation: ModelInvocation, toolCallId: string, scre
   }
   if (isScheduleInvocation(invocation)) {
     return { kind: "stored", body: { kind: "scheduleCreate", toolCallId, ...invocation.args } };
+  }
+  if (isSearchInvocation(invocation)) {
+    return { kind: "search", query: invocation.args.query };
   }
   if (!isDesktopInputRequest(invocation)) {
     return { kind: "computer", tool: invocation, detail: {} };
@@ -336,6 +343,15 @@ async function runTool(args: {
   }
   if (prepared.kind === "stored") {
     return prepared.body;
+  }
+  // A search reads nothing on the computer, so it never waits for a take-over to end. Running it twice after a crash costs one more
+  // search and changes nothing.
+  if (prepared.kind === "search") {
+    deps.log({ level: "info", event: "tool-dispatch", runId, toolCallId: call.id, tool: invocation.name });
+    const result = await deps.search({ query: prepared.query, signal: AbortSignal.any([lease.lost, lease.cancel]) });
+    lease.lost.throwIfAborted();
+    deps.log({ level: "info", event: "tool-result", runId, toolCallId: call.id, outcome: result.outcome, truncated: result.truncated });
+    return { ...base, ...result };
   }
   const { tool } = prepared;
   await waitWhileTakenOver({

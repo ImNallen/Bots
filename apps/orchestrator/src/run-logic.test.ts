@@ -759,7 +759,6 @@ describe("how a call browses", () => {
     read_file: { name: "read_file", args: { path: "a" } },
     write_file: { name: "write_file", args: { path: "a", content: "" } },
     web_fetch: { name: "web_fetch", args: { url: "https://example.com/", start: 0 } },
-    web_search: { name: "web_search", args: { query: "example" } },
     browser_navigate: { name: "browser_navigate", args: { url: "https://example.com/" } },
     browser_snapshot: { name: "browser_snapshot", args: {} },
     browser_click: { name: "browser_click", args: { ref: 1 } },

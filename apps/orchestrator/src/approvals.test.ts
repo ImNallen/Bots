@@ -2,6 +2,7 @@ import type { Id } from "@bots/convex/dataModel";
 import type { ToolName } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 import { decideTool, waitForApproval, type ApprovalLevel } from "./approvals.ts";
+import { readUntrustedText, type RunEventBody } from "./run-logic.ts";
 
 const ID = "approval" as Id<"approvals">;
 const LEVELS: ApprovalLevel[] = ["everything", "outside", "shell", "nothing"];
@@ -78,6 +79,17 @@ describe("decideTool for a full run", () => {
       expect(needsApproval({ level: "shell", toolName, readUntrustedText })).toBe(false);
       expect(needsApproval({ level: "nothing", toolName, readUntrustedText })).toBe(false);
     }
+  });
+
+  it("asks for a memory save at outside once a search has a result, though the search ran outside the computer", () => {
+    const searched: RunEventBody[] = [
+      { kind: "userMessage", text: "find it and remember it" },
+      { kind: "toolResult", toolCallId: "a", name: "web_search", outcome: "ok", output: 'Results for "it":', truncated: false },
+    ];
+    const save = (events: RunEventBody[]) =>
+      decideTool({ capability: "full", level: "outside", toolName: "memory_save", readUntrustedText: readUntrustedText(events) });
+    expect(save(searched.slice(0, 1))).toBe("run");
+    expect(save(searched)).toBe("ask");
   });
 
   it("asks for every tool at everything", () => {

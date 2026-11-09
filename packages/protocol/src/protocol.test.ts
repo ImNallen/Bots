@@ -21,6 +21,7 @@ import {
   isBrowserInvocation,
   isWebInvocation,
   isMemoryInvocation,
+  isSearchInvocation,
   parseToolCall,
   returnsUntrustedText,
   toolDefinitions,
@@ -209,7 +210,14 @@ describe("web_search", () => {
 
   it("takes a query", () => {
     expect(parse({ query: "solar eclipse 2027" })).toEqual({ kind: "ok", invocation: { name: "web_search", args: { query: "solar eclipse 2027" } } });
-    expect(isWebInvocation({ name: "web_search", args: { query: "a" } })).toBe(true);
+    expect(isSearchInvocation({ name: "web_search", args: { query: "a" } })).toBe(true);
+    expect(isSearchInvocation({ name: "web_fetch", args: { url: "https://example.com/", start: 0 } })).toBe(false);
+  });
+
+  it("stays off the link, in the wire type and in the static type, because the orchestrator runs it", () => {
+    expectTypeOf<Extract<ToolInvocation, { name: "web_search" }>>().toBeNever();
+    expect(toolInvocation.safeParse({ name: "web_search", args: { query: "a" } }).success).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("web_search");
   });
 
   it.each([
@@ -392,8 +400,8 @@ describe("memory tools", () => {
     expect(COMPUTER_TOOL_NAMES).not.toContain("schedule_propose");
   });
 
-  it("names every published tool but the memory tools and the routine tool as a computer tool", () => {
-    expect(COMPUTER_TOOL_NAMES).toEqual(["shell", "read_file", "write_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
+  it("names every published tool but the memory tools, the routine tool, and web_search as a computer tool", () => {
+    expect(COMPUTER_TOOL_NAMES).toEqual(["shell", "read_file", "write_file", "web_fetch", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"]);
   });
 
   it("counts every published tool's result as untrusted text but a memory tool's and the routine tool's, and no unknown name", () => {

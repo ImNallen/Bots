@@ -288,6 +288,33 @@ function startFakeMistral() {
   };
 }
 
+// Answers like SearXNG's JSON, with one result about the query, so no check sends a real search.
+function startFakeSearxng() {
+  const requested: URL[] = [];
+  const server = createServer((incoming, response) => {
+    const url = new URL(incoming.url ?? "/", `http://${LOOPBACK}`);
+    requested.push(url);
+    const query = url.searchParams.get("q") ?? "";
+    const results = [{ title: `About ${query}`, url: `https://example.com/${encodeURIComponent(query)}`, content: `A page about ${query}.`, engines: ["fake"] }];
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ query, results, answers: [], infoboxes: [], suggestions: [], unresponsive_engines: [] }));
+  });
+  return {
+    requested,
+    listen: () =>
+      new Promise<number>((resolve) => {
+        server.listen(0, LOOPBACK, () => {
+          const address = server.address();
+          resolve(typeof address === "object" && address !== null ? address.port : 0);
+        });
+      }),
+    close: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
 function shellCall(command: string, timeoutSeconds?: number): FakeToolCall {
   return { name: "shell", arguments: JSON.stringify({ command, timeoutSeconds }) };
 }
@@ -397,6 +424,8 @@ const orchestratorPort = await findFreePort();
 const linkPort = await findFreePort();
 const fake = startFakeMistral();
 const fakePort = await fake.listen();
+const searxng = startFakeSearxng();
+const searxngPort = await searxng.listen();
 const orchestratorLogs: Buffer[] = [];
 let orchestrator: ChildProcess | null = null;
 
@@ -419,6 +448,7 @@ function spawnOrchestrator(args: {
       COMPUTER_TOKEN: args.computerToken,
       COMPUTER_WAIT_SECONDS: String(COMPUTER_WAIT_SECONDS),
       MISTRAL_BASE_URL: `http://${LOOPBACK}:${fakePort}`,
+      SEARXNG_URL: `http://${LOOPBACK}:${searxngPort}`,
       ...(args.convexUrl === undefined ? {} : { CONVEX_URL: args.convexUrl }),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -985,6 +1015,51 @@ try {
       assert.equal(results[2]?.exitCode, 1);
       assert.match(results[2]?.output ?? "", /No such file/);
     });
+  });
+
+  await scenario("search. web_search runs in the orchestrator and never reaches the computer, and a save after it asks", async () => {
+    await putKey(MISTRAL_KEY);
+    const chat = await newChat({ client: first, name: "search", level: "outside" });
+    const text = `search ${nonce}`;
+    const query = `bots search ${nonce}`;
+    fake.script(text, ({ toolResults }) => {
+      switch (toolResults.length) {
+        case 0:
+          return { kind: "tools", delivery: "whole", calls: [{ name: "web_search", arguments: JSON.stringify({ query }) }] };
+        case 1:
+          return { kind: "tools", delivery: "whole", calls: [{ name: "memory_save", arguments: JSON.stringify({ text: `found ${nonce}` }) }] };
+        default:
+          return { kind: "text", text: "done" };
+      }
+    });
+    try {
+      const runId = await chat.send(text);
+      const card = await waitFor({
+        description: "the save to wait for approval",
+        probe: async () => (await first.query(api.approvals.pendingForThread, { threadId: chat.threadId }))[0],
+      });
+      const run = await chat.run(runId);
+      assert.ok(run !== undefined, "the search run is not in the timeline");
+      const searched = resultsOf(run).find((result) => result.name === "web_search");
+      await check("the orchestrator asks SearXNG once, for JSON", () => {
+        const asked = searxng.requested.filter((url) => url.searchParams.get("q") === query);
+        assert.deepEqual(asked.map((url) => [url.pathname, url.searchParams.get("format")]), [["/search", "json"]]);
+      });
+      await check("the search's result lists what SearXNG found, and names no engine", () => {
+        assert.equal(searched?.outcome, "ok");
+        assert.equal(searched?.output, `Results for "${query}":\n\n1. About ${query}\n   https://example.com/${encodeURIComponent(query)}\n   A page about ${query}.`);
+      });
+      await check("computerd's journal has no entry for the search", () => {
+        assert.ok(!shellIn(mainContainer.id, `ls ${JOURNAL_DIR}`).includes(callIdToFileStem(`${runId}:${searched?.toolCallId}`)));
+      });
+      await check("at Outside, a save after the search asks first, because a result is untrusted text", () => {
+        assert.equal(turnsOf(run).flatMap((turn) => turn.toolCalls).find((call) => call.id === card.toolCallId)?.name, "memory_save");
+      });
+      await first.mutation(api.approvals.decide, { approvalId: card._id, decision: "denied" });
+      await chat.settled(runId);
+    } finally {
+      await first.mutation(api.bots.remove, { botId: chat.botId }).catch(() => {});
+    }
   });
 
   await scenario("desktop. the real computerd takes the desktop tools, and a mark needs a look", async () => {
@@ -5771,6 +5846,7 @@ try {
 } finally {
   await killOrchestrator();
   fake.close();
+  searxng.close();
   for (const project of [COMPUTER_PROJECT, DIRECT_PROJECT]) {
     try {
       stopComputer(project);

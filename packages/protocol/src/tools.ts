@@ -93,7 +93,6 @@ const computerOptions = [
   z.strictObject({ name: z.literal("read_file"), args: readFileArgs }),
   z.strictObject({ name: z.literal("write_file"), args: writeFileArgs }),
   z.strictObject({ name: z.literal("web_fetch"), args: webFetchArgs }),
-  z.strictObject({ name: z.literal("web_search"), args: webSearchArgs }),
   z.strictObject({ name: z.literal("browser_navigate"), args: browserNavigateArgs }),
   z.strictObject({ name: z.literal("browser_snapshot"), args: browserSnapshotArgs }),
   z.strictObject({ name: z.literal("browser_click"), args: browserClickArgs }),
@@ -154,7 +153,13 @@ const scheduleProposeArgs = z.strictObject({ instruction: z.string(), cadence: c
 export const scheduleInvocation = z.strictObject({ name: z.literal("schedule_propose"), args: scheduleProposeArgs });
 
 export type ScheduleInvocation = z.infer<typeof scheduleInvocation>;
-export type ToolName = ToolInvocation["name"] | MemoryInvocation["name"] | ScheduleInvocation["name"];
+
+// SearXNG runs beside the orchestrator and listens only on its loopback, so a search never reaches a computer, and the link's wire
+// type leaves it out.
+export const searchInvocation = z.strictObject({ name: z.literal("web_search"), args: webSearchArgs });
+
+export type SearchInvocation = z.infer<typeof searchInvocation>;
+export type ToolName = ToolInvocation["name"] | MemoryInvocation["name"] | ScheduleInvocation["name"] | SearchInvocation["name"];
 
 export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvocation {
   return tool.name.startsWith("browser_");
@@ -173,7 +178,7 @@ export function isDesktopInputRequest(tool: ModelInvocation): tool is DesktopInp
 }
 
 // What a model's call parses into. A desktop input has no aim yet, so it cannot reach the link until the runner aims it.
-export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation> | DesktopInputRequest | MemoryInvocation | ScheduleInvocation;
+export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation> | DesktopInputRequest | MemoryInvocation | ScheduleInvocation | SearchInvocation;
 
 // controlsComputer can make the VM do anything its user can, so the Shell level asks for it. readsScreen reads the whole desktop,
 // which shows the owner's logged-in pages, so a read-only run never gets it.
@@ -294,7 +299,8 @@ const TOOLS = {
   },
 } as const satisfies Record<ToolInvocation["name"], ToolRow<Exclude<ToolEffect, "changesMemory" | "changesSchedule">>> &
   Record<MemoryInvocation["name"], ToolRow<"changesMemory">> &
-  Record<ScheduleInvocation["name"], ToolRow<"changesSchedule">>;
+  Record<ScheduleInvocation["name"], ToolRow<"changesSchedule">> &
+  Record<SearchInvocation["name"], ToolRow<"reads">>;
 
 export function toolEffect(name: ToolName): ToolEffect {
   return TOOLS[name].effect;
@@ -306,6 +312,10 @@ export function isMemoryInvocation(tool: ModelInvocation): tool is MemoryInvocat
 
 export function isScheduleInvocation(tool: ModelInvocation): tool is ScheduleInvocation {
   return toolEffect(tool.name) === "changesSchedule";
+}
+
+export function isSearchInvocation(tool: ModelInvocation): tool is SearchInvocation {
+  return tool.name === "web_search";
 }
 
 export const COMPUTER_TOOL_NAMES: readonly ToolInvocation["name"][] = toolInvocation.options.map((option) => option.shape.name.value);
@@ -329,7 +339,13 @@ export const toolDefinitions = Object.entries(TOOLS).map(([name, tool]) => {
 
 export type ParsedToolCall = { kind: "ok"; invocation: ModelInvocation } | { kind: "invalid"; reason: string };
 
-const modelInvocation = z.discriminatedUnion("name", [...computerOptions, ...desktopRequests, ...memoryInvocation.options, scheduleInvocation]);
+const modelInvocation = z.discriminatedUnion("name", [
+  ...computerOptions,
+  ...desktopRequests,
+  ...memoryInvocation.options,
+  scheduleInvocation,
+  searchInvocation,
+]);
 
 export function parseToolCall(args: { name: string; arguments: string }): ParsedToolCall {
   if (!Object.hasOwn(TOOLS, args.name)) {

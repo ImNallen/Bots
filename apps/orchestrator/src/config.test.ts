@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "./config.ts";
 
@@ -37,6 +38,13 @@ describe("parseConfig", () => {
     expect(config.signingKey.kid).toBe("test-kid");
     expect(config.signingKey.jwk.d).toBe(SECRET_D);
     expect(config.webDistDir).toMatch(/apps\/web\/dist$/);
+  });
+
+  it("finds SearXNG by default on the loopback port that the control compose file publishes", async () => {
+    const compose = await readFile(new URL("../../../infra/control-vm/compose.yaml", import.meta.url), "utf8");
+    const { hostname, port } = new URL(parseConfig(validEnv).searxngUrl);
+    expect(compose).toContain(`- "${hostname}:${port}:8080"`);
+    expect(parseConfig({ ...validEnv, SEARXNG_URL: "http://10.0.0.2:9999/" }).searxngUrl).toBe("http://10.0.0.2:9999");
   });
 
   it("reads the dev login and the port", () => {

@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { OUTPUT_CAP_BYTES, type WebInvocation } from "@bots/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -208,25 +207,5 @@ describe("web_fetch's limits and failures", () => {
     const result = await createWeb({ network }).execute({ tool: fetchOf("https://a.example/"), signal });
     expect(Buffer.byteLength(result.output, "utf8")).toBeLessThanOrEqual(OUTPUT_CAP_BYTES);
     expect(result.output).not.toContain("bytes omitted");
-  });
-});
-
-describe("web_search", () => {
-  const search: WebInvocation = { name: "web_search", args: { query: "sqlite wal mode" } };
-  const RESULTS = "https://www.bing.com/search?q=sqlite%20wal%20mode&mkt=en-US";
-
-  it("reads Bing's results page through the same checked path as web_fetch", async () => {
-    const body = await readFile(new URL("./fixtures/web/bing-results.html", import.meta.url), "utf8");
-    const { network, opened } = fakeNetwork({ dns: { "www.bing.com": ["13.107.21.237"] }, pages: { [RESULTS]: { body } } });
-    const result = await createWeb({ network }).execute({ tool: search, signal });
-    expect(result).toMatchObject({ outcome: "ok", output: expect.stringMatching(/^Results from Bing for "sqlite wal mode":\n\n1\. Write-Ahead Logging - SQLite\n   https:\/\/www\.sqlite\.org\/wal\.html\n/) });
-    expect(opened).toEqual([{ url: RESULTS, host: "www.bing.com", ip: "13.107.21.237" }]);
-  });
-
-  it("refuses Bing at an address that is not public, like any other page", async () => {
-    const { network, opened } = fakeNetwork({ dns: { "www.bing.com": ["127.0.0.1"] }, pages: {} });
-    const result = await createWeb({ network }).execute({ tool: search, signal });
-    expect(result).toMatchObject({ outcome: "error", output: expect.stringContaining("www.bing.com is at 127.0.0.1, which is not one") });
-    expect(opened).toEqual([]);
   });
 });
