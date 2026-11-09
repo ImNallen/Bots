@@ -1,6 +1,6 @@
 # How to deploy the control VM
 
-These steps put the orchestrator, Convex, and the web app on one Proxmox VM, reachable only over Tailscale.
+These steps put the orchestrator, Convex, SearXNG, and the web app on one Proxmox VM, reachable only over Tailscale.
 
 ## Create the VM
 
@@ -42,7 +42,7 @@ Run the deploy script as root on the VM, with the branch to deploy. Rerun it for
 sudo bash /opt/bots/infra/control-vm/deploy.sh main
 ```
 
-The script gives the VM its address on the control network, builds the app, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
+The script gives the VM its address on the control network, builds the app, starts Convex and SearXNG, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. SearXNG listens only on `127.0.0.1:8789`, and `web_search` reaches it from the orchestrator. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
 
 To read the orchestrator's logs, run `journalctl -u bots-orchestrator`. To open the Convex dashboard, forward ports 6791 and 3210, because the dashboard's page calls Convex directly: `ssh -L 6791:127.0.0.1:6791 -L 3210:127.0.0.1:3210 bots@<VM address>`. Then run `sudo cat /opt/bots/packages/convex/.env.local` on the VM to read the admin key.
 
@@ -100,6 +100,12 @@ pnpm verify:tailnet https://bots-control.<tailnet>.ts.net 192.168.1.161
 ```
 
 A run that passes deletes the `verify-tailnet-*` bot it adds. A run that stops early leaves it in your list, and its page has a delete button.
+
+To prove that search works on the VM, run this on the VM, from `/opt/bots`. It sends three real searches through SearXNG.
+
+```sh
+node scripts/verify-web.ts --search
+```
 
 To prove what a user VM can reach, run these commands on the Proxmox host. The check reads the addresses of VM 110 through its guest agent. It scans every TCP port on eight machine addresses and the peer VM, and it runs packet captures on the host. The last full run took about 23 minutes.
 
