@@ -9,7 +9,7 @@ import { promptRoutines, routinesOfBot } from "./schedules.js";
 import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape } from "./validators.js";
 
-const DEFAULT_APPROVAL_LEVEL = "outside";
+const DEFAULT_APPROVAL_LEVEL = "automatic";
 // Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
 const TAKEOVER_MS = 15 * 60 * 1000;
 
