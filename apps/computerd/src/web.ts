@@ -9,6 +9,7 @@ import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { capText, webUrl, type ToolResult, type WebInvocation } from "@bots/protocol";
 import { publicAddressFor, type PublicAddress, type Resolve } from "./addresses.ts";
 import { showPage, type Fetched } from "./web-page.ts";
+import { searchUrl, showSearch } from "./web-search.ts";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -54,6 +55,8 @@ function planFor(tool: WebInvocation): { url: string; show: (fetched: Fetched) =
   switch (tool.name) {
     case "web_fetch":
       return { url: tool.args.url, show: (fetched) => showPage(fetched, tool.args.start) };
+    case "web_search":
+      return { url: searchUrl(tool.args.query), show: (fetched) => showSearch(tool.args.query, fetched) };
   }
 }
 

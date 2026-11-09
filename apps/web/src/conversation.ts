@@ -49,6 +49,7 @@ const TOOL_WORDS = {
   read_file: { done: "Read a file", ask: "Read this file?", icon: "file" },
   write_file: { done: "Saved a file", ask: "Save this file?", icon: "file" },
   web_fetch: { done: "Read a web page", ask: "Read this web page?", icon: "globe" },
+  web_search: { done: "Searched the web", ask: "Search the web for this?", icon: "globe" },
   browser_navigate: { done: "Opened a page", ask: "Open this page?", icon: "globe" },
   browser_snapshot: { done: "Read the page", ask: "Read this page?", icon: "lines" },
   browser_click: { done: "Clicked on the page", ask: "Click on this page?", icon: "pointer" },

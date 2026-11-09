@@ -138,6 +138,7 @@ describe("conversationItems", () => {
       ["read_file", "Read a file"],
       ["write_file", "Saved a file"],
       ["web_fetch", "Read a web page"],
+      ["web_search", "Searched the web"],
       ["browser_navigate", "Opened a page"],
       ["browser_snapshot", "Read the page"],
       ["browser_click", "Clicked on the page"],
