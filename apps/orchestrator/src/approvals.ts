@@ -2,12 +2,13 @@ import type { Id } from "@bots/convex/dataModel";
 import { toolEffect, type ToolEffect, type ToolName } from "@bots/protocol";
 import type { RunCapability } from "./run-logic.ts";
 
-export type ApprovalLevel = "everything" | "outside" | "shell" | "nothing";
-export type ToolDecision = "run" | "ask" | "reject";
+export type ApprovalLevel = "everything" | "outside" | "shell" | "nothing" | "automatic";
+// byRules means the Automatic rules decide this call. The runner resolves it to run or ask through decideByRules.
+export type ToolDecision = "run" | "ask" | "reject" | "byRules";
 
 const POLL_MS = 2000;
 
-type Ask = "ask" | "run" | "askAfterUntrustedText";
+type Ask = "ask" | "run" | "askAfterUntrustedText" | "byRules";
 
 // One answer for each level and effect, so a new effect or level fails the typecheck until it has a row here.
 const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
@@ -15,6 +16,9 @@ const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
   outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterUntrustedText", changesSchedule: "ask" },
   shell: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
   nothing: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
+  // The default. Reads run, the three effects that change things go to the rules, a memory write asks once untrusted text is in, and
+  // a routine still asks.
+  automatic: { reads: "run", readsScreen: "run", changesVm: "byRules", changesOutside: "byRules", controlsComputer: "byRules", changesMemory: "askAfterUntrustedText", changesSchedule: "ask" },
 };
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";
@@ -35,6 +39,9 @@ export function decideTool(args: {
       return toolEffect(args.toolName) === "reads" ? "run" : "reject";
     case "full": {
       const ask = ASKS[args.level][toolEffect(args.toolName)];
+      if (ask === "byRules") {
+        return "byRules";
+      }
       return ask === "ask" || (ask === "askAfterUntrustedText" && args.readUntrustedText) ? "ask" : "run";
     }
   }

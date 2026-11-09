@@ -2,12 +2,14 @@ import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
 import {
   isDesktopInputRequest,
+  isDesktopInvocation,
   isMemoryInvocation,
   isScheduleInvocation,
   isSearchInvocation,
   makeCallId,
   parseToolCall,
   screenView,
+  WORKSPACE_ROOT,
   type Box,
   type ModelInvocation,
   type ToolInvocation,
@@ -26,6 +28,7 @@ import {
   decideTool,
   waitForApproval,
 } from "./approvals.ts";
+import { decideByRules, desktopAim } from "./rules.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { completeWithRetry, type CompletionResult, type MistralUserChunk } from "./mistral.ts";
 import {
@@ -303,7 +306,7 @@ async function runTool(args: {
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   const { invocation } = parsed;
-  const decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
+  let decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
     return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
@@ -313,11 +316,20 @@ async function runTool(args: {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: prepared.reason, truncated: false };
   }
+  // A card from the rules carries a one-sentence reason. Other asks leave it unset.
+  let reason: string | undefined;
+  if (decision === "byRules") {
+    const aim = prepared.kind === "computer" && isDesktopInvocation(prepared.tool) && prepared.tool.name !== "desktop_look" ? desktopAim(prepared.tool) : null;
+    const outcome = decideByRules({ invocation, aim, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
+    deps.log({ level: "info", event: "tool-rule", runId, toolCallId: call.id, rule: outcome.rule, run: outcome.run });
+    decision = outcome.run ? "run" : "ask";
+    reason = outcome.run ? undefined : outcome.reason;
+  }
   if (decision === "ask") {
     const detail = prepared.kind === "computer" ? prepared.detail : {};
     const answer = await waitForApproval({
       request: () =>
-        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name, ...detail }),
+        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name, ...detail, ...(reason === undefined ? {} : { reason }) }),
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
       expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
       now: Date.now,

@@ -5,8 +5,10 @@ import { decideTool, waitForApproval, type ApprovalLevel } from "./approvals.ts"
 import { readUntrustedText, type RunEventBody } from "./run-logic.ts";
 
 const ID = "approval" as Id<"approvals">;
-const LEVELS: ApprovalLevel[] = ["everything", "outside", "shell", "nothing"];
-const ANSWERS: Record<ToolName, Record<ApprovalLevel, boolean>> = {
+// The levels whose answer is a plain run-or-ask. Automatic sends the three changing effects to the rules, so it has its own test.
+const LEVELS = ["everything", "outside", "shell", "nothing"] as const satisfies readonly ApprovalLevel[];
+const ALL_LEVELS: readonly ApprovalLevel[] = [...LEVELS, "automatic"];
+const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
   shell: { everything: true, outside: true, shell: true, nothing: false },
   read_file: { everything: true, outside: false, shell: false, nothing: false },
   write_file: { everything: true, outside: false, shell: false, nothing: false },
@@ -33,7 +35,7 @@ const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_s
 const READS: ToolName[] = ["read_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot"];
 
 describe("decideTool for a read-only run", () => {
-  it.each(LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((readUntrustedText) => ({ level, toolName, readUntrustedText })))))(
+  it.each(ALL_LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((readUntrustedText) => ({ level, toolName, readUntrustedText })))))(
     "at $level, $toolName with readUntrustedText $readUntrustedText never asks, and runs only what reads",
     (args) => {
       expect(decideTool({ capability: "readOnly", ...args })).toBe(READS.includes(args.toolName) ? "run" : "reject");
@@ -114,6 +116,34 @@ describe("decideTool for a full run", () => {
   it("asks only for a routine at nothing", () => {
     expect(asked("nothing")).toEqual(["schedule_propose"]);
     expect(asked("nothing", true)).toEqual(["schedule_propose"]);
+  });
+});
+
+describe("decideTool at the automatic level", () => {
+  const at = (toolName: ToolName, readUntrustedText = false) => decideTool({ capability: "full", level: "automatic", toolName, readUntrustedText });
+
+  it.each(READS)("runs %s with no card", (toolName) => {
+    expect(at(toolName)).toBe("run");
+  });
+
+  it("runs a look with no card", () => {
+    expect(at("desktop_look")).toBe("run");
+  });
+
+  it.each<ToolName>(["write_file", "shell", "browser_click", "browser_type", "browser_press", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"])(
+    "sends %s to the rules",
+    (toolName) => {
+      expect(at(toolName)).toBe("byRules");
+    },
+  );
+
+  it.each(MEMORY_TOOLS)("runs %s until the run reads untrusted text, then asks", (toolName) => {
+    expect(at(toolName, false)).toBe("run");
+    expect(at(toolName, true)).toBe("ask");
+  });
+
+  it("asks for a routine", () => {
+    expect(at("schedule_propose")).toBe("ask");
   });
 });
 
