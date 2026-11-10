@@ -288,6 +288,7 @@ async function callModel(args: {
       attachments,
       screen: claim.capability === "full" ? shownScreen(await loadScreen(deps.service, runId)) : undefined,
     }),
+    promptCacheKey: claim.threadId,
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),
     onProgress: (snapshot) => writer.update(snapshot),
@@ -295,8 +296,7 @@ async function callModel(args: {
   });
   await writer.flush();
   if (result.kind === "ok") {
-    const { promptTokens, completionTokens } = result.turn.usage;
-    deps.log({ level: "info", event: "model-call", runId, promptTokens, completionTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
+    deps.log({ level: "info", event: "model-call", runId, ...result.turn.usage, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
   }
   return result;
 }
