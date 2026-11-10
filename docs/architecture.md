@@ -53,7 +53,43 @@ An `interrupted` or `unavailable` outcome tells the model that a side effect may
 
 Any unexpected error in the runner ends that attempt and leaves the lease to expire. Recovery from a transient failure therefore takes the same path as recovery from a crash, at the cost of waiting for the lease.
 
-`runs.claim` ends a run after 5 attempts in a row that stored no event, because each attempt can pay for a model call on the user's key with nobody watching. The same mutation records an `unavailable` result for any tool call the run never answered. Every later model request replays the thread's history, and a call with no result would make that history malformed.
+`runs.claim` ends a run after 5 attempts in a row that stored no event, because each attempt can pay for a model call on the user's key with nobody watching. The same mutation records an `unavailable` result for any tool call the run never answered. A later model request can replay that call, and a call with no result would make its history malformed.
+
+## What a model call reads of its thread
+
+A chat run loads every event of its thread. Each model call used to send all of them, so a call paid again for every earlier page, command output, and thinking trace.
+
+A measurement on 2026-11-10 covered every stored run on the control VM, which was 175 chat calls on `mistral-large-4`. Those calls sent 5,734,349 prompt tokens and got 66,114 completion tokens back. A least-squares fit of each call's prompt tokens on the bytes that it replayed put about 57% of those tokens on the reasoning, tool calls, and tool output of earlier runs. The owner's messages and the bot's replies were under 2%. One shell-heavy thread dominates that sample, so the shares describe that thread.
+
+`historyOf` in `apps/orchestrator/src/history.ts` chooses what a call reads. `toMistralMessages` renders what `historyOf` returns and takes no stored events, so no request can skip the choice. The stored events do not change, and the chat still shows every row.
+
+### An answered request is its message and its reply
+
+The unit is the exchange, which is everything from a message to the turn that answers it. A turn answers when it has text and no tool call. An answered exchange reaches a later call as the owner's message and that reply, with no reasoning, no tool call, and no tool output. What must outlast a request already has a place: notes, the description, routines, and the files on the bot's computer. The prompt tells the bot to read again what is not shown, and never to guess what it said.
+
+The unit is not the run, because a run can end with no reply. It fails, the owner stops it, or it reaches its 40 turns. Two of the 11 measured chat runs ended at that limit, and the owner then wrote again. Such an exchange stays open, and the owner's next message joins it.
+
+### A run with no reply keeps its newest steps
+
+A step is one assistant turn and the results of its calls. In the open exchange, every step of the run in progress stays whole. The steps that earlier runs left there keep their newest 8 to 16 KiB whole, counted as bytes of reasoning, text, arguments, and output. Each older step becomes lines: its text, cut at 600 characters, and each call with its arguments cut at 160 characters and its outcome. The newest 60 to 90 older steps are listed, and a count stands for the rest.
+
+The lines go after the whole steps, in the message that says the run ended before a final reply. A list before the whole steps would put two assistant messages in a row, the second with a tool call. Production had never sent Mistral that shape, and it had sent a tool message, then that line, then a user message.
+
+### A cut moves a page at a time
+
+`pagedCut` places both cuts on a page line of the cumulative weight. A page is 8 KiB for steps and 30 steps for the list. The cut reads the stored events alone, so a restarted orchestrator makes the same cut. It never moves back, and it moves only when the total crosses a page line.
+
+The page matters for the next change, where the run in progress sheds its own old steps. A cut that moved on every call would rewrite a message in the middle of the history each time. Mistral's [prompt caching](https://docs.mistral.ai/studio-api/conversations/advanced/prompt-caching) charges a tenth for a prefix that two requests share, so such a cut would end the shared prefix at that message on every call.
+
+Nothing is stored for this view, and no model writes a summary. A summary would cost a model call for each exchange. It would also carry a page's text into every later prompt in the bot's own voice.
+
+### What it saves, and how to measure it again
+
+`scripts/context-report.ts` replays exported runs through `historyOf`, and its header says how to export them. For each stored model call it prints the real prompt tokens and an estimate of what this code would send. On the measured runs the estimate is 2,924,489 prompt tokens for the 175 chat calls, which is 51% of what they sent, and the largest call falls from 90,698 to 44,482. The estimate converts the bytes left out at the fit's 3.28 bytes for each token, and the fit's mean error is 1,526 tokens a call. A routine's request does not change.
+
+Each model call also logs `model-call` with its real `promptTokens` and with the `storedBytes` and `sentBytes` of its history, so the journal shows the effect on real runs.
+
+[The roadmap](roadmap.md#less-history-in-each-model-call) lists what this does not do yet.
 
 ## Why identity comes from Tailscale
 
@@ -378,7 +414,7 @@ The card says what will happen in words, such as `Click entry "Address and searc
 
 A run keeps only its newest look, in a `screens` row: the view as JSON and the picture's bytes. `runs.append` writes it under the run's lease and sequence fence, and the `toolResult` event keeps only the short output, such as `Clicked button "Sign in" in Chromium.`. `endRun` deletes the row, and so does the purge. A routine never keeps one. So no picture of the owner's logged-in pages outlives its run, and storage grows only with active runs. The limits on the picture and the marks put a row under about 600 KB.
 
-Before each model call of a chat run, the runner reads that row. The newest look's tool message carries its text and its picture, and every older desktop result says that its marks no longer work. A request therefore holds one picture, which cost about 1,400 prompt tokens in an earlier probe, however long the history is. That probe also showed that `mistral-large-4` accepts a picture inside a tool message. A previous run's looks replay as text only, because their rows are gone.
+Before each model call of a chat run, the runner reads that row. The newest look's tool message carries its text and its picture, and every older desktop result says that its marks no longer work. A request therefore holds one picture, which cost about 1,400 prompt tokens in an earlier probe, however long the history is. That probe also showed that `mistral-large-4` accepts a picture inside a tool message. An answered request's looks do not reach a later call at all. A look that a run with no reply left in its whole steps replays as text only, because its row is gone.
 
 The link's frame is 2 MiB. `fitToLink` drops the picture, and then marks, before a result can pass it, because a frame over the limit would close the link and the resent call would get the same answer from the journal at every reconnect. The journal keeps no picture, so a repeated call gets its marks and no picture.
 
@@ -438,7 +474,7 @@ This closes the free path only. A bot with root can rewrite the VM's NAT rules s
 - Plain text, JSON, and XML pass through as they are. A PDF, a picture, or any other type answers `error` with its type and size.
 - A status of 400 or more answers `error` with the page's text, because a block page or a 404 page says why.
 
-Every tool result replays on every later model call, so a part is at most 16 KiB of text and link lines. A long page ends each part with the start of the next one, and the model asks again with `start`. Nothing is cached, so each part fetches the page again, and a page that changed in between can shift its parts. On 2026-11-09 the Wikipedia article on SQLite read in 4 parts of 16,524, 16,495, 16,488, and 5,916 bytes.
+A tool result replays on every later model call of its run, so a part is at most 16 KiB of text and link lines. A long page ends each part with the start of the next one, and the model asks again with `start`. Nothing is cached, so each part fetches the page again, and a page that changed in between can shift its parts. On 2026-11-09 the Wikipedia article on SQLite read in 4 parts of 16,524, 16,495, 16,488, and 5,916 bytes.
 
 ### How it searches
 
@@ -592,7 +628,7 @@ A page that a bot reads can tell it to save a note, and every later model call r
 
 The prompt says that a bot's own notes can be wrong or planted, that they inform and do not instruct, and that they rank below the owner's messages. That sentence is an instruction to a model, and no code checks it, so it is not a boundary.
 
-The card covers one run. The thread replays on every model call, so an injection from an earlier run is still in the model's history, and the first save of a later run has no card. A hold for review would close this, but a thread stays exposed for good, so it would ask about nearly every save.
+The card covers one run. An answered request's tool output no longer reaches a later run, as [What a model call reads of its thread](#what-a-model-call-reads-of-its-thread) says. A run that stored no reply still leaves its newest steps for the next run, so an injection in them is still in the model's history, and the first save of that next run has no card. A reply can also repeat what a page planted. A hold for review would close this, but a thread stays exposed for good, so it would ask about nearly every save.
 
 At the Shell and Nothing levels, no save shows a card. The owner chose those levels, and the chat row and the panel are the only signs.
 
@@ -659,14 +695,14 @@ The rule holds in three places, so a bug in one does not open it:
 
 | | Chat run | Read-only run |
 |---|---|---|
-| Events | Its chat thread, loaded by thread | Its own events, loaded by run |
+| Events | Its chat thread, loaded by thread, and then what [`historyOf`](#what-a-model-call-reads-of-its-thread) keeps of it | Its own events, loaded by run, all of them |
 | The owner's chat | Yes | No |
 | Reports | The thread's newest 3, each an assistant message with a label | The newest 3 of its own routine, as one JSON array in the prompt |
 | A routine's raw pages | Never | Only its own run's |
 | Tools | All of them | Those that read, and none on the final call |
 | Prompt | The full rules | No rules for writing notes or the description. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
 
-The description, `about`, and the notes reach both. Both prompts also give the date and time of the call, read from the orchestrator's clock, in the owner's time zone with the same instant in UTC, or in UTC alone when no zone is set. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
+The description, `about`, and the notes reach both. Both prompts also give the date and time of the call, read from the orchestrator's clock, in the owner's time zone with the same instant in UTC, or in UTC alone when no zone is set. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `historyOf` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
 
 ### Where a routine's pages and reports go
 

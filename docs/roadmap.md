@@ -322,6 +322,31 @@ Done in code on 2026-11-10, and not deployed. A bot's prompt had the owner's tim
 
 This changes neither the schema nor `packages/protocol`, so deploying it restarts nothing on a VM, and going back to a commit before this one needs no cleanup.
 
+### Less history in each model call
+
+The owner asked on 2026-11-10 for a way to manage a bot's context that sends fewer tokens. A measurement of every stored run on the control VM came first, and [What a model call reads of its thread](architecture.md#what-a-model-call-reads-of-its-thread) has its numbers and the design.
+
+PR 1 of 4 is done in code on 2026-11-10, and not deployed. An answered request now reaches a later model call as the owner's message and the bot's reply. A run that stored no reply leaves the next run its newest steps whole and a line for each older call. `historyOf` in `apps/orchestrator/src/history.ts` decides this from the stored events, and it stores nothing.
+
+- `pnpm test` checks `historyOf` and the messages a model receives. Three deliberate breaks in `historyOf` each turned 6 tests red: no turn ever answers, a listed step is also sent whole, and a cut that moves on every call.
+- `node scripts/context-report.ts` replayed the control VM's stored runs through the new code. It estimates 51% of the prompt tokens that the 175 chat calls sent, and a largest call of 44,482 in place of 90,698. A routine's request is the same.
+- `VERIFY_SCENARIOS=A,B,context,desktop pnpm verify:agent` passed on the Mac. The new `context` scenario checks the request that a fake Mistral receives after an answered run and after a run with no reply, and the `model-call` log line.
+- A full `pnpm verify:agent` passed every other scenario and failed `schedule` and `activity`. The commit before this change fails the same 5 checks on the same backend, because the Mac's Convex held the functions of an older commit, with `schedules:runNow` still deployed. So those two scenarios have not run against this change.
+- No real model has run on this code. The Mac's stored Mistral key did not decrypt with the env files at hand, so a real chat stopped before its first call. Nothing shows how `mistral-large-4` works from a reply with no steps behind it, or from the list of older calls.
+
+This changes neither the schema nor `packages/protocol`, so deploying it restarts nothing on a VM, and going back to a commit before this one needs no cleanup.
+
+The next PRs, in this order:
+
+1. Send Mistral's `prompt_cache_key`, store the cached token count that each call reports, and move the date and time out of the system message, where it changes the first message every minute. This lowers the bill and not the size of a request, and only if `mistral-large-4` caches these requests, which nothing has shown.
+2. Let the run in progress shed its own old steps a page at a time. The estimate for this is about 27% of today's tokens. It waits on a real-model check, because Mistral's guide says that dropping a thinking trace makes later turns worse, and reasoning was about a third of the measured tokens.
+3. Bound a thread's messages and replies, and give a routine's pages a window. This closes the gap about a thread that outgrows the model.
+
+These are proposals, so change them if you find a better answer:
+
+- Make `readUntrustedText` read the steps that a run with no reply left for the next run. A save after "continue" would then ask when the failed run read a page. It adds cards, so it is the owner's call.
+- Raise or remove the limit of 40 turns once a run sheds its own steps. Two of the 11 measured runs ended there.
+
 ### Later: hide memory's details
 
 The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.
@@ -364,8 +389,10 @@ These are open on purpose. Fix each one when the work reaches it.
 - On a phone on its side with the keyboard open, the controls do not all fit. They scroll beside the stream, so the second row of keys and the Give back button can start out of sight. This was simulated, not seen on a phone.
 - A tablet with a real keyboard still gets the typing box and key bar, because `pointer: coarse` says nothing about a keyboard.
 - A reload during a take-over does not give the screen back, so the bot waits for up to 15 minutes, and the view that comes back says "Watching". Taking control and giving back ends it.
-- Long threads have no compaction, so a very long thread will eventually exceed what the model accepts.
-- `readUntrustedText` covers one run, and the thread replays on every model call. So an injection from an earlier run that is still in replayed history passes the check, and the first save of a later run has no card.
+- A model call still reads every message and reply of its thread, every step of the run in progress, and every page of a routine's run, as [Less history in each model call](#less-history-in-each-model-call) says. So a thread with enough messages, or one run with enough output, can still exceed what the model accepts.
+- A bot no longer reads what an answered request's commands printed, which pages it read, or how it reasoned. Asked about one, it must run or read again, and a model may guess instead. The prompt tells it not to, which is an instruction to a model. No real model has run on this code.
+- After a run that ended with no reply, the next run reads the newest 8 to 16 KiB of its steps and a line for each older call. It may repeat a read whose output is no longer shown, and nothing stops it from repeating a call that changed something.
+- `readUntrustedText` covers one run. An answered request's tool output no longer reaches a later run. A run that stored no reply still leaves its newest steps for the next run, so an injection in them passes the check, and the first save of that next run has no card. A reply can also repeat what a page planted.
 - At the Shell and Nothing levels, a save shows no card, so a page can plant a note there. The chat row and the panel still show it.
 - A forget's card shows only an id, so the owner approves it without seeing the text unless they open Memory. The row's output shows the text afterward.
 - `looksLikeSecret` is best effort. "My password is hunter2" passes, and so does "My password: hunter2 today", because a pair with a colon counts only when one token follows and then the line ends. `"password": "hunter2"` passes too, because a quote after the name is no pair for a short value, and `token == abc` passes because it reads as a comparison. A refused call's arguments stay in `runEvents` and in later model calls, until the bot is deleted.
