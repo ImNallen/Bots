@@ -108,7 +108,7 @@ Inside a run, a request is now the one before it plus the new turn and its resul
 - A read-only run's final call, which adds a rule to the system message and offers no tools.
 - A change to a note, the description, a routine, or the owner's time zone, which the system message or each time line holds.
 
-Mistral's page gives no lifetime for a cached prefix and no list of models, and it does not say where the tool definitions sit in the prompt. No real model has run on this code, so nothing shows yet that `mistral-large-4` caches these requests.
+Mistral's page gives no lifetime for a cached prefix and no list of models, and it does not say where the tool definitions sit in the prompt. On the control VM on 2026-11-10, `mistral-large-4` accepted the key and reported a count on every streamed call. In a run of five calls, the calls after the first had 93% of their prompt tokens cached. The first call of a later run in the same chat had 4,352 or 4,608 of about 4,800 cached, so the system message and the tool definitions are in the part that two runs share. [The roadmap](roadmap.md#less-history-in-each-model-call) has the numbers.
 
 [The roadmap](roadmap.md#less-history-in-each-model-call) lists what this does not do yet.
 
