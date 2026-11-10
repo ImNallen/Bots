@@ -655,7 +655,7 @@ The rule holds in three places, so a bug in one does not open it:
 
 ### What a model reads
 
-`modelRequest` in `apps/orchestrator/src/run-logic.ts` builds each model call from stored facts.
+`modelRequest` in `apps/orchestrator/src/run-logic.ts` builds each model call from stored facts and the time of the call.
 
 | | Chat run | Read-only run |
 |---|---|---|
@@ -666,7 +666,7 @@ The rule holds in three places, so a bug in one does not open it:
 | Tools | All of them | Those that read, and none on the final call |
 | Prompt | The full rules | No rules for writing notes or the description. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
 
-The description, `about`, and the notes reach both. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
+The description, `about`, and the notes reach both. Both prompts also give the date and time of the call, read from the orchestrator's clock, in the owner's time zone with the same instant in UTC, or in UTC alone when no zone is set. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `toMistralMessages` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
 
 ### Where a routine's pages and reports go
 

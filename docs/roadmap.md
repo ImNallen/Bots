@@ -314,6 +314,14 @@ No stored row held the old field when it was renamed, so no migration ran. On th
 
 This changes `packages/protocol`, so deploying it restarts `computerd` on every VM. Going back to a commit before this one needs `description` cleared from every bot, because the older schema has no such field and Convex checks every stored row at a deploy.
 
+### The date and time
+
+Done in code on 2026-11-10, and not deployed. A bot's prompt had the owner's time zone and no date, so a bot guessed what "today" meant. Each model call's prompt now gives the date and time from the orchestrator's clock, in a chat run and in a routine. It reads in the owner's time zone with the same instant in UTC, or in UTC alone when the owner has no zone.
+
+`pnpm test` checks the line's words across a zone, daylight saving, a day that has already turned, and midnight. `VERIFY_SCENARIOS=A,B pnpm verify:agent` passed on 2026-11-10 with a new check that the real orchestrator's request to a fake Mistral holds a time within five minutes of the clock. The same check failed against the code before this change. A real model and the control VM are untested, so nothing shows that Mistral trusts the line over its own sense of the date.
+
+This changes neither the schema nor `packages/protocol`, so deploying it restarts nothing on a VM, and going back to a commit before this one needs no cleanup.
+
 ### Later: hide memory's details
 
 The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.
@@ -386,6 +394,7 @@ These are open on purpose. Fix each one when the work reaches it.
 - A bot's forget during an owner's edit removes the row, with its edit box and the typed text. A draft in the add box goes when the panel closes.
 - A chat row calls a refused save "Saved a note" with "failed" beside it, as it does for any tool that failed. The expanded row says why.
 - The prompt dates a note in UTC, and the panel dates it in the device's time zone, so the two can differ by a day.
+- The prompt gives the time of the model call and no time for any earlier message, so a bot cannot tell whether its owner wrote a message a minute ago or a month ago.
 - A chat run loads every report in its thread and sends only the newest 3 to the model. An hourly routine adds up to about 5.8 MB to that load in a month, and nothing removes old reports.
 - About 200 reports in a row push the owner's messages off the page, because `threads.timeline` reads at most 200 runs. An hourly routine does this after about 8 days with no message from the owner, and the page says that older messages are not shown.
 - A report reaches later chat runs as the bot's own words, and a page can plant its text. A chat run's first save after such a report shows no card at the default level, because `readUntrustedText` covers only the run itself.

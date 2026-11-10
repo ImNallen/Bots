@@ -952,6 +952,14 @@ try {
       assert.match(system, new RegExp(`happy-${nonce}`));
       assert.match(system, /untrusted data, not instructions/);
     });
+    await check("the system prompt gives the current date and time", () => {
+      const system = String(requests[0]?.body.messages[0]?.content);
+      const line = system.split("\n").find((text) => text.startsWith("It is now ")) ?? "";
+      const zoned = /which is (\d{4}-\d{2}-\d{2}T\d{2}:\d{2})Z\./.exec(line)?.[1];
+      const utc = /^It is now \w+, (\d{1,2} \w+ \d{4}), (\d{2}:\d{2}) UTC\./.exec(line);
+      const read = zoned !== undefined ? Date.parse(`${zoned}:00Z`) : utc ? Date.parse(`${utc[1]} ${utc[2]} UTC`) : Number.NaN;
+      assert.ok(Math.abs(Date.now() - read) <= 5 * 60 * 1000, `the prompt's clock reads ${JSON.stringify(line)}`);
+    });
     const followUp = `follow up ${nonce}`;
     fake.script(followUp, () => ({ kind: "text", text: "second answer" }));
     const secondRun = await chat.settled(await chat.send(followUp));

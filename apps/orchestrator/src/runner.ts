@@ -280,6 +280,7 @@ async function callModel(args: {
         about: profile.about,
         notes: profile.notes,
         timeZone: profile.timeZone,
+        now: Date.now(),
         routines: profile.routines,
       },
       events: events.map((event) => event.body),
