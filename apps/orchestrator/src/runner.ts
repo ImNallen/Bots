@@ -1,5 +1,5 @@
 import { api } from "@bots/convex";
-import type { Doc, Id } from "@bots/convex/dataModel";
+import type { Id } from "@bots/convex/dataModel";
 import {
   isDesktopInputRequest,
   isDesktopInvocation,
@@ -30,7 +30,7 @@ import {
 } from "./approvals.ts";
 import { decideByRules, desktopAim } from "./rules.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
-import { historyOf } from "./history.ts";
+import { historyOf, threadEventOf, type ThreadEvent } from "./history.ts";
 import { completeWithRetry, type CompletionResult, type MistralUserChunk } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
@@ -62,7 +62,7 @@ const UNREADABLE_KEY_REASON = "The stored Mistral key could not be decrypted. Se
 const STEP_LIMIT_REASON = `The run stopped after ${MAX_ASSISTANT_TURNS} model turns.`;
 
 type Claim = Extract<FunctionReturnType<typeof api.runs.claim>, { kind: "claimed" }>;
-type RunEvent = Pick<Doc<"runEvents">, "runId" | "body">;
+type RunEvent = ThreadEvent & { runId: Id<"runs"> };
 type AppendBody = FunctionArgs<typeof api.runs.append>["body"];
 
 type Lease = {
@@ -144,7 +144,7 @@ async function loadEvents(args: { service: Service; runId: Id<"runs">; claim: Cl
       claim.capability === "full"
         ? await service.query(api.threads.eventsPage, { threadId: claim.threadId, paginationOpts })
         : await service.query(api.runs.eventsPage, { runId, paginationOpts });
-    events.push(...page.page);
+    events.push(...page.page.map((row) => ({ runId: row.runId, ...threadEventOf(row) })));
     if (page.isDone) {
       return events;
     }
@@ -268,7 +268,7 @@ async function callModel(args: {
       }
     },
   });
-  const history = historyOf(events.map((event) => event.body));
+  const history = historyOf(events);
   const result = await completeWithRetry({
     ...deps.mistral,
     apiKey,
@@ -282,13 +282,13 @@ async function callModel(args: {
         about: profile.about,
         notes: profile.notes,
         timeZone: profile.timeZone,
-        now: Date.now(),
         routines: profile.routines,
       },
       history,
       attachments,
       screen: claim.capability === "full" ? shownScreen(await loadScreen(deps.service, runId)) : undefined,
     }),
+    promptCacheKey: claim.threadId,
     signal: AbortSignal.any([lease.lost, lease.cancel]),
     onAttempt: () => writer.update({ text: "" }),
     onProgress: (snapshot) => writer.update(snapshot),
@@ -296,8 +296,7 @@ async function callModel(args: {
   });
   await writer.flush();
   if (result.kind === "ok") {
-    const { promptTokens, completionTokens } = result.turn.usage;
-    deps.log({ level: "info", event: "model-call", runId, promptTokens, completionTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
+    deps.log({ level: "info", event: "model-call", runId, ...result.turn.usage, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
   }
   return result;
 }
@@ -417,6 +416,10 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   async function append(body: AppendBody): Promise<void> {
     const stored = await service.mutation(api.runs.append, { runId, leaseToken, expectedSeq: nextSeq, body });
     nextSeq += 1;
+    // The mutation's type allows any event. This loop sends only turns and results, and an ask stored here would have no time.
+    if (stored.kind !== "assistantTurn" && stored.kind !== "toolResult") {
+      throw new Error(`append stored a ${stored.kind}`);
+    }
     events.push({ runId, body: stored });
   }
 

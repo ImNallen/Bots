@@ -1,9 +1,9 @@
 import type { Id } from "@bots/convex/dataModel";
 import { toolDefinitions, type KeyCombo, type ToolInvocation } from "@bots/protocol";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OLDER_LOOK } from "./desktop.ts";
-import { historyOf } from "./history.ts";
-import type { MistralMessage } from "./mistral.ts";
+import { historyOf, threadEventOf } from "./history.ts";
+import type { MistralMessage, MistralUserChunk } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   READ_ONLY_LIMITS,
@@ -241,8 +241,16 @@ function thinking(event: RunEventBody, reasoning: string): RunEventBody {
   return { ...event, reasoning } as RunEventBody;
 }
 
+const SENT_AT = Date.UTC(2026, 10, 10, 13, 3);
+const SENT = "[Tuesday, 10 November 2026, 13:03 UTC]";
+const said = (text: string) => ({ role: "user", content: `${SENT}\n${text}` });
+
+function historyFor(events: RunEventBody[]) {
+  return historyOf(events.map((body) => threadEventOf({ body, _creationTime: SENT_AT })));
+}
+
 function messagesOf(events: RunEventBody[]): MistralMessage[] {
-  return toMistralMessages({ system: "s", history: historyOf(events) });
+  return toMistralMessages({ system: "s", history: historyFor(events), timeZone: undefined });
 }
 
 function toolCall(id: string) {
@@ -265,11 +273,12 @@ describe("toMistralMessages", () => {
   it("maps a chat's first run in order and tells the model each outcome", () => {
     const messages = toMistralMessages({
       system: "sys",
-      history: historyOf([user, turn([call("abc")], "working"), result("abc", "interrupted")]),
+      history: historyFor([user, turn([call("abc")], "working"), result("abc", "interrupted")]),
+      timeZone: undefined,
     });
     expect(messages).toEqual([
       { role: "system", content: "sys" },
-      { role: "user", content: "hi" },
+      said("hi"),
       {
         role: "assistant",
         content: "working",
@@ -301,18 +310,79 @@ describe("toMistralMessages", () => {
   it("closes a run that ended without a reply before the next user message, with its few steps whole", () => {
     expect(messagesOf([user, turn([call("a")]), result("a"), user])).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "hi" },
+      said("hi"),
       { role: "assistant", content: "", tool_calls: [toolCall("a")] },
       { role: "tool", tool_call_id: "a", name: "shell", content: "outcome: ok\nexit code: 0\n\nout" },
       { role: "assistant", content: RUN_ENDED_EARLY },
-      { role: "user", content: "hi" },
+      said("hi"),
     ]);
     expect(messagesOf([user, user])).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "hi" },
+      said("hi"),
       { role: "assistant", content: RUN_ENDED_EARLY },
-      { role: "user", content: "hi" },
+      said("hi"),
     ]);
+  });
+});
+
+describe("toMistralMessages with the time of each message", () => {
+  const at = (body: RunEventBody, sentAt: number) => threadEventOf({ body, _creationTime: sentAt });
+  const contentAt = (sentAt: number, timeZone: string | undefined) =>
+    toMistralMessages({ system: "s", history: historyOf([at(ask("hi"), sentAt)]), timeZone })[1]?.content;
+
+  it("starts a message with the date and time it was sent in the owner's time zone, and the same instant in UTC", () => {
+    expect(contentAt(Date.UTC(2026, 10, 10, 13, 3), "Europe/Stockholm")).toBe("[Tuesday, 10 November 2026, 14:03 in Europe/Stockholm, which is 2026-11-10T13:03Z]\nhi");
+  });
+
+  it("reads the daylight-saving hour in summer", () => {
+    expect(contentAt(Date.UTC(2026, 6, 14, 13, 32), "Europe/Stockholm")).toBe("[Tuesday, 14 July 2026, 15:32 in Europe/Stockholm, which is 2026-07-14T13:32Z]\nhi");
+  });
+
+  it("reads the next day where the owner's day has already turned", () => {
+    expect(contentAt(Date.UTC(2026, 10, 10, 22, 15), "Pacific/Auckland")).toBe("[Wednesday, 11 November 2026, 11:15 in Pacific/Auckland, which is 2026-11-10T22:15Z]\nhi");
+  });
+
+  it("reads five past midnight as 00:05", () => {
+    expect(contentAt(Date.UTC(2026, 10, 10, 23, 5), "Europe/Stockholm")).toBe("[Wednesday, 11 November 2026, 00:05 in Europe/Stockholm, which is 2026-11-10T23:05Z]\nhi");
+  });
+
+  it("reads UTC alone when the owner has no time zone", () => {
+    expect(contentAt(Date.UTC(2026, 10, 10, 14, 3), undefined)).toBe("[Tuesday, 10 November 2026, 14:03 UTC]\nhi");
+  });
+
+  it("keeps an earlier, answered request's own time when a later message arrives", () => {
+    const events = [at(ask("first"), Date.UTC(2026, 10, 9, 8, 30)), at(turn([call("a")]), 0), at(result("a"), 0), at(turn([], "done"), 0), at(ask("second"), Date.UTC(2026, 10, 10, 13, 3))];
+    expect(toMistralMessages({ system: "s", history: historyOf(events), timeZone: undefined })).toEqual([
+      { role: "system", content: "s" },
+      { role: "user", content: "[Monday, 9 November 2026, 08:30 UTC]\nfirst" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "[Tuesday, 10 November 2026, 13:03 UTC]\nsecond" },
+    ]);
+  });
+
+  it("gives a routine's instruction the time its row was stored", () => {
+    const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+    const messages = toMistralMessages({ system: "s", history: historyOf([at(fired, Date.UTC(2026, 10, 10, 5, 0))]), timeZone: "Europe/Stockholm" });
+    expect(messages[1]).toEqual({ role: "user", content: "[Tuesday, 10 November 2026, 06:00 in Europe/Stockholm, which is 2026-11-10T05:00Z]\nCheck the news." });
+  });
+
+  describe("with attachments", () => {
+    const file = { id: "f1" as Id<"attachments">, name: "plan.png", contentType: "image/png" as const, size: 3 };
+    const picture: MistralUserChunk = { type: "image_url", image_url: "data:image/png;base64,AQID" };
+    const contentOf = (text: string, attachments?: ReadonlyMap<string, MistralUserChunk[]>) =>
+      toMistralMessages({ system: "s", history: historyFor([{ kind: "userMessage", text, attachments: [file] }]), timeZone: undefined, attachments })[1]?.content;
+
+    it("puts the time first, as its own text chunk, before the text and the files", () => {
+      expect(contentOf("Read this.", new Map([["f1", [picture]]]))).toEqual([{ type: "text", text: SENT }, { type: "text", text: "Read this." }, picture]);
+    });
+
+    it("keeps the time chunk when the message has no text", () => {
+      expect(contentOf("", new Map([["f1", [picture]]]))).toEqual([{ type: "text", text: SENT }, picture]);
+    });
+
+    it("keeps the time chunk when a file could not be loaded", () => {
+      expect(contentOf("Read this.")).toEqual([{ type: "text", text: SENT }, { type: "text", text: "Read this." }, { type: "text", text: "Attachment unavailable: plan.png" }]);
+    });
   });
 });
 
@@ -321,9 +391,9 @@ describe("toMistralMessages with earlier runs of the chat", () => {
     const events = [ask("first"), thinking(turn([call("a")], "working"), "why"), result("a"), thinking(turn([], "done"), "because"), ask("second")];
     expect(messagesOf(events)).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "first" },
+      said("first"),
       { role: "assistant", content: "done" },
-      { role: "user", content: "second" },
+      said("second"),
     ]);
   });
 
@@ -332,9 +402,9 @@ describe("toMistralMessages with earlier runs of the chat", () => {
     const steps = ids.flatMap((id) => [thinking(turn([call(id)]), `think ${id}`), result(id, "ok", "x".repeat(4096))]);
     expect(messagesOf([ask("first"), ...stepOf("a", 1), turn([], "done"), ask("second"), ...steps])).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "first" },
+      said("first"),
       { role: "assistant", content: "done" },
-      { role: "user", content: "second" },
+      said("second"),
       ...ids.flatMap((id) => [
         { role: "assistant", content: [{ type: "thinking", thinking: [{ type: "text", text: `think ${id}` }] }], tool_calls: [toolCall(id)] },
         toolOutput(id, "x".repeat(4096)),
@@ -345,15 +415,15 @@ describe("toMistralMessages with earlier runs of the chat", () => {
   it("closes each of two runs in a row that stored no reply", () => {
     expect(messagesOf([ask("one"), turn([call("a")]), result("a"), ask("two"), turn([call("b")]), result("b"), ask("three")])).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "one" },
+      said("one"),
       { role: "assistant", content: "", tool_calls: [toolCall("a")] },
       toolOutput("a"),
       { role: "assistant", content: RUN_ENDED_EARLY },
-      { role: "user", content: "two" },
+      said("two"),
       { role: "assistant", content: "", tool_calls: [toolCall("b")] },
       toolOutput("b"),
       { role: "assistant", content: RUN_ENDED_EARLY },
-      { role: "user", content: "three" },
+      said("three"),
     ]);
   });
 
@@ -372,7 +442,7 @@ describe("toMistralMessages with earlier runs of the chat", () => {
     ];
     expect(messagesOf(events)).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "first" },
+      said("first"),
       ...["c", "d", "e"].flatMap((id) => [{ role: "assistant", content: "", tool_calls: [toolCall(id)] }, toolOutput(id, "x".repeat(4075))]),
       {
         role: "assistant",
@@ -384,7 +454,7 @@ describe("toMistralMessages with earlier runs of the chat", () => {
           `2. write_file {"path":"notes.txt","content":"${"y".repeat(129)}... -> error`,
         ].join("\n"),
       },
-      { role: "user", content: "second" },
+      said("second"),
     ]);
   });
 
@@ -401,9 +471,9 @@ describe("toMistralMessages with earlier runs of the chat", () => {
     const messages = messagesOf([ask("first"), ...stepsOf("a", 30, 1), ask("continue"), ...stepsOf("b", 82, 1), ask("third")]);
     expect(messages.slice(0, 4)).toEqual([
       { role: "system", content: "s" },
-      { role: "user", content: "first" },
+      said("first"),
       { role: "assistant", content: `${RUN_ENDED_EARLY}\n[Its 30 steps are not listed.]` },
-      { role: "user", content: "continue" },
+      said("continue"),
     ]);
     const lines = String(messages.at(-2)?.content).split("\n");
     expect(lines.slice(0, 3)).toEqual([RUN_ENDED_EARLY, LISTED_STEPS, '31. shell {"command":"ls"} -> ok, exit code 0']);
@@ -441,7 +511,8 @@ describe("toMistralMessages with a routine made before schedule_create", () => {
     const proposed = { id: "old", name: "schedule_propose", arguments: '{"instruction":"Read the news.","cadence":{"kind":"everyHours","hours":6}}' };
     const messages = toMistralMessages({
       system: "s",
-      history: historyOf([user, turn([proposed]), { kind: "toolResult", toolCallId: "old", name: "schedule_propose", outcome: "ok", output: "Created routine r1.", truncated: false }]),
+      history: historyFor([user, turn([proposed]), { kind: "toolResult", toolCallId: "old", name: "schedule_propose", outcome: "ok", output: "Created routine r1.", truncated: false }]),
+      timeZone: undefined,
     });
     expect(messages[2]).toMatchObject({ tool_calls: [{ id: "old", function: { name: "schedule_create", arguments: proposed.arguments } }] });
     expect(messages[3]).toMatchObject({ role: "tool", tool_call_id: "old", name: "schedule_create" });
@@ -463,7 +534,7 @@ describe("toMistralMessages with looks at the screen", () => {
   const events = [user, turn([{ ...call("old"), name: "desktop_look" }]), looked("old"), turn([{ ...call("sh"), name: "shell" }]), result("sh"), turn([{ ...call("new"), name: "desktop_look" }]), looked("new")];
 
   it("gives the newest look its text and its picture, and every older look one line", () => {
-    const messages = toMistralMessages({ system: "s", history: historyOf(events), screen });
+    const messages = toMistralMessages({ system: "s", history: historyFor(events), timeZone: undefined, screen });
     const tools = messages.filter((message) => message.role === "tool");
     expect(tools[0]).toEqual({ role: "tool", tool_call_id: "old", name: "desktop_look", content: `outcome: ok\n\nLooked at the screen.\n${OLDER_LOOK}` });
     expect(tools[1]).toEqual({ role: "tool", tool_call_id: "sh", name: "shell", content: "outcome: ok\nexit code: 0\n\nout" });
@@ -489,13 +560,13 @@ describe("toMistralMessages with looks at the screen", () => {
   it("gives a desktop call that brought nothing back no hint to look again", () => {
     for (const outcome of ["denied", "invalid", "rejected"] as const) {
       const clicked: RunEventBody = { kind: "toolResult", toolCallId: "click", name: "desktop_click", outcome, output: "It did not run.", truncated: false };
-      const messages = toMistralMessages({ system: "s", history: historyOf([...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked]), screen });
+      const messages = toMistralMessages({ system: "s", history: historyFor([...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked]), timeZone: undefined, screen });
       expect(messages.at(-1)).toEqual({ role: "tool", tool_call_id: "click", name: "desktop_click", content: `outcome: ${outcome}\n\nIt did not run.` });
     }
   });
 
   it("gives a look with no picture its text alone", () => {
-    const messages = toMistralMessages({ system: "s", history: historyOf(events), screen: { ...screen, imageUrl: null } });
+    const messages = toMistralMessages({ system: "s", history: historyFor(events), timeZone: undefined, screen: { ...screen, imageUrl: null } });
     expect(messages.find((message) => message.role === "tool" && message.tool_call_id === "new")?.content).toEqual([
       { type: "text", text: "outcome: ok\n\nLooked at the screen.\n\nScreen 1280x800. No window is active." },
     ]);
@@ -580,13 +651,13 @@ describe("toMistralMessages with routine reports", () => {
   it("answers a read-only run's instruction as a user message", () => {
     const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
     const messages = messagesOf([fired, turn([call("a")]), rejected("a")]);
-    expect(messages[1]).toEqual({ role: "user", content: "Check the news." });
+    expect(messages[1]).toEqual(said("Check the news."));
     expectAModelWouldAccept(messages);
   });
 });
 
 describe("systemPrompt", () => {
-  const base = { run: { capability: "full" } as const, botName: "Ada", botId: "bot123", title: undefined, description: undefined, about: undefined, notes: [], timeZone: undefined, now: Date.UTC(2026, 10, 10, 13, 32), routines: [] };
+  const base = { run: { capability: "full" } as const, botName: "Ada", botId: "bot123", title: undefined, description: undefined, about: undefined, notes: [], timeZone: undefined, routines: [] };
   const prompt = systemPrompt(base);
 
   it("names the bot and its workspace, and keeps passwords out of the chat", () => {
@@ -606,39 +677,36 @@ describe("systemPrompt", () => {
     expect(systemPrompt({ ...base, run: { capability: "readOnly", final: false, reports: [] } })).not.toMatch(/earlier request|not shown/);
   });
 
-  describe("the clock line", () => {
-    const TRUST = "This comes from the system clock, so trust it over your own sense of the date.";
-    const clockLine = (now: number, timeZone: string | undefined) =>
-      systemPrompt({ ...base, now, timeZone })
-        .split("\n")
-        .filter((line) => line.startsWith("It is now "));
+  describe("the time", () => {
+    const routine = { ...base, run: { capability: "readOnly", final: false, reports: [] } as const };
+    const A_DATE_OR_A_TIME = /\d{1,2}:\d{2}|\b\d{4}\b|\b(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/;
 
-    it("gives the date and time in the owner's time zone, and the same instant in UTC", () => {
-      expect(clockLine(Date.UTC(2026, 10, 10, 13, 32), "Europe/Stockholm")).toEqual([
-        `It is now Tuesday, 10 November 2026, 14:32 in Europe/Stockholm, which is 2026-11-10T13:32Z. ${TRUST}`,
-      ]);
+    afterEach(() => {
+      vi.useRealTimers();
     });
 
-    it("reads the daylight-saving hour in summer", () => {
-      expect(clockLine(Date.UTC(2026, 6, 14, 13, 32), "Europe/Stockholm")).toEqual([
-        `It is now Tuesday, 14 July 2026, 15:32 in Europe/Stockholm, which is 2026-07-14T13:32Z. ${TRUST}`,
-      ]);
+    it.each([
+      ["a full run", base],
+      ["a full run whose owner has a time zone", { ...base, timeZone: "Europe/Stockholm" }],
+      ["a read-only run", routine],
+    ])("gives %s no date and no time, and the same text a day later", (_label, args) => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 10, 13, 32) });
+      const before = systemPrompt(args);
+      vi.setSystemTime(Date.UTC(2026, 10, 11, 14, 47));
+      expect(systemPrompt(args)).toBe(before);
+      expect(before).not.toMatch(A_DATE_OR_A_TIME);
     });
 
-    it("reads the next day where the owner's day has already turned", () => {
-      expect(clockLine(Date.UTC(2026, 10, 10, 22, 15), "Pacific/Auckland")).toEqual([
-        `It is now Wednesday, 11 November 2026, 11:15 in Pacific/Auckland, which is 2026-11-10T22:15Z. ${TRUST}`,
-      ]);
+    it("tells a full run that each message starts with its time, which is the time now unless the run has waited", () => {
+      expect(prompt.split("\n")).toContain(
+        "Each message from your owner starts with the time it was sent, in square brackets. The time comes from the system clock, so trust it over your own sense of the date. The newest one is the time now, unless this run has waited a long time, and then the date command in your shell gives the time.",
+      );
     });
 
-    it("reads five past midnight as 00:05", () => {
-      expect(clockLine(Date.UTC(2026, 10, 10, 23, 5), "Europe/Stockholm")).toEqual([
-        `It is now Wednesday, 11 November 2026, 00:05 in Europe/Stockholm, which is 2026-11-10T23:05Z. ${TRUST}`,
-      ]);
-    });
-
-    it("reads UTC when the owner has no time zone", () => {
-      expect(clockLine(Date.UTC(2026, 10, 10, 13, 32), undefined)).toEqual([`It is now Tuesday, 10 November 2026, 13:32 UTC. ${TRUST}`]);
+    it("tells a read-only run that its instruction starts with the time the run began, and names no shell", () => {
+      const lines = systemPrompt(routine).split("\n");
+      expect(lines).toContain("Your instruction starts with the time this run began, in square brackets. The time comes from the system clock, so trust it over your own sense of the date.");
+      expect(lines.filter((line) => line.includes("square brackets"))).toHaveLength(1);
     });
   });
 
@@ -848,19 +916,12 @@ describe("a read-only run's prompt", () => {
     about: "I live in Lund.",
     notes: [owner],
     timeZone: "Europe/Stockholm",
-    now: Date.UTC(2026, 10, 10, 13, 32),
     routines: [{ id: "r1", title: "News", when: "Every hour", next: "paused", instruction: "A routine this run must not read." }],
   };
   const readOnly = (reports: PromptReport[] = [], final = false) => systemPrompt({ ...base, run: { capability: "readOnly", final, reports } });
 
   it("leaves out the rules for writing notes", () => {
     expect(readOnly()).not.toMatch(/memory_save|memory_forget|Never save/);
-  });
-
-  it("gives the date and time, as a chat run's prompt does", () => {
-    expect(readOnly().split("\n")).toContain(
-      "It is now Tuesday, 10 November 2026, 14:32 in Europe/Stockholm, which is 2026-11-10T13:32Z. This comes from the system clock, so trust it over your own sense of the date.",
-    );
   });
 
   it("gives the description to read, says it cannot change it, and takes its work from the routine", () => {
@@ -928,13 +989,12 @@ describe("a read-only run's prompt", () => {
 });
 
 describe("modelRequest", () => {
-  const prompt = { botName: "Ada", botId: "bot123", title: undefined, description: undefined, about: undefined, notes: [], timeZone: undefined, now: Date.UTC(2026, 10, 10, 13, 32), routines: [] };
-  const offered = (run: PromptRun) => modelRequest({ prompt: { ...prompt, run }, history: historyOf([user]) }).tools.map((tool) => tool.function.name);
+  const prompt = { botName: "Ada", botId: "bot123", title: undefined, description: undefined, about: undefined, notes: [], timeZone: undefined, routines: [] };
+  const offered = (run: PromptRun) => modelRequest({ prompt: { ...prompt, run }, history: historyFor([user]) }).tools.map((tool) => tool.function.name);
 
-  it("puts the date and time in the system message", () => {
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
-    expect(messages[0]?.role).toBe("system");
-    expect(String(messages[0]?.content)).toContain("It is now Tuesday, 10 November 2026, 13:32 UTC.");
+  it("reads the time of the owner's message in the owner's time zone", () => {
+    const { messages } = modelRequest({ prompt: { ...prompt, timeZone: "Europe/Stockholm", run: { capability: "full" } }, history: historyFor([user]) });
+    expect(messages[1]).toEqual({ role: "user", content: "[Tuesday, 10 November 2026, 14:03 in Europe/Stockholm, which is 2026-11-10T13:03Z]\nhi" });
   });
 
   it("offers a full run every tool", () => {
@@ -950,7 +1010,7 @@ describe("modelRequest", () => {
   });
 
   it("tells a read-only run about no tool it lacks, and no login it does not have", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor([user]) });
     const text = tools.map((tool) => tool.function.description).join(" ");
     expect(text).not.toMatch(/browser_click|browser_type|browser_press|take over|take it over|shares? logins/i);
     expect(text).toMatch(/none of your owner's logins/);
@@ -958,30 +1018,30 @@ describe("modelRequest", () => {
   });
 
   it("sends a full run the shared definitions untouched", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyFor([user]) });
     expect(tools).toEqual(toolDefinitions);
   });
 
   it("keeps each read-only tool's name and arguments", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor([user]) });
     for (const tool of tools) {
       expect(tool.function.parameters).toEqual(toolDefinitions.find((shared) => shared.function.name === tool.function.name)?.function.parameters);
     }
   });
 
   it("puts the prompt first and the history after it", () => {
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
+    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyFor([user]) });
     expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
-    expect(messages[1]).toEqual({ role: "user", content: "hi" });
+    expect(messages[1]).toEqual(said("hi"));
   });
 
   it("sends a read-only run every step whole, with 40,000 characters of pages read", () => {
     const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
     const page = "p".repeat(20_000);
     const events = [fired, thinking(turn([call("a")]), "look"), result("a", "ok", page), turn([call("b")]), result("b", "ok", page), turn([call("c")]), rejected("c")];
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf(events) });
+    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor(events) });
     expect(messages.slice(1)).toEqual([
-      { role: "user", content: "Check the news." },
+      said("Check the news."),
       { role: "assistant", content: [{ type: "thinking", thinking: [{ type: "text", text: "look" }] }], tool_calls: [toolCall("a")] },
       toolOutput("a", page),
       { role: "assistant", content: "", tool_calls: [toolCall("b")] },
@@ -989,6 +1049,67 @@ describe("modelRequest", () => {
       { role: "assistant", content: "", tool_calls: [toolCall("c")] },
       { role: "tool", tool_call_id: "c", name: "shell", content: "outcome: rejected\n\nno" },
     ]);
+  });
+});
+
+describe("modelRequest over the calls of one run", () => {
+  const MINUTE = 60_000;
+  const note: PromptNote = { id: "n1", by: "you", date: "2026-11-06", text: "The owner likes tea." };
+  const prompt = {
+    botName: "Ada",
+    botId: "bot123",
+    title: "Scout",
+    description: "Watch the release notes.",
+    about: "I live in Lund.",
+    notes: [note],
+    timeZone: "Europe/Stockholm",
+    routines: [{ id: "r1", title: "News", when: "Every hour", next: "2026-11-10T14:00:00.000Z", instruction: "Read the news." }],
+  };
+  const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+  const at = (body: RunEventBody, sentAt: number) => threadEventOf({ body, _creationTime: sentAt });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each<[string, PromptRun, RunEventBody[], RunEventBody[][]]>([
+    [
+      "a chat run of 39 steps, after an answered request and a run that stored no reply",
+      { capability: "full" },
+      [ask("one"), ...stepsOf("a", 3, 1), turn([], "done"), ask("two"), ...stepsOf("b", 30, 1), ask("three")],
+      Array.from({ length: 39 }, (_, index) => stepOf(`c${index + 1}`, 4)),
+    ],
+    [
+      "a routine's run of 10 pages",
+      { capability: "readOnly", final: false, reports: [{ date: "2026-11-09T05:00:00.000Z", text: "Quiet day." }] },
+      [fired],
+      Array.from({ length: 10 }, (_, index) => stepOf(`p${index + 1}`, 20)),
+    ],
+  ])("sends every request of %s again, unchanged, as the start of the next request", (_label, run, before, steps) => {
+    vi.useFakeTimers({ now: SENT_AT });
+    const events = before.map((body, index) => at(body, SENT_AT - (before.length - index) * MINUTE));
+    let previous = modelRequest({ prompt: { ...prompt, run }, history: historyOf(events) }).messages;
+    for (const step of steps) {
+      vi.setSystemTime(Date.now() + 7 * MINUTE);
+      events.push(...step.map((body) => at(body, Date.now())));
+      const { messages } = modelRequest({ prompt: { ...prompt, run }, history: historyOf(events) });
+      expect(messages[0]?.content).toBe(previous[0]?.content);
+      expect(messages.slice(0, previous.length)).toEqual(previous);
+      expect(JSON.stringify(messages).startsWith(JSON.stringify(previous).slice(0, -1))).toBe(true);
+      expect(messages).toHaveLength(previous.length + step.length);
+      previous = messages;
+    }
+  });
+
+  it("changes the system message, and no message after it, when the bot saves a note between two calls", () => {
+    const save = { id: "save", name: "memory_save", arguments: '{"text":"The owner likes tea."}' };
+    const saved: RunEventBody = { kind: "toolResult", toolCallId: "save", name: "memory_save", outcome: "ok", output: "Saved note n1.", truncated: false };
+    const events = [at(ask("Remember that I like tea."), SENT_AT), at(turn([save]), 0), at(saved, 0)];
+    const first = modelRequest({ prompt: { ...prompt, notes: [], run: { capability: "full" } }, history: historyOf(events.slice(0, 1)) }).messages;
+    const second = modelRequest({ prompt: { ...prompt, notes: [note], run: { capability: "full" } }, history: historyOf(events) }).messages;
+    expect(second[0]).not.toEqual(first[0]);
+    expect(second.slice(1, first.length)).toEqual(first.slice(1));
+    expect(second).toHaveLength(first.length + 2);
   });
 });
 

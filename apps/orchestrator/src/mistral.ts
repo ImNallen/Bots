@@ -19,7 +19,7 @@ export type CompletedTurn = {
   text: string;
   reasoning?: string;
   toolCalls: { id: string; name: string; arguments: string }[];
-  usage: { promptTokens: number; completionTokens: number };
+  usage: { promptTokens: number; completionTokens: number; cachedTokens?: number };
   model: string;
 };
 
@@ -57,7 +57,11 @@ const streamChunk = z.looseObject({
     )
     .nullish(),
   usage: z
-    .looseObject({ prompt_tokens: z.number().nullish(), completion_tokens: z.number().nullish() })
+    .looseObject({
+      prompt_tokens: z.number().nullish(),
+      completion_tokens: z.number().nullish(),
+      prompt_tokens_details: z.looseObject({ cached_tokens: z.number().nullish() }).nullish(),
+    })
     .nullish(),
 });
 
@@ -125,7 +129,7 @@ export function createTurnAccumulator(args: { fallbackModel: string }) {
   let reasoning = "";
   let model = args.fallbackModel;
   let finished = false;
-  let usage = { promptTokens: 0, completionTokens: 0 };
+  let usage: CompletedTurn["usage"] = { promptTokens: 0, completionTokens: 0 };
   let toolCallBytes = 0;
   const calls: PartialCall[] = [];
   const ignoredChunkTypes = new Set<string>();
@@ -198,9 +202,12 @@ export function createTurnAccumulator(args: { fallbackModel: string }) {
       const chunk = streamChunk.parse(raw);
       model = chunk.model ?? model;
       if (chunk.usage !== undefined && chunk.usage !== null) {
+        // No count is not a count of 0, so the key stays absent until Mistral reports one.
+        const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? usage.cachedTokens;
         usage = {
           promptTokens: chunk.usage.prompt_tokens ?? usage.promptTokens,
           completionTokens: chunk.usage.completion_tokens ?? usage.completionTokens,
+          ...(cachedTokens === undefined ? {} : { cachedTokens }),
         };
       }
       for (const choice of chunk.choices ?? []) {
@@ -268,6 +275,7 @@ type CompletionArgs = {
   model: string;
   messages: MistralMessage[];
   tools: readonly unknown[];
+  promptCacheKey: string;
   signal: AbortSignal;
   onAttempt: () => void;
   onProgress: (snapshot: StreamSnapshot) => void;
@@ -332,6 +340,7 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
         messages: completion.messages,
         ...(completion.tools.length === 0 ? {} : { tools: completion.tools, tool_choice: "auto", parallel_tool_calls: false }),
         stream: true,
+        prompt_cache_key: completion.promptCacheKey,
       }),
       signal,
     });

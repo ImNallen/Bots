@@ -89,6 +89,27 @@ Nothing is stored for this view, and no model writes a summary. A summary would 
 
 Each model call also logs `model-call` with its real `promptTokens` and with the `storedBytes` and `sentBytes` of its history, so the journal shows the effect on real runs.
 
+### What two requests of one run share
+
+Mistral bills a prompt token at a tenth when it is in a prefix that an earlier request also sent, in blocks of 64 tokens. So the start of a request must not change from one call to the next.
+
+The date and time used to be a line in the system message, which is the first message, and the line changed every minute. Each message from the owner now starts with the time it was sent, in square brackets, read from its row's `_creationTime`. A routine's instruction starts with the time its run began. The words are the ones the clock line had: the owner's time zone with the same instant in UTC, or UTC alone when no zone is set. An earlier message keeps its own time, so the bot can also tell yesterday's request from today's.
+
+`ThreadEvent` in `history.ts` holds this as a type. An owner's message or a routine's instruction always carries its time, and a turn or a tool result never does, because Convex stores the first two and the orchestrator appends only the last two. No function that builds a request takes a clock.
+
+The cost is a time that can be old. A run reads the time of the message that started it. After a long wait on a question card, that time is behind, and the prompt tells a chat run to ask its shell for the date in that case.
+
+Each request also sends `prompt_cache_key` with the thread's id, which Mistral's page says raises the chance of a hit. `mistral.ts` reads `usage.prompt_tokens_details.cached_tokens` from the stream. A turn stores it as `usage.cachedTokens`, and the `model-call` log line and `scripts/context-report.ts` report it. The field is absent when Mistral sent no count, so no count never reads as a count of 0.
+
+Inside a run, a request is now the one before it plus the new turn and its results. These things still change the start of a request:
+
+- A new message from the owner. The exchange before it closes, so its steps leave, and the shared part ends at that exchange's first message.
+- A second `desktop_look`. The older look's tool message loses its picture and its marks.
+- A read-only run's final call, which adds a rule to the system message and offers no tools.
+- A change to a note, the description, a routine, or the owner's time zone, which the system message or each time line holds.
+
+Mistral's page gives no lifetime for a cached prefix and no list of models, and it does not say where the tool definitions sit in the prompt. No real model has run on this code, so nothing shows yet that `mistral-large-4` caches these requests.
+
 [The roadmap](roadmap.md#less-history-in-each-model-call) lists what this does not do yet.
 
 ## Why identity comes from Tailscale
@@ -691,7 +712,7 @@ The rule holds in three places, so a bug in one does not open it:
 
 ### What a model reads
 
-`modelRequest` in `apps/orchestrator/src/run-logic.ts` builds each model call from stored facts and the time of the call.
+`modelRequest` in `apps/orchestrator/src/run-logic.ts` builds each model call from stored facts alone.
 
 | | Chat run | Read-only run |
 |---|---|---|
@@ -702,7 +723,7 @@ The rule holds in three places, so a bug in one does not open it:
 | Tools | All of them | Those that read, and none on the final call |
 | Prompt | The full rules | No rules for writing notes or the description. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
 
-The description, `about`, and the notes reach both. Both prompts also give the date and time of the call, read from the orchestrator's clock, in the owner's time zone with the same instant in UTC, or in UTC alone when no zone is set. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `historyOf` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
+The description, `about`, and the notes reach both. Neither prompt holds the date or the time. The owner's messages and a routine's instruction carry it, as [What two requests of one run share](#what-two-requests-of-one-run-share) says. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `historyOf` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
 
 ### Where a routine's pages and reports go
 

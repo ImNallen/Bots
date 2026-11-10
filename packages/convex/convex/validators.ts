@@ -43,7 +43,7 @@ export const runEventBody = v.union(
     text: v.string(),
     reasoning: v.optional(v.string()),
     toolCalls: v.array(toolCall),
-    usage: v.object({ promptTokens: v.number(), completionTokens: v.number() }),
+    usage: v.object({ promptTokens: v.number(), completionTokens: v.number(), cachedTokens: v.optional(v.number()) }),
     model: v.string(),
   }),
   v.object(toolResultFields),

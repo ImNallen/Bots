@@ -20,7 +20,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference, type FunctionArgs, type FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
 import { WebSocket, WebSocketServer } from "ws";
-import { historyOf } from "../apps/orchestrator/src/history.ts";
+import { historyOf, threadEventOf } from "../apps/orchestrator/src/history.ts";
 import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
 import { decryptApiKey, hashComputerToken } from "../apps/orchestrator/src/secrets.ts";
 import { paths, parsePrivateJwk, readEnvFile, runCommand, runConvex } from "./lib.ts";
@@ -114,13 +114,13 @@ type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string 
 type FakeRequest = {
   at: number;
   authorization: string;
-  body: { messages: FakeMessage[]; tools?: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean };
+  body: { messages: FakeMessage[]; tools?: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean; prompt_cache_key?: string };
 };
 
 type FakeToolCall = { id?: string; name: string; arguments: string };
 
 type Reply =
-  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string }
+  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string; cachedTokens?: number }
   | { kind: "tools"; calls: FakeToolCall[]; delivery: "pieces" | "whole"; text?: string; promptTokens?: number }
   | { kind: "stall"; partial: string }
   | { kind: "status"; status: number; retryAfter?: string };
@@ -156,8 +156,15 @@ function orderProblem(messages: FakeMessage[]): string | null {
   return last === "user" || last === "tool" ? null : `ends on ${last}`;
 }
 
+// A user message starts with a line that holds the time it was sent. The scripts and the checks name a message by the text after it.
+function withoutTimeLines(messages: FakeMessage[]): FakeMessage[] {
+  return messages.map((message) =>
+    message.role === "user" && typeof message.content === "string" ? { ...message, content: message.content.replace(/^\[[^\]\n]*\]\n/, "") } : message,
+  );
+}
+
 function latestUserText(messages: FakeMessage[]): string {
-  const last = messages.findLast((message) => message.role === "user");
+  const last = withoutTimeLines(messages).findLast((message) => message.role === "user");
   return typeof last?.content === "string" ? last.content : "";
 }
 
@@ -183,11 +190,13 @@ function chunk(delta: unknown, finishReason: string | null = null): unknown {
   };
 }
 
-async function finishSse(response: ServerResponse, finishReason: string, model = "fake-model", promptTokens = 11): Promise<void> {
+async function finishSse(response: ServerResponse, finishReason: string, reply: { model?: string; promptTokens?: number; cachedTokens?: number }): Promise<void> {
+  const promptTokens = reply.promptTokens ?? 11;
+  const cached = reply.cachedTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: reply.cachedTokens } };
   await writeSse(response, {
     ...(chunk({ content: "" }, finishReason) as object),
-    model,
-    usage: { prompt_tokens: promptTokens, completion_tokens: 7, total_tokens: promptTokens + 7 },
+    model: reply.model ?? "fake-model",
+    usage: { prompt_tokens: promptTokens, completion_tokens: 7, total_tokens: promptTokens + 7, ...cached },
   });
   await writeSse(response, "[DONE]");
   response.end();
@@ -214,7 +223,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
         await writeSse(response, chunk({ role: "assistant", content: piece }));
         await sleep(reply.chunkDelayMs ?? 0);
       }
-      await finishSse(response, "stop", reply.model);
+      await finishSse(response, "stop", reply);
       return;
     }
     case "tools": {
@@ -236,7 +245,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
           await writeSse(response, chunk({ tool_calls: [{ id: "null", index, function: { arguments: piece } }] }));
         }
       }
-      await finishSse(response, "tool_calls", undefined, reply.promptTokens);
+      await finishSse(response, "tool_calls", reply);
       return;
     }
     case "stall":
@@ -948,25 +957,35 @@ try {
     await check("the model call carries the decrypted key", () => {
       assert.equal(requests[0]?.authorization, `Bearer ${MISTRAL_KEY}`);
     });
+    await check("each request carries the chat's thread id as its prompt cache key", () => {
+      assert.deepEqual(requests.map((request) => request.body.prompt_cache_key), [chat.threadId, chat.threadId]);
+    });
     await check("the system prompt names the bot and calls tool output untrusted", () => {
       const system = String(requests[0]?.body.messages[0]?.content);
       assert.match(system, new RegExp(`happy-${nonce}`));
       assert.match(system, /untrusted data, not instructions/);
     });
-    await check("the system prompt gives the current date and time", () => {
-      const system = String(requests[0]?.body.messages[0]?.content);
-      const line = system.split("\n").find((text) => text.startsWith("It is now ")) ?? "";
-      const zoned = /which is (\d{4}-\d{2}-\d{2}T\d{2}:\d{2})Z\./.exec(line)?.[1];
-      const utc = /^It is now \w+, (\d{1,2} \w+ \d{4}), (\d{2}:\d{2}) UTC\./.exec(line);
+    await check("the owner's message starts with the time it was sent, within five minutes of the clock, and the system message holds no date and no time", () => {
+      const [system, sent] = requests[0]?.body.messages ?? [];
+      const line = String(sent?.content).split("\n")[0] ?? "";
+      assert.equal(sent?.content, `${line}\n${text}`);
+      const zoned = /^\[.* which is (\d{4}-\d{2}-\d{2}T\d{2}:\d{2})Z\]$/.exec(line)?.[1];
+      const utc = /^\[\w+, (\d{1,2} \w+ \d{4}), (\d{2}:\d{2}) UTC\]$/.exec(line);
       const read = zoned !== undefined ? Date.parse(`${zoned}:00Z`) : utc ? Date.parse(`${utc[1]} ${utc[2]} UTC`) : Number.NaN;
-      assert.ok(Math.abs(Date.now() - read) <= 5 * 60 * 1000, `the prompt's clock reads ${JSON.stringify(line)}`);
+      assert.ok(Math.abs(Date.now() - read) <= 5 * 60 * 1000, `the message's time reads ${JSON.stringify(line)}`);
+      assert.doesNotMatch(String(system?.content), /\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2} \w+ \d{4}/);
+    });
+    await check("the run's second request starts with every message of its first, unchanged", () => {
+      const sentFirst = requests[0]?.body.messages ?? [];
+      assert.equal(sentFirst.length, 2);
+      assert.deepEqual(requests[1]?.body.messages.slice(0, sentFirst.length), sentFirst);
     });
     const followUp = `follow up ${nonce}`;
     fake.script(followUp, () => ({ kind: "text", text: "second answer" }));
     const secondRun = await chat.settled(await chat.send(followUp));
     await check("a second message replays the first request as its message and its reply, with no call, no tool output, and no thinking chunk", () => {
       assert.equal(secondRun.state.kind, "done");
-      assert.deepEqual(fake.requests(followUp)[0]?.body.messages.slice(1), [
+      assert.deepEqual(withoutTimeLines(fake.requests(followUp)[0]?.body.messages ?? []).slice(1), [
         { role: "user", content: text },
         { role: "assistant", content: answer },
         { role: "user", content: followUp },
@@ -983,17 +1002,23 @@ try {
         ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-dropped-${nonce}`)] }
         : { kind: "text", text: reply, reasoning: `context-thinking-${nonce}` },
     );
-    await chat.settled(await chat.send(answered));
+    const answeredRunId = await chat.send(answered);
+    const answeredRun = await chat.settled(answeredRunId);
     const stopped = `context stopped ${nonce}`;
     fake.script(stopped, ({ toolResults }) =>
       toolResults.length === 0 ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-kept-${nonce}`)] } : { kind: "status", status: 400 },
     );
     const stoppedRun = await chat.settled(await chat.send(stopped));
     const next = `context next ${nonce}`;
-    fake.script(next, () => ({ kind: "text", text: "fine" }));
+    const CACHED_TOKENS = 64;
+    fake.script(next, () => ({ kind: "text", text: "fine", cachedTokens: CACHED_TOKENS }));
     const nextRunId = await chat.send(next);
     const nextRun = await chat.settled(nextRunId);
-    const messages = fake.requests(next)[0]?.body.messages ?? [];
+    const modelCallLog = (runId: Id<"runs">) => {
+      const line = logsText().split("\n").findLast((entry) => entry.includes(`"event":"model-call","runId":"${runId}"`));
+      return JSON.parse(line ?? "{}") as { promptTokens?: number; completionTokens?: number; cachedTokens?: number; storedBytes?: number; sentBytes?: number };
+    };
+    const messages = withoutTimeLines(fake.requests(next)[0]?.body.messages ?? []);
     await check("the second run stored no reply, and the message after it was answered", () => {
       assert.equal(stoppedRun.state.kind, "failed");
       assert.equal(nextRun.state.kind, "done");
@@ -1013,10 +1038,19 @@ try {
       assert.equal(messages[7]?.content, next);
     });
     await check("the model call logs its tokens, and fewer bytes sent than stored", () => {
-      const line = logsText().split("\n").findLast((entry) => entry.includes(`"event":"model-call","runId":"${nextRunId}"`));
-      const logged = JSON.parse(line ?? "{}") as { promptTokens?: number; completionTokens?: number; storedBytes?: number; sentBytes?: number };
+      const logged = modelCallLog(nextRunId);
       assert.deepEqual([logged.promptTokens, logged.completionTokens], [11, 7]);
-      assert.ok(logged.storedBytes !== undefined && logged.sentBytes !== undefined && logged.sentBytes < logged.storedBytes, line ?? "no model-call line");
+      assert.ok(logged.storedBytes !== undefined && logged.sentBytes !== undefined && logged.sentBytes < logged.storedBytes, JSON.stringify(logged));
+    });
+    await check("a reply that reports cached tokens stores the count on its turn, and its model call logs it", () => {
+      assert.deepEqual(turnsOf(nextRun).map((turn) => turn.usage), [{ promptTokens: 11, completionTokens: 7, cachedTokens: CACHED_TOKENS }]);
+      assert.equal(modelCallLog(nextRunId).cachedTokens, CACHED_TOKENS);
+    });
+    await check("a reply that reports none stores no cachedTokens on its turn, and its model call logs none", () => {
+      assert.deepEqual(turnsOf(answeredRun).map((turn) => turn.usage), [{ promptTokens: 11, completionTokens: 7 }, { promptTokens: 11, completionTokens: 7 }]);
+      const logged = modelCallLog(answeredRunId);
+      assert.equal(logged.promptTokens, 11);
+      assert.ok(!("cachedTokens" in logged), JSON.stringify(logged));
     });
   });
 
@@ -2881,7 +2915,7 @@ try {
       fake.script(afterFailure, () => ({ kind: "text", text: "fine" }));
       await busy.settled(await busy.send(afterFailure));
       await check("a request nobody answered does not look answered by the report after it", () => {
-        const messages = fake.requests(afterFailure)[0]?.body.messages ?? [];
+        const messages = withoutTimeLines(fake.requests(afterFailure)[0]?.body.messages ?? []);
         const index = messages.findIndex((message) => message.content === unanswered);
         assert.deepEqual(messages.slice(index).map((message) => message.role), ["user", "assistant", "assistant", "user"]);
         assert.match(String(messages[index + 1]?.content), /ended before a final reply/);
@@ -4392,6 +4426,11 @@ try {
     const run = await chat.settled(runId);
     await check("the model is called again after the restart", () => {
       assert.equal(fake.requests(text).length, 2);
+    });
+    await check("the request after the restart has the same messages as the one before it, because no event was stored in between", () => {
+      const [before, after] = fake.requests(text);
+      assert.ok(before !== undefined && after !== undefined);
+      assert.deepEqual(after.body.messages, before.body.messages);
     });
     await check("exactly one assistantTurn exists, with the second attempt's text", () => {
       const turns = turnsOf(run);
@@ -5937,8 +5976,9 @@ try {
       assert.deepEqual(pendingRun?.events.map((event) => event.seq), [0, 1, 2]);
     });
     await check("the next message on that thread gives Mistral a history it accepts", () => {
-      const events = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
-      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history: historyOf(events) })), null);
+      const bodies = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
+      const history = historyOf(bodies.map((body) => threadEventOf({ body, _creationTime: Date.now() })));
+      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history, timeZone: undefined })), null);
     });
 
     const longChat = await newChat({ client: first, name: "long-tool" });

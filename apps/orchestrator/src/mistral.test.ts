@@ -58,6 +58,39 @@ describe("createTurnAccumulator", () => {
     });
   });
 
+  describe("with the prompt cache", () => {
+    const usageOf = (...usages: unknown[]) => accumulate(usages.map((usage) => ({ usage, ...delta({ content: "" }) }))).finish().usage;
+
+    it("gives the cached tokens that Mistral reports", () => {
+      expect(usageOf({ prompt_tokens: 900, completion_tokens: 7, total_tokens: 907, prompt_tokens_details: { cached_tokens: 832 } })).toEqual({
+        promptTokens: 900,
+        completionTokens: 7,
+        cachedTokens: 832,
+      });
+    });
+
+    it("keeps a reported 0 as 0", () => {
+      expect(usageOf({ prompt_tokens: 900, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 0 } }).cachedTokens).toBe(0);
+    });
+
+    it.each([
+      ["no details", { prompt_tokens: 900, completion_tokens: 7 }],
+      ["null details", { prompt_tokens: 900, completion_tokens: 7, prompt_tokens_details: null }],
+      ["details with no count", { prompt_tokens: 900, completion_tokens: 7, prompt_tokens_details: {} }],
+      ["a null count", { prompt_tokens: 900, completion_tokens: 7, prompt_tokens_details: { cached_tokens: null } }],
+    ])("has no cachedTokens key for a usage with %s, so nothing reads it as 0 cached", (_label, usage) => {
+      expect(Object.keys(usageOf(usage)).toSorted()).toEqual(["completionTokens", "promptTokens"]);
+    });
+
+    it("keeps an earlier count when a later chunk reports none", () => {
+      expect(usageOf({ prompt_tokens: 900, prompt_tokens_details: { cached_tokens: 832 } }, { prompt_tokens: 900, completion_tokens: 7 })).toEqual({
+        promptTokens: 900,
+        completionTokens: 7,
+        cachedTokens: 832,
+      });
+    });
+  });
+
   it("follows the documented reasoning shape, from thinking chunks to a plain string", () => {
     const accumulator = accumulate([
       delta({ content: [{ type: "thinking", thinking: [{ type: "text", text: "Let me " }] }] }),
@@ -156,6 +189,7 @@ describe("completeWithRetry", () => {
         apiKey: API_KEY,
         messages: [],
         tools: [],
+        promptCacheKey: "thread-1",
         signal: new AbortController().signal,
         onAttempt: () => {},
         onProgress: () => {},
@@ -196,6 +230,7 @@ describe("what a call offers the model", () => {
         apiKey: "key",
         messages: [],
         tools,
+        promptCacheKey: "thread-1",
         signal: new AbortController().signal,
         onAttempt: () => {},
         onProgress: () => {},
@@ -213,7 +248,12 @@ describe("what a call offers the model", () => {
 
   it("sends no tool field at all on a call with no tools", async () => {
     const body = await bodyFor([]);
-    expect(Object.keys(body).toSorted()).toEqual(["messages", "model", "stream"]);
+    expect(Object.keys(body).toSorted()).toEqual(["messages", "model", "prompt_cache_key", "stream"]);
+  });
+
+  it("sends the prompt cache key at the top level of the body, with and without tools", async () => {
+    expect((await bodyFor([])).prompt_cache_key).toBe("thread-1");
+    expect((await bodyFor([{ type: "function" }])).prompt_cache_key).toBe("thread-1");
   });
 });
 

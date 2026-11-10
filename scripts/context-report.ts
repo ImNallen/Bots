@@ -1,5 +1,5 @@
 // Replays stored runs through historyOf and reports what each real model call sent against what this code would send for the same
-// call. It prints counts only, never an event's text.
+// call, and how much of what it sent Mistral's prompt cache served. It prints counts only, never an event's text.
 //
 // Export the two tables from a deployment first, on the machine that holds its admin key, oldest first:
 //   cd packages/convex
@@ -9,10 +9,10 @@
 //   node scripts/context-report.ts <dir>
 import { readFileSync } from "node:fs";
 import type { Doc } from "@bots/convex/dataModel";
-import { historyOf } from "../apps/orchestrator/src/history.ts";
+import { historyOf, threadEventOf } from "../apps/orchestrator/src/history.ts";
 
 type Run = Pick<Doc<"runs">, "_id" | "_creationTime" | "threadId" | "capability">;
-type Event = Pick<Doc<"runEvents">, "runId" | "threadId" | "seq" | "body">;
+type Event = Pick<Doc<"runEvents">, "runId" | "threadId" | "seq" | "body" | "_creationTime">;
 
 const dir = process.argv[2];
 if (dir === undefined) {
@@ -30,7 +30,7 @@ function rows<T>(name: string): T[] {
 const runs = new Map(rows<Run>("runs").map((run) => [run._id, run]));
 const events = rows<Event>("runEvents").filter((event) => runs.has(event.runId));
 
-type Call = { runId: string; capability: Run["capability"]; real: number; storedBytes: number; sentBytes: number };
+type Call = { runId: string; capability: Run["capability"]; real: number; cached: number | undefined; storedBytes: number; sentBytes: number };
 const calls: Call[] = [];
 
 for (const threadEvents of Map.groupBy(events, (event) => event.threadId).values()) {
@@ -42,8 +42,9 @@ for (const threadEvents of Map.groupBy(events, (event) => event.threadId).values
     }
     const capability = runs.get(event.runId)?.capability ?? "full";
     const readByCall = threadEvents.slice(0, index).filter((seen) => capability === "full" || seen.runId === event.runId);
-    const history = historyOf(readByCall.map((seen) => seen.body));
-    calls.push({ runId: event.runId, capability, real: event.body.usage.promptTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
+    const history = historyOf(readByCall.map(threadEventOf));
+    const { promptTokens, cachedTokens } = event.body.usage;
+    calls.push({ runId: event.runId, capability, real: promptTokens, cached: cachedTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
   }
 }
 
@@ -70,10 +71,14 @@ for (const capability of ["full", "readOnly"] as const) {
   const now = (call: Call) => Math.max(call.real - (call.storedBytes - call.sentBytes) * line.slope, 0);
   const realSum = sum(mine.map((call) => call.real));
   const nowSum = sum(mine.map(now));
+  const counted = mine.flatMap((call) => (call.cached === undefined ? [] : [{ cached: call.cached, real: call.real }]));
+  const countedSum = sum(counted.map((call) => call.real));
   console.log(`\n${capability === "full" ? "Chat runs" : "Routine runs"}: ${mine.length} model calls in ${new Set(mine.map((call) => call.runId)).size} runs`);
   console.log(`  fit: prompt tokens = ${whole(line.intercept)} + stored bytes / ${line.slope === 0 ? "n/a" : (1 / line.slope).toFixed(2)}, mean error ${whole(line.meanError)} tokens`);
   console.log(`  prompt tokens, real:       sum ${whole(realSum).padStart(11)}   largest call ${whole(Math.max(...mine.map((call) => call.real))).padStart(8)}`);
   console.log(`  prompt tokens, this code:  sum ${whole(nowSum).padStart(11)}   largest call ${whole(Math.max(...mine.map(now))).padStart(8)}   (estimate, ${share(nowSum, realSum)} of real)`);
+  console.log(`  prompt tokens, cached:     ${share(sum(counted.map((call) => call.cached)), countedSum)} of ${whole(countedSum)} in the ${counted.length} calls that reported a count`);
+  console.log(`                             ${mine.length - counted.length} calls reported no count`);
   console.log("  each run: calls, real sum, estimated sum with this code");
   for (const [runId, runCalls] of Map.groupBy(mine, (call) => call.runId)) {
     console.log(`    ${runId.slice(-6)}  ${String(runCalls.length).padStart(3)}  ${whole(sum(runCalls.map((call) => call.real))).padStart(11)}  ${whole(sum(runCalls.map(now))).padStart(11)}`);
