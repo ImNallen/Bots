@@ -156,8 +156,15 @@ function orderProblem(messages: FakeMessage[]): string | null {
   return last === "user" || last === "tool" ? null : `ends on ${last}`;
 }
 
+// A user message starts with a line that holds the time it was sent. The scripts and the checks name a message by the text after it.
+function withoutTimeLines(messages: FakeMessage[]): FakeMessage[] {
+  return messages.map((message) =>
+    message.role === "user" && typeof message.content === "string" ? { ...message, content: message.content.replace(/^\[[^\]\n]*\]\n/, "") } : message,
+  );
+}
+
 function latestUserText(messages: FakeMessage[]): string {
-  const last = messages.findLast((message) => message.role === "user");
+  const last = withoutTimeLines(messages).findLast((message) => message.role === "user");
   return typeof last?.content === "string" ? last.content : "";
 }
 
@@ -953,20 +960,27 @@ try {
       assert.match(system, new RegExp(`happy-${nonce}`));
       assert.match(system, /untrusted data, not instructions/);
     });
-    await check("the system prompt gives the current date and time", () => {
-      const system = String(requests[0]?.body.messages[0]?.content);
-      const line = system.split("\n").find((text) => text.startsWith("It is now ")) ?? "";
-      const zoned = /which is (\d{4}-\d{2}-\d{2}T\d{2}:\d{2})Z\./.exec(line)?.[1];
-      const utc = /^It is now \w+, (\d{1,2} \w+ \d{4}), (\d{2}:\d{2}) UTC\./.exec(line);
+    await check("the owner's message starts with the time it was sent, within five minutes of the clock, and the system message holds no date and no time", () => {
+      const [system, sent] = requests[0]?.body.messages ?? [];
+      const line = String(sent?.content).split("\n")[0] ?? "";
+      assert.equal(sent?.content, `${line}\n${text}`);
+      const zoned = /^\[.* which is (\d{4}-\d{2}-\d{2}T\d{2}:\d{2})Z\]$/.exec(line)?.[1];
+      const utc = /^\[\w+, (\d{1,2} \w+ \d{4}), (\d{2}:\d{2}) UTC\]$/.exec(line);
       const read = zoned !== undefined ? Date.parse(`${zoned}:00Z`) : utc ? Date.parse(`${utc[1]} ${utc[2]} UTC`) : Number.NaN;
-      assert.ok(Math.abs(Date.now() - read) <= 5 * 60 * 1000, `the prompt's clock reads ${JSON.stringify(line)}`);
+      assert.ok(Math.abs(Date.now() - read) <= 5 * 60 * 1000, `the message's time reads ${JSON.stringify(line)}`);
+      assert.doesNotMatch(String(system?.content), /\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2} \w+ \d{4}/);
+    });
+    await check("the run's second request starts with every message of its first, unchanged", () => {
+      const sentFirst = requests[0]?.body.messages ?? [];
+      assert.equal(sentFirst.length, 2);
+      assert.deepEqual(requests[1]?.body.messages.slice(0, sentFirst.length), sentFirst);
     });
     const followUp = `follow up ${nonce}`;
     fake.script(followUp, () => ({ kind: "text", text: "second answer" }));
     const secondRun = await chat.settled(await chat.send(followUp));
     await check("a second message replays the first request as its message and its reply, with no call, no tool output, and no thinking chunk", () => {
       assert.equal(secondRun.state.kind, "done");
-      assert.deepEqual(fake.requests(followUp)[0]?.body.messages.slice(1), [
+      assert.deepEqual(withoutTimeLines(fake.requests(followUp)[0]?.body.messages ?? []).slice(1), [
         { role: "user", content: text },
         { role: "assistant", content: answer },
         { role: "user", content: followUp },
@@ -993,7 +1007,7 @@ try {
     fake.script(next, () => ({ kind: "text", text: "fine" }));
     const nextRunId = await chat.send(next);
     const nextRun = await chat.settled(nextRunId);
-    const messages = fake.requests(next)[0]?.body.messages ?? [];
+    const messages = withoutTimeLines(fake.requests(next)[0]?.body.messages ?? []);
     await check("the second run stored no reply, and the message after it was answered", () => {
       assert.equal(stoppedRun.state.kind, "failed");
       assert.equal(nextRun.state.kind, "done");
@@ -2881,7 +2895,7 @@ try {
       fake.script(afterFailure, () => ({ kind: "text", text: "fine" }));
       await busy.settled(await busy.send(afterFailure));
       await check("a request nobody answered does not look answered by the report after it", () => {
-        const messages = fake.requests(afterFailure)[0]?.body.messages ?? [];
+        const messages = withoutTimeLines(fake.requests(afterFailure)[0]?.body.messages ?? []);
         const index = messages.findIndex((message) => message.content === unanswered);
         assert.deepEqual(messages.slice(index).map((message) => message.role), ["user", "assistant", "assistant", "user"]);
         assert.match(String(messages[index + 1]?.content), /ended before a final reply/);
@@ -4392,6 +4406,11 @@ try {
     const run = await chat.settled(runId);
     await check("the model is called again after the restart", () => {
       assert.equal(fake.requests(text).length, 2);
+    });
+    await check("the request after the restart has the same messages as the one before it, because no event was stored in between", () => {
+      const [before, after] = fake.requests(text);
+      assert.ok(before !== undefined && after !== undefined);
+      assert.deepEqual(after.body.messages, before.body.messages);
     });
     await check("exactly one assistantTurn exists, with the second attempt's text", () => {
       const turns = turnsOf(run);
