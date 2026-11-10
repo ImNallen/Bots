@@ -30,6 +30,7 @@ import {
 } from "./approvals.ts";
 import { decideByRules, desktopAim } from "./rules.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
+import { historyOf } from "./history.ts";
 import { completeWithRetry, type CompletionResult, type MistralUserChunk } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
@@ -267,6 +268,7 @@ async function callModel(args: {
       }
     },
   });
+  const history = historyOf(events.map((event) => event.body));
   const result = await completeWithRetry({
     ...deps.mistral,
     apiKey,
@@ -283,7 +285,7 @@ async function callModel(args: {
         now: Date.now(),
         routines: profile.routines,
       },
-      events: events.map((event) => event.body),
+      history,
       attachments,
       screen: claim.capability === "full" ? shownScreen(await loadScreen(deps.service, runId)) : undefined,
     }),
@@ -293,6 +295,10 @@ async function callModel(args: {
     log: deps.log,
   });
   await writer.flush();
+  if (result.kind === "ok") {
+    const { promptTokens, completionTokens } = result.turn.usage;
+    deps.log({ level: "info", event: "model-call", runId, promptTokens, completionTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
+  }
   return result;
 }
 

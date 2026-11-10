@@ -20,6 +20,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference, type FunctionArgs, type FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
 import { WebSocket, WebSocketServer } from "ws";
+import { historyOf } from "../apps/orchestrator/src/history.ts";
 import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
 import { decryptApiKey, hashComputerToken } from "../apps/orchestrator/src/secrets.ts";
 import { paths, parsePrivateJwk, readEnvFile, runCommand, runConvex } from "./lib.ts";
@@ -963,12 +964,59 @@ try {
     const followUp = `follow up ${nonce}`;
     fake.script(followUp, () => ({ kind: "text", text: "second answer" }));
     const secondRun = await chat.settled(await chat.send(followUp));
-    await check("a second message sends the whole thread, with reasoning as a thinking chunk", () => {
+    await check("a second message replays the first request as its message and its reply, with no call, no tool output, and no thinking chunk", () => {
       assert.equal(secondRun.state.kind, "done");
-      const roles = fake.requests(followUp)[0]?.body.messages.map((message) => message.role);
-      assert.deepEqual(roles, ["system", "user", "assistant", "tool", "assistant", "user"]);
-      const assistant = fake.requests(followUp)[0]?.body.messages[4];
-      assert.match(JSON.stringify(assistant?.content), /"type":"thinking"/);
+      assert.deepEqual(fake.requests(followUp)[0]?.body.messages.slice(1), [
+        { role: "user", content: text },
+        { role: "assistant", content: answer },
+        { role: "user", content: followUp },
+      ]);
+    });
+  });
+
+  await scenario("context. a run that stored no reply keeps its steps for the next message, and each model call logs what it left out", async () => {
+    const chat = await newChat({ client: first, name: "context" });
+    const answered = `context answered ${nonce}`;
+    const reply = `context reply ${nonce}`;
+    fake.script(answered, ({ toolResults }) =>
+      toolResults.length === 0
+        ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-dropped-${nonce}`)] }
+        : { kind: "text", text: reply, reasoning: `context-thinking-${nonce}` },
+    );
+    await chat.settled(await chat.send(answered));
+    const stopped = `context stopped ${nonce}`;
+    fake.script(stopped, ({ toolResults }) =>
+      toolResults.length === 0 ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-kept-${nonce}`)] } : { kind: "status", status: 400 },
+    );
+    const stoppedRun = await chat.settled(await chat.send(stopped));
+    const next = `context next ${nonce}`;
+    fake.script(next, () => ({ kind: "text", text: "fine" }));
+    const nextRunId = await chat.send(next);
+    const nextRun = await chat.settled(nextRunId);
+    const messages = fake.requests(next)[0]?.body.messages ?? [];
+    await check("the second run stored no reply, and the message after it was answered", () => {
+      assert.equal(stoppedRun.state.kind, "failed");
+      assert.equal(nextRun.state.kind, "done");
+    });
+    await check("the answered request is its message and its reply, and its command and output are gone", () => {
+      assert.deepEqual(messages.slice(1, 3), [
+        { role: "user", content: answered },
+        { role: "assistant", content: reply },
+      ]);
+      assert.ok(!JSON.stringify(messages).includes(`context-dropped-${nonce}`));
+    });
+    await check("the run with no reply keeps its call and its output, then the line that it ended early, then the new message", () => {
+      assert.deepEqual(messages.slice(3).map((message) => message.role), ["user", "assistant", "tool", "assistant", "user"]);
+      assert.equal(messages[3]?.content, stopped);
+      assert.match(String(messages[5]?.content), new RegExp(`^outcome: ok\\nexit code: 0\\n\\ncontext-kept-${nonce}`));
+      assert.equal(messages[6]?.content, "[The previous run ended before a final reply.]");
+      assert.equal(messages[7]?.content, next);
+    });
+    await check("the model call logs its tokens, and fewer bytes sent than stored", () => {
+      const line = logsText().split("\n").findLast((entry) => entry.includes(`"event":"model-call","runId":"${nextRunId}"`));
+      const logged = JSON.parse(line ?? "{}") as { promptTokens?: number; completionTokens?: number; storedBytes?: number; sentBytes?: number };
+      assert.deepEqual([logged.promptTokens, logged.completionTokens], [11, 7]);
+      assert.ok(logged.storedBytes !== undefined && logged.sentBytes !== undefined && logged.sentBytes < logged.storedBytes, line ?? "no model-call line");
     });
   });
 
@@ -1100,8 +1148,8 @@ try {
       const tool = request?.body.messages.find((message) => message.role === "tool" && message.name === "desktop_look");
       assert.match(JSON.stringify(tool?.content), /Only the newest look/);
     });
-    await check("it replays the invalid click with no hint to look again, because that call showed no look", () => {
-      const request = fake.requests(lookText)[1];
+    await check("its own run replays the invalid click with no hint to look again, because that call showed no look", () => {
+      const request = fake.requests(text)[1];
       const tool = request?.body.messages.find((message) => message.role === "tool" && message.name === "desktop_click");
       assert.match(JSON.stringify(tool?.content), /outcome: invalid/);
       assert.doesNotMatch(JSON.stringify(tool?.content), /Only the newest look/);
@@ -5890,7 +5938,7 @@ try {
     });
     await check("the next message on that thread gives Mistral a history it accepts", () => {
       const events = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
-      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", events })), null);
+      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history: historyOf(events) })), null);
     });
 
     const longChat = await newChat({ client: first, name: "long-tool" });
