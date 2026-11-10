@@ -20,7 +20,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference, type FunctionArgs, type FunctionReturnType } from "convex/server";
 import { SignJWT, importJWK } from "jose";
 import { WebSocket, WebSocketServer } from "ws";
-import { historyOf } from "../apps/orchestrator/src/history.ts";
+import { historyOf, threadEventOf } from "../apps/orchestrator/src/history.ts";
 import { toMistralMessages } from "../apps/orchestrator/src/run-logic.ts";
 import { decryptApiKey, hashComputerToken } from "../apps/orchestrator/src/secrets.ts";
 import { paths, parsePrivateJwk, readEnvFile, runCommand, runConvex } from "./lib.ts";
@@ -5937,8 +5937,9 @@ try {
       assert.deepEqual(pendingRun?.events.map((event) => event.seq), [0, 1, 2]);
     });
     await check("the next message on that thread gives Mistral a history it accepts", () => {
-      const events = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
-      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history: historyOf(events) })), null);
+      const bodies = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
+      const history = historyOf(bodies.map((body) => threadEventOf({ body, _creationTime: Date.now() })));
+      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history })), null);
     });
 
     const longChat = await newChat({ client: first, name: "long-tool" });

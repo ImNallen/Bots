@@ -1,5 +1,6 @@
+import type { Id } from "@bots/convex/dataModel";
 import { describe, expect, it } from "vitest";
-import { historyOf, type HistoryItem } from "./history.ts";
+import { historyOf, threadEventOf, type HistoryItem } from "./history.ts";
 import type { RunEventBody, ToolCall } from "./run-logic.ts";
 
 const ask = (text: string): RunEventBody => ({ kind: "userMessage", text });
@@ -24,7 +25,10 @@ function stepsOf(prefix: string, count: number, kibibytes: number): RunEventBody
   return Array.from({ length: count }, (_, index) => stepOf(`${prefix}${index + 1}`, kibibytes)).flat();
 }
 
-const itemsOf = (events: RunEventBody[]) => historyOf(events).items;
+const SENT_AT = Date.UTC(2026, 10, 10, 13, 3);
+const stored = (events: RunEventBody[]) => events.map((body) => threadEventOf({ body, _creationTime: SENT_AT }));
+const asked = (text: string) => ({ kind: "ask", body: ask(text), sentAt: SENT_AT });
+const itemsOf = (events: RunEventBody[]) => historyOf(stored(events)).items;
 const earlyEnds = (items: readonly HistoryItem[]) => items.filter((item) => item.kind === "endedEarly");
 const listedNumbers = (items: readonly HistoryItem[]) => earlyEnds(items).flatMap((item) => item.listed.map((step) => step.number));
 const wholeCalls = (items: readonly HistoryItem[]) => items.flatMap((item) => (item.kind === "result" ? [item.result.toolCallId] : []));
@@ -34,9 +38,9 @@ describe("historyOf", () => {
   it("folds an answered request to its ask and its reply", () => {
     const events = [ask("first"), turn([call("a")], "working", "why"), result("a"), turn([], "done", "because"), ask("second")];
     expect(itemsOf(events)).toEqual([
-      { kind: "ask", body: ask("first") },
+      asked("first"),
       { kind: "reply", text: "done" },
-      { kind: "ask", body: ask("second") },
+      asked("second"),
     ]);
   });
 
@@ -44,32 +48,53 @@ describe("historyOf", () => {
     const calling = turn([call("a")], "Here is my answer.");
     const blank = turn([], "  ");
     expect(itemsOf([ask("first"), calling, result("a"), blank, ask("second")])).toEqual([
-      { kind: "ask", body: ask("first") },
+      asked("first"),
       { kind: "turn", turn: calling },
       { kind: "result", result: result("a") },
       { kind: "turn", turn: blank },
       NO_LIST,
-      { kind: "ask", body: ask("second") },
+      asked("second"),
     ]);
   });
 
   it("marks an ask that no run answered, also inside an exchange that a later run answered", () => {
     expect(itemsOf([ask("one"), ask("two"), turn([], "done"), ask("three")])).toEqual([
-      { kind: "ask", body: ask("one") },
+      asked("one"),
       NO_LIST,
-      { kind: "ask", body: ask("two") },
+      asked("two"),
       { kind: "reply", text: "done" },
-      { kind: "ask", body: ask("three") },
+      asked("three"),
     ]);
   });
 
   it("sends nothing for a result that no call came before", () => {
-    expect(itemsOf([ask("first"), result("a")])).toEqual([{ kind: "ask", body: ask("first") }]);
+    expect(itemsOf([ask("first"), result("a")])).toEqual([asked("first")]);
+  });
+
+  it("gives each ask the time of its own row, a routine's instruction too, and gives work no time", () => {
+    const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
+    const rows = [
+      { body: ask("first"), _creationTime: 1000 },
+      { body: turn([], "done"), _creationTime: 2000 },
+      { body: fired, _creationTime: 3000 },
+      { body: turn([call("a")]), _creationTime: 4000 },
+      { body: result("a"), _creationTime: 5000 },
+    ];
+    const events = rows.map(threadEventOf);
+    expect(events).toEqual([{ body: ask("first"), sentAt: 1000 }, { body: turn([], "done") }, { body: fired, sentAt: 3000 }, { body: turn([call("a")]) }, { body: result("a") }]);
+    expect(events.filter((event) => "sentAt" in event)).toHaveLength(2);
+    expect(historyOf(events).items).toEqual([
+      { kind: "ask", body: ask("first"), sentAt: 1000 },
+      { kind: "reply", text: "done" },
+      { kind: "ask", body: fired, sentAt: 3000 },
+      { kind: "turn", turn: turn([call("a")]) },
+      { kind: "result", result: result("a") },
+    ]);
   });
 
   it("gives the same history for the same events", () => {
     const events = [ask("one"), ...stepsOf("a", 3, 1), turn([], "done"), ask("two"), ...stepsOf("b", 30, 1), ask("three"), ...stepsOf("c", 4, 4)];
-    expect(historyOf(structuredClone(events))).toEqual(historyOf(events));
+    expect(historyOf(structuredClone(stored(events)))).toEqual(historyOf(stored(events)));
   });
 });
 
@@ -153,12 +178,12 @@ describe("historyOf with the steps of a run that stored no reply", () => {
 
 describe("historyOf weights", () => {
   it("weighs the same for a chat's first run, stored and sent", () => {
-    expect(historyOf([ask("hi"), turn([call("a")]), result("a")])).toMatchObject({ storedBytes: 26, sentBytes: 26 });
+    expect(historyOf(stored([ask("hi"), turn([call("a")]), result("a")]))).toMatchObject({ storedBytes: 26, sentBytes: 26 });
   });
 
   it("counts UTF-8 bytes, and leaves out the work of an answered request", () => {
     const events = [ask("héllo"), turn([call("a")], "", "why"), result("a"), turn([], "done"), ask("again")];
-    expect(historyOf(events)).toMatchObject({ storedBytes: 42, sentBytes: 15 });
+    expect(historyOf(stored(events))).toMatchObject({ storedBytes: 42, sentBytes: 15 });
   });
 
   it("counts a listed step as its text and its cut calls, without its output", () => {
@@ -172,6 +197,6 @@ describe("historyOf weights", () => {
       ...stepsOf("c", 3, 4),
       ask("second"),
     ];
-    expect(historyOf(events)).toMatchObject({ storedBytes: 5 + 5 * 4096 + 6, sentBytes: 5 + 3 * 4096 + (18 + 21) + (10 + 163) + 6 });
+    expect(historyOf(stored(events))).toMatchObject({ storedBytes: 5 + 5 * 4096 + 6, sentBytes: 5 + 3 * 4096 + (18 + 21) + (10 + 163) + 6 });
   });
 });

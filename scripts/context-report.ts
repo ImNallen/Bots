@@ -9,10 +9,10 @@
 //   node scripts/context-report.ts <dir>
 import { readFileSync } from "node:fs";
 import type { Doc } from "@bots/convex/dataModel";
-import { historyOf } from "../apps/orchestrator/src/history.ts";
+import { historyOf, threadEventOf } from "../apps/orchestrator/src/history.ts";
 
 type Run = Pick<Doc<"runs">, "_id" | "_creationTime" | "threadId" | "capability">;
-type Event = Pick<Doc<"runEvents">, "runId" | "threadId" | "seq" | "body">;
+type Event = Pick<Doc<"runEvents">, "runId" | "threadId" | "seq" | "body" | "_creationTime">;
 
 const dir = process.argv[2];
 if (dir === undefined) {
@@ -42,7 +42,7 @@ for (const threadEvents of Map.groupBy(events, (event) => event.threadId).values
     }
     const capability = runs.get(event.runId)?.capability ?? "full";
     const readByCall = threadEvents.slice(0, index).filter((seen) => capability === "full" || seen.runId === event.runId);
-    const history = historyOf(readByCall.map((seen) => seen.body));
+    const history = historyOf(readByCall.map(threadEventOf));
     calls.push({ runId: event.runId, capability, real: event.body.usage.promptTokens, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
   }
 }

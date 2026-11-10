@@ -2,7 +2,7 @@ import type { Id } from "@bots/convex/dataModel";
 import { toolDefinitions, type KeyCombo, type ToolInvocation } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 import { OLDER_LOOK } from "./desktop.ts";
-import { historyOf } from "./history.ts";
+import { historyOf, threadEventOf } from "./history.ts";
 import type { MistralMessage } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
@@ -241,8 +241,14 @@ function thinking(event: RunEventBody, reasoning: string): RunEventBody {
   return { ...event, reasoning } as RunEventBody;
 }
 
+const SENT_AT = Date.UTC(2026, 10, 10, 13, 3);
+
+function historyFor(events: RunEventBody[]) {
+  return historyOf(events.map((body) => threadEventOf({ body, _creationTime: SENT_AT })));
+}
+
 function messagesOf(events: RunEventBody[]): MistralMessage[] {
-  return toMistralMessages({ system: "s", history: historyOf(events) });
+  return toMistralMessages({ system: "s", history: historyFor(events) });
 }
 
 function toolCall(id: string) {
@@ -265,7 +271,7 @@ describe("toMistralMessages", () => {
   it("maps a chat's first run in order and tells the model each outcome", () => {
     const messages = toMistralMessages({
       system: "sys",
-      history: historyOf([user, turn([call("abc")], "working"), result("abc", "interrupted")]),
+      history: historyFor([user, turn([call("abc")], "working"), result("abc", "interrupted")]),
     });
     expect(messages).toEqual([
       { role: "system", content: "sys" },
@@ -441,7 +447,7 @@ describe("toMistralMessages with a routine made before schedule_create", () => {
     const proposed = { id: "old", name: "schedule_propose", arguments: '{"instruction":"Read the news.","cadence":{"kind":"everyHours","hours":6}}' };
     const messages = toMistralMessages({
       system: "s",
-      history: historyOf([user, turn([proposed]), { kind: "toolResult", toolCallId: "old", name: "schedule_propose", outcome: "ok", output: "Created routine r1.", truncated: false }]),
+      history: historyFor([user, turn([proposed]), { kind: "toolResult", toolCallId: "old", name: "schedule_propose", outcome: "ok", output: "Created routine r1.", truncated: false }]),
     });
     expect(messages[2]).toMatchObject({ tool_calls: [{ id: "old", function: { name: "schedule_create", arguments: proposed.arguments } }] });
     expect(messages[3]).toMatchObject({ role: "tool", tool_call_id: "old", name: "schedule_create" });
@@ -463,7 +469,7 @@ describe("toMistralMessages with looks at the screen", () => {
   const events = [user, turn([{ ...call("old"), name: "desktop_look" }]), looked("old"), turn([{ ...call("sh"), name: "shell" }]), result("sh"), turn([{ ...call("new"), name: "desktop_look" }]), looked("new")];
 
   it("gives the newest look its text and its picture, and every older look one line", () => {
-    const messages = toMistralMessages({ system: "s", history: historyOf(events), screen });
+    const messages = toMistralMessages({ system: "s", history: historyFor(events), screen });
     const tools = messages.filter((message) => message.role === "tool");
     expect(tools[0]).toEqual({ role: "tool", tool_call_id: "old", name: "desktop_look", content: `outcome: ok\n\nLooked at the screen.\n${OLDER_LOOK}` });
     expect(tools[1]).toEqual({ role: "tool", tool_call_id: "sh", name: "shell", content: "outcome: ok\nexit code: 0\n\nout" });
@@ -489,13 +495,13 @@ describe("toMistralMessages with looks at the screen", () => {
   it("gives a desktop call that brought nothing back no hint to look again", () => {
     for (const outcome of ["denied", "invalid", "rejected"] as const) {
       const clicked: RunEventBody = { kind: "toolResult", toolCallId: "click", name: "desktop_click", outcome, output: "It did not run.", truncated: false };
-      const messages = toMistralMessages({ system: "s", history: historyOf([...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked]), screen });
+      const messages = toMistralMessages({ system: "s", history: historyFor([...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked]), screen });
       expect(messages.at(-1)).toEqual({ role: "tool", tool_call_id: "click", name: "desktop_click", content: `outcome: ${outcome}\n\nIt did not run.` });
     }
   });
 
   it("gives a look with no picture its text alone", () => {
-    const messages = toMistralMessages({ system: "s", history: historyOf(events), screen: { ...screen, imageUrl: null } });
+    const messages = toMistralMessages({ system: "s", history: historyFor(events), screen: { ...screen, imageUrl: null } });
     expect(messages.find((message) => message.role === "tool" && message.tool_call_id === "new")?.content).toEqual([
       { type: "text", text: "outcome: ok\n\nLooked at the screen.\n\nScreen 1280x800. No window is active." },
     ]);
@@ -929,10 +935,10 @@ describe("a read-only run's prompt", () => {
 
 describe("modelRequest", () => {
   const prompt = { botName: "Ada", botId: "bot123", title: undefined, description: undefined, about: undefined, notes: [], timeZone: undefined, now: Date.UTC(2026, 10, 10, 13, 32), routines: [] };
-  const offered = (run: PromptRun) => modelRequest({ prompt: { ...prompt, run }, history: historyOf([user]) }).tools.map((tool) => tool.function.name);
+  const offered = (run: PromptRun) => modelRequest({ prompt: { ...prompt, run }, history: historyFor([user]) }).tools.map((tool) => tool.function.name);
 
   it("puts the date and time in the system message", () => {
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
+    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyFor([user]) });
     expect(messages[0]?.role).toBe("system");
     expect(String(messages[0]?.content)).toContain("It is now Tuesday, 10 November 2026, 13:32 UTC.");
   });
@@ -950,7 +956,7 @@ describe("modelRequest", () => {
   });
 
   it("tells a read-only run about no tool it lacks, and no login it does not have", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor([user]) });
     const text = tools.map((tool) => tool.function.description).join(" ");
     expect(text).not.toMatch(/browser_click|browser_type|browser_press|take over|take it over|shares? logins/i);
     expect(text).toMatch(/none of your owner's logins/);
@@ -958,19 +964,19 @@ describe("modelRequest", () => {
   });
 
   it("sends a full run the shared definitions untouched", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyFor([user]) });
     expect(tools).toEqual(toolDefinitions);
   });
 
   it("keeps each read-only tool's name and arguments", () => {
-    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf([user]) });
+    const { tools } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor([user]) });
     for (const tool of tools) {
       expect(tool.function.parameters).toEqual(toolDefinitions.find((shared) => shared.function.name === tool.function.name)?.function.parameters);
     }
   });
 
   it("puts the prompt first and the history after it", () => {
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyOf([user]) });
+    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "full" } }, history: historyFor([user]) });
     expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
     expect(messages[1]).toEqual({ role: "user", content: "hi" });
   });
@@ -979,7 +985,7 @@ describe("modelRequest", () => {
     const fired: RunEventBody = { kind: "scheduleFired", scheduleId: "s" as Id<"schedules">, text: "Check the news." };
     const page = "p".repeat(20_000);
     const events = [fired, thinking(turn([call("a")]), "look"), result("a", "ok", page), turn([call("b")]), result("b", "ok", page), turn([call("c")]), rejected("c")];
-    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyOf(events) });
+    const { messages } = modelRequest({ prompt: { ...prompt, run: { capability: "readOnly", final: false, reports: [] } }, history: historyFor(events) });
     expect(messages.slice(1)).toEqual([
       { role: "user", content: "Check the news." },
       { role: "assistant", content: [{ type: "thinking", thinking: [{ type: "text", text: "look" }] }], tool_calls: [toolCall("a")] },

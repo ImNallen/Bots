@@ -5,11 +5,19 @@ type Ask = Extract<RunEventBody, { kind: "userMessage" | "scheduleFired" }>;
 type AssistantTurn = Extract<RunEventBody, { kind: "assistantTurn" }>;
 type ToolResultBody = Extract<RunEventBody, { kind: "toolResult" }>;
 
+// A stored event as the orchestrator holds it. Convex stores every ask, so each has the time of its row.
+export type ThreadEvent = { body: Ask; sentAt: number } | { body: Exclude<RunEventBody, Ask> };
+
+export function threadEventOf(row: Pick<Doc<"runEvents">, "body" | "_creationTime">): ThreadEvent {
+  const { body } = row;
+  return body.kind === "userMessage" || body.kind === "scheduleFired" ? { body, sentAt: row._creationTime } : { body };
+}
+
 export type LoggedCall = { name: string; arguments: string; outcome: ToolResultBody["outcome"]; exitCode?: number };
 export type LoggedStep = { number: number; text: string; calls: readonly LoggedCall[] };
 
 export type HistoryItem =
-  | { kind: "ask"; body: Ask }
+  | { kind: "ask"; body: Ask; sentAt: number }
   | { kind: "report"; text: string }
   | { kind: "reply"; text: string }
   | { kind: "endedEarly"; unlisted: number; listed: readonly LoggedStep[] }
@@ -33,17 +41,18 @@ const REPORTS_A_MODEL_READS = 3;
 const LISTED_TEXT_CHARACTERS = 600;
 const LISTED_ARGUMENTS_CHARACTERS = 160;
 
-function threadOf(events: readonly RunEventBody[]): Thread {
+function threadOf(events: readonly ThreadEvent[]): Thread {
   const closed: ClosedExchange[] = [];
   let parts: Part[] = [];
   let steps = 0;
-  let reportsToSkip = events.filter((event) => event.kind === "routineReport").length - REPORTS_A_MODEL_READS;
-  for (const event of events) {
+  let reportsToSkip = events.filter((event) => event.body.kind === "routineReport").length - REPORTS_A_MODEL_READS;
+  for (const stored of events) {
+    if ("sentAt" in stored) {
+      parts.push({ kind: "ask", ...stored });
+      continue;
+    }
+    const event = stored.body;
     switch (event.kind) {
-      case "userMessage":
-      case "scheduleFired":
-        parts.push({ kind: "ask", body: event });
-        break;
       case "routineReport":
         reportsToSkip -= 1;
         if (reportsToSkip < 0) {
@@ -154,7 +163,7 @@ function loggedStep(step: Step): LoggedStep {
   };
 }
 
-export function historyOf(events: readonly RunEventBody[]): History {
+export function historyOf(events: readonly ThreadEvent[]): History {
   const { closed, open } = threadOf(events);
   const newestAsk = Math.max(0, open.findLastIndex((part) => part.kind === "ask"));
   const earlierRuns = open.slice(0, newestAsk);
@@ -204,5 +213,5 @@ export function historyOf(events: readonly RunEventBody[]): History {
       items.push(part);
     }
   }
-  return { items, storedBytes: sum(events.map(eventBytes)), sentBytes: sum(items.map(itemBytes)) };
+  return { items, storedBytes: sum(events.map((event) => eventBytes(event.body))), sentBytes: sum(items.map(itemBytes)) };
 }
