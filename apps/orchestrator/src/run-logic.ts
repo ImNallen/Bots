@@ -224,6 +224,7 @@ type PromptArgs = {
   about: string | undefined;
   notes: readonly PromptNote[];
   timeZone: string | undefined;
+  now: number;
   routines: readonly PromptRoutine[];
 };
 
@@ -292,6 +293,24 @@ function rulesFor(run: PromptRun, workspace: string, timeZone: string | undefine
   }
 }
 
+// The zoned form adds the UTC instant because the routines list gives each next time as a UTC ISO string, and the model compares them.
+function clockLine(now: number, timeZone: string | undefined): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timeZone ?? "UTC",
+    hourCycle: "h23",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+  }).formatToParts(now);
+  const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const wall = `${field("weekday")}, ${field("day")} ${field("month")} ${field("year")}, ${field("hour").padStart(2, "0")}:${field("minute").padStart(2, "0")}`;
+  const reading = timeZone === undefined ? `${wall} UTC` : `${wall} in ${timeZone}, which is ${new Date(now).toISOString().slice(0, 16)}Z`;
+  return `It is now ${reading}. This comes from the system clock, so trust it over your own sense of the date.`;
+}
+
 export function systemPrompt(args: PromptArgs): string {
   const reports = args.run.capability === "readOnly" ? args.run.reports : [];
   const routines = args.run.capability === "full" ? args.routines : [];
@@ -299,6 +318,7 @@ export function systemPrompt(args: PromptArgs): string {
     `You are ${args.botName}, an agent with a Linux computer.`,
     ...(args.title === undefined ? [] : [`Your title is ${args.title}.`]),
     ...rulesFor(args.run, `${WORKSPACE_ROOT}/${args.botId}`, args.timeZone),
+    clockLine(args.now, args.timeZone),
     ...(args.description === undefined
       ? []
       : [
