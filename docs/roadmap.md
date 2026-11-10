@@ -316,7 +316,7 @@ This changes `packages/protocol`, so deploying it restarts `computerd` on every 
 
 ### The date and time
 
-Done in code on 2026-11-10, and not deployed. A bot's prompt had the owner's time zone and no date, so a bot guessed what "today" meant. Each model call's prompt now gives the date and time from the orchestrator's clock, in a chat run and in a routine. It reads in the owner's time zone with the same instant in UTC, or in UTC alone when the owner has no zone.
+Done in code on 2026-11-10, and not deployed. [Less history in each model call](#less-history-in-each-model-call) moved the line the same day, from the system message to each message from the owner, so this section records what the first version did. A bot's prompt had the owner's time zone and no date, so a bot guessed what "today" meant. Each model call's prompt now gives the date and time from the orchestrator's clock, in a chat run and in a routine. It reads in the owner's time zone with the same instant in UTC, or in UTC alone when the owner has no zone.
 
 `pnpm test` checks the line's words across a zone, daylight saving, a day that has already turned, and midnight. `VERIFY_SCENARIOS=A,B pnpm verify:agent` passed on 2026-11-10 with a new check that the real orchestrator's request to a fake Mistral holds a time within five minutes of the clock. The same check failed against the code before this change. A real model and the control VM are untested, so nothing shows that Mistral trusts the line over its own sense of the date.
 
@@ -336,16 +336,26 @@ PR 1 of 4 is done in code on 2026-11-10, and not deployed. An answered request n
 
 This changes neither the schema nor `packages/protocol`, so deploying it restarts nothing on a VM, and going back to a commit before this one needs no cleanup.
 
+PR 2 of 4 is done in code on 2026-11-10, and not deployed. The owner asked for it the same day. A request now sends Mistral's `prompt_cache_key` with its thread's id, and each turn stores the cached token count that Mistral reports. The date and time left the system message, where it changed the first message every minute. Each message from the owner, and each routine's instruction, now starts with the time it was sent. [What two requests of one run share](architecture.md#what-two-requests-of-one-run-share) has the design. This lowers the bill and not the size of a request, and only if `mistral-large-4` caches these requests, which nothing has shown.
+
+- `pnpm test` checks that each request of a growing run starts with the request before it, that the system message holds no date and no time, the time line's words, the cache key in the request, and the cached count from the stream. Three deliberate breaks each turned tests red: a clock back in the system message, no count read as 0, and no key in the request.
+- A full `pnpm verify:agent` passed on 2026-11-10, all 32 scenarios and 532 checks, against a separate Convex backend on the Mac that held this change's functions. The commit before this change passed 527 checks on the same backend, so the `schedule` and `activity` scenarios, which PR 1 could not run, have now run on both. Its fake Mistral reports a cached count, and the stored turn and the `model-call` log line hold it. A killed orchestrator sends the same messages after its restart.
+- No real model has run on this code. Nothing shows that Mistral accepts the key on a streamed call to `mistral-large-4`, that it reports a count in a stream, or that the model reads the bracketed line as the time.
+
+This changes the schema and not `packages/protocol`, so deploying it restarts nothing on a VM. Going back to a commit before this one needs `cachedTokens` cleared from the `usage` of every stored turn that has one, because the older schema has no such field and Convex checks every stored row at a deploy. A turn has one only after Mistral reported a count.
+
+Run `pnpm verify:template` right after the deploy. Mistral's page shows `prompt_cache_key` on `/v1/chat/completions`, and no request from this system has sent it. If Mistral refused the field, every run would fail at its first model call with the status in its reason, and no turn would hold a count, so going back would need no cleanup. Then `journalctl -u bots-orchestrator | grep model-call` shows `cachedTokens` beside `promptTokens` for each call, and a call with no `cachedTokens` means Mistral sent no count.
+
 The next PRs, in this order:
 
-1. Send Mistral's `prompt_cache_key`, store the cached token count that each call reports, and move the date and time out of the system message, where it changes the first message every minute. This lowers the bill and not the size of a request, and only if `mistral-large-4` caches these requests, which nothing has shown.
-2. Let the run in progress shed its own old steps a page at a time. The estimate for this is about 27% of today's tokens. It waits on a real-model check, because Mistral's guide says that dropping a thinking trace makes later turns worse, and reasoning was about a third of the measured tokens.
-3. Bound a thread's messages and replies, and give a routine's pages a window. This closes the gap about a thread that outgrows the model.
+1. Let the run in progress shed its own old steps a page at a time. The estimate for this is about 27% of today's tokens. It waits on a real-model check, because Mistral's guide says that dropping a thinking trace makes later turns worse, and reasoning was about a third of the measured tokens.
+2. Bound a thread's messages and replies, and give a routine's pages a window. This closes the gap about a thread that outgrows the model.
 
 These are proposals, so change them if you find a better answer:
 
 - Make `readUntrustedText` read the steps that a run with no reply left for the next run. A save after "continue" would then ask when the failed run read a page. It adds cards, so it is the owner's call.
 - Raise or remove the limit of 40 turns once a run sheds its own steps. Two of the 11 measured runs ended there.
+- Give a tool result its own time when it lands 10 minutes or more after the last time shown, so a run that waited on a card reads the time without asking its shell.
 
 ### Later: hide memory's details
 
@@ -389,6 +399,8 @@ These are open on purpose. Fix each one when the work reaches it.
 - On a phone on its side with the keyboard open, the controls do not all fit. They scroll beside the stream, so the second row of keys and the Give back button can start out of sight. This was simulated, not seen on a phone.
 - A tablet with a real keyboard still gets the typing box and key bar, because `pointer: coarse` says nothing about a keyboard.
 - A reload during a take-over does not give the screen back, so the bot waits for up to 15 minutes, and the view that comes back says "Watching". Taking control and giving back ends it.
+- A run reads the time of the message that started it, and no newer time. After a long wait on a question card, or a start that was delayed, that time is behind. The prompt tells a chat run to ask its shell for the date then, which is an instruction to a model. A routine has no shell, and it never waits on a card.
+- A model may copy the bracketed time line into its own replies. No real model has run on this code.
 - A model call still reads every message and reply of its thread, every step of the run in progress, and every page of a routine's run, as [Less history in each model call](#less-history-in-each-model-call) says. So a thread with enough messages, or one run with enough output, can still exceed what the model accepts.
 - A bot no longer reads what an answered request's commands printed, which pages it read, or how it reasoned. Asked about one, it must run or read again, and a model may guess instead. The prompt tells it not to, which is an instruction to a model. No real model has run on this code.
 - After a run that ended with no reply, the next run reads the newest 8 to 16 KiB of its steps and a line for each older call. It may repeat a read whose output is no longer shown, and nothing stops it from repeating a call that changed something.
