@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { nextRunLabel, routineStatus, runStateWords } from "./routines.ts";
+import type { Id } from "@bots/convex/dataModel";
+import { nextRunLabel, nextRunLine, routineStatus, runStateWords, shownRoutines, type RoutineRow } from "./routines.ts";
 
 const NOW = Date.UTC(2026, 10, 7, 12);
 const context = { now: NOW, timeZone: "Europe/Stockholm", locale: "en-GB" };
@@ -27,6 +28,26 @@ describe("routineStatus", () => {
 
   it("says why a routine paused itself", () => {
     expect(routineStatus({ nextFireAt: undefined, pausedBecause: "It paused itself after 3 failed runs." }, context)).toBe("Paused. It paused itself after 3 failed runs.");
+  });
+});
+
+describe("nextRunLine", () => {
+  it("names the next run and the owner's zone", () => {
+    expect(nextRunLine({ nextFireAt: Date.UTC(2026, 10, 9, 8), pausedBecause: undefined }, context)).toMatch(/^Next run Mon.* · Europe\/Stockholm$/);
+  });
+
+  it("says a paused routine is paused, and why if it paused itself", () => {
+    expect(nextRunLine({ nextFireAt: undefined, pausedBecause: undefined }, context)).toBe("Paused");
+    expect(nextRunLine({ nextFireAt: undefined, pausedBecause: "It failed." }, context)).toBe("Paused. It failed.");
+  });
+});
+
+describe("shownRoutines", () => {
+  const deleted = (deletingUntil: number): RoutineRow => ({ kind: "deleted", _id: "d" as Id<"schedules">, title: "News", deletingUntil });
+
+  it("keeps a deleted routine's line only until its undo window ends", () => {
+    expect(shownRoutines([deleted(NOW + 1)], NOW)).toHaveLength(1);
+    expect(shownRoutines([deleted(NOW)], NOW)).toEqual([]);
   });
 });
 

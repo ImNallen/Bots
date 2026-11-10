@@ -1,7 +1,9 @@
 import type { api } from "@bots/convex";
 import type { FunctionReturnType } from "convex/server";
 
-export type Routine = NonNullable<FunctionReturnType<typeof api.schedules.listForBot>>["routines"][number];
+export type RoutineRow = NonNullable<FunctionReturnType<typeof api.schedules.listForBot>>["routines"][number];
+export type Routine = Extract<RoutineRow, { kind: "live" }>;
+export type DeletedRoutine = Extract<RoutineRow, { kind: "deleted" }>;
 type RunShown = Routine["recentRuns"][number];
 
 export function browserTimeZone(): string {
@@ -20,6 +22,19 @@ export function routineStatus(routine: Pick<Routine, "nextFireAt" | "pausedBecau
     return `Paused. ${routine.pausedBecause}`;
   }
   return routine.nextFireAt === undefined ? "Paused" : `Next run: ${nextRunLabel({ at: routine.nextFireAt, ...args })}`;
+}
+
+// The line under the schedule in a routine's details. That schedule leaves out the zone, so this line names it.
+export function nextRunLine(routine: Pick<Routine, "nextFireAt" | "pausedBecause">, args: { now: number; timeZone: string; locale: string }): string {
+  if (routine.nextFireAt === undefined) {
+    return routineStatus(routine, args);
+  }
+  return `Next run ${nextRunLabel({ at: routine.nextFireAt, ...args })} · ${args.timeZone.replaceAll("_", " ")}`;
+}
+
+// A deleted routine's undo line shows until its window ends, and a line whose window has ended is gone even before the server says so.
+export function shownRoutines(rows: readonly RoutineRow[], now: number): RoutineRow[] {
+  return rows.filter((row) => row.kind === "live" || row.deletingUntil > now);
 }
 
 export function runStateWords(state: RunShown["state"]): { words: string; tone: "plain" | "bad" } {

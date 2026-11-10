@@ -1,6 +1,7 @@
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { query, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity } from "./identity.js";
+import { routineTitle } from "./routineText.js";
 import { FALLBACK_ZONE, describeCadence } from "./scheduleTime.js";
 import { isActive, publicState } from "./threads.js";
 import type { RunEventBody, RunState } from "./validators.js";
@@ -117,7 +118,7 @@ export async function newestEventsUpToText(ctx: QueryCtx, runId: Id<"runs">, bud
 
 type BotLook = Pick<Doc<"bots">, "_id" | "name" | "shape" | "color">;
 type ListedRun = Pick<Doc<"runs">, "_id" | "_creationTime" | "botId" | "trigger" | "scheduleId" | "state" | "endedAt">;
-type UpcomingRoutine = Pick<Doc<"schedules">, "_id" | "botId" | "instruction" | "cadence" | "nextFireAt" | "pausedBecause" | "lastMissed">;
+type UpcomingRoutine = Pick<Doc<"schedules">, "_id" | "botId" | "title" | "instruction" | "cadence" | "nextFireAt" | "pausedBecause" | "lastMissed">;
 
 function lookOf({ _id, name, shape, color }: BotLook): BotLook {
   return { _id, name, shape, color };
@@ -132,18 +133,18 @@ export function listingOf<Run extends Pick<ListedRun, "botId" | "trigger" | "sch
 export function runRow(args: {
   run: ListedRun;
   bot: BotLook;
-  instructionOf: (scheduleId: Id<"schedules">) => string | undefined;
+  titleOf: (scheduleId: Id<"schedules">) => string | undefined;
   newestEvents: readonly RunEventBody[];
   blocked: boolean;
 }) {
-  const { run, bot, instructionOf, newestEvents, blocked } = args;
-  const instruction = run.scheduleId === undefined ? undefined : instructionOf(run.scheduleId);
+  const { run, bot, titleOf, newestEvents, blocked } = args;
+  const title = run.scheduleId === undefined ? undefined : titleOf(run.scheduleId);
   const afterInstruction = newestEvents.filter((event) => event.kind !== "scheduleFired");
   return {
     _id: run._id,
     bot: lookOf(bot),
     trigger: run.trigger,
-    instruction: instruction === undefined ? null : oneLine(instruction, ROW_TEXT_OVER_TWO_LINES),
+    title: title ?? null,
     state: publicState(run.state),
     createdAt: run._creationTime,
     endedAt: run.endedAt,
@@ -167,7 +168,7 @@ export function upcomingRows(args: { routines: readonly UpcomingRoutine[]; botOf
             {
               _id: routine._id,
               bot: lookOf(bot),
-              instruction: oneLine(routine.instruction, ROW_TEXT_OVER_TWO_LINES),
+              title: routineTitle(routine),
               when: describeCadence(routine.cadence, timeZone),
               nextFireAt: routine.nextFireAt,
               pausedBecause: routine.pausedBecause,
@@ -199,7 +200,9 @@ export const page = query({
       .query("schedules")
       .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
       .collect();
-    const instructions = new Map<string, string>(routines.map((routine) => [routine._id, routine.instruction]));
+    // A routine in its undo window is gone as far as this page knows.
+    const live = routines.filter((routine) => routine.deleting === undefined);
+    const titles = new Map<string, string>(live.map((routine) => [routine._id, routineTitle(routine)]));
     const botOf = (botId: Id<"bots">) => bots.get(botId);
     const listed = [];
     let scanned = 0;
@@ -235,13 +238,13 @@ export const page = query({
         runRow({
           run,
           bot,
-          instructionOf: (scheduleId) => instructions.get(scheduleId),
+          titleOf: (scheduleId) => titles.get(scheduleId),
           newestEvents: await newestEventsUpToText(ctx, run._id, budget),
           blocked: blocked.has(run._id),
         }),
       );
     }
     const timeZone = user.timeZone ?? FALLBACK_ZONE;
-    return { timeZone, upcoming: upcomingRows({ routines, botOf, timeZone }), runs };
+    return { timeZone, upcoming: upcomingRows({ routines: live, botOf, timeZone }), runs };
   },
 });

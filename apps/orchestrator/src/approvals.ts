@@ -13,12 +13,14 @@ type Ask = "ask" | "run" | "askAfterUntrustedText" | "byRules";
 // One answer for each level and effect, so a new effect or level fails the typecheck until it has a row here.
 const ASKS: Record<ApprovalLevel, Record<ToolEffect, Ask>> = {
   everything: { reads: "ask", readsScreen: "ask", changesVm: "ask", changesOutside: "ask", controlsComputer: "ask", changesMemory: "ask", changesSchedule: "ask" },
-  outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterUntrustedText", changesSchedule: "ask" },
-  shell: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "ask" },
-  nothing: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "ask" },
-  // The default. Reads run, the three effects that change things go to the rules, a memory write asks once untrusted text is in, and
-  // a routine still asks.
-  automatic: { reads: "run", readsScreen: "run", changesVm: "byRules", changesOutside: "byRules", controlsComputer: "byRules", changesMemory: "askAfterUntrustedText", changesSchedule: "ask" },
+  outside: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "ask", controlsComputer: "ask", changesMemory: "askAfterUntrustedText", changesSchedule: "askAfterUntrustedText" },
+  shell: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "ask", changesMemory: "run", changesSchedule: "askAfterUntrustedText" },
+  // The owner asks for a routine change in chat, so it needs no card. A routine outlives the run and runs with nobody watching, so
+  // once a page or a tool's output is in the run, a change could be an injection's, and it asks at every level.
+  nothing: { reads: "run", readsScreen: "run", changesVm: "run", changesOutside: "run", controlsComputer: "run", changesMemory: "run", changesSchedule: "askAfterUntrustedText" },
+  // The default. Reads run, the three effects that change things go to the rules, and a memory or routine write asks once untrusted
+  // text is in.
+  automatic: { reads: "run", readsScreen: "run", changesVm: "byRules", changesOutside: "byRules", controlsComputer: "byRules", changesMemory: "askAfterUntrustedText", changesSchedule: "askAfterUntrustedText" },
 };
 
 export const DENIED_OUTPUT = "The user denied this call, so it did not run.";

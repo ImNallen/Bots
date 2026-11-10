@@ -62,10 +62,13 @@ function daysInWords(weekdays: readonly number[]): string {
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
-export function describeCadence(cadence: Cadence, timeZone: string): string {
+// withZone is false where the zone is already on screen beside it.
+export function describeCadence(cadence: Cadence, timeZone: string, { withZone = true } = {}): string {
   switch (cadence.kind) {
-    case "weekly":
-      return `${daysInWords(cadence.weekdays)} at ${twoDigits(cadence.hour)}:${twoDigits(cadence.minute)}, ${timeZone.replaceAll("_", " ")} time`;
+    case "weekly": {
+      const at = `${daysInWords(cadence.weekdays)} at ${twoDigits(cadence.hour)}:${twoDigits(cadence.minute)}`;
+      return withZone ? `${at}, ${timeZone.replaceAll("_", " ")} time` : at;
+    }
     case "everyHours":
       return cadence.hours === 1 ? "Every hour" : `Every ${cadence.hours} hours`;
   }

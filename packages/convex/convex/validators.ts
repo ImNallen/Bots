@@ -93,9 +93,30 @@ export const cadence = v.union(
 
 export type Cadence = Infer<typeof cadence>;
 
-export const scheduleCreate = v.object({ kind: v.literal("scheduleCreate"), toolCallId: v.string(), instruction: v.string(), cadence });
+export const scheduleCall = v.union(
+  v.object({
+    kind: v.literal("scheduleCreate"),
+    toolCallId: v.string(),
+    title: v.string(),
+    summary: v.string(),
+    steps: v.array(v.string()),
+    instruction: v.string(),
+    cadence,
+  }),
+  v.object({
+    kind: v.literal("scheduleUpdate"),
+    toolCallId: v.string(),
+    routineId: v.string(),
+    title: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    steps: v.optional(v.array(v.string())),
+    instruction: v.optional(v.string()),
+    cadence: v.optional(cadence),
+  }),
+  v.object({ kind: v.literal("scheduleDelete"), toolCallId: v.string(), routineId: v.string() }),
+);
 
-export type ScheduleCreate = Infer<typeof scheduleCreate>;
+export type ScheduleCall = Infer<typeof scheduleCall>;
 
 export const desiredVm = v.object({
   slot: v.number(),

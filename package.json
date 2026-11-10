@@ -17,6 +17,7 @@
     "verify:auth": "pnpm build && node scripts/verify-auth.ts",
     "verify:floating-computer": "node scripts/verify-floating-computer.ts",
     "verify:design": "node scripts/verify-design.ts",
+    "verify:routines": "node scripts/verify-routines.ts",
     "verify:highlights": "node scripts/verify-highlights.ts",
     "verify:attachments": "pnpm build && node scripts/verify-attachments.ts",
     "verify:voice": "pnpm build && node scripts/verify-voice.ts",

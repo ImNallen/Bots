@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { actOnDue, decideFire, INSTRUCTION_PROBLEMS, instructionProblem, runToPurge, type FireDecision } from "./schedules.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import { actOnDue, decideFire, hardDeleteDue, isLive, promptRoutines, restored, retimed, routineOfBot, runToPurge, softDeleted, UNDO_MS, type FireDecision } from "./schedules.js";
+import { nextFireAfter } from "./scheduleTime.js";
 import type { RunState } from "./validators.js";
 
 const NOW = 1_000_000_000;
@@ -130,18 +132,72 @@ describe("runToPurge", () => {
   });
 });
 
-describe("instructionProblem", () => {
-  it("accepts up to 2,000 characters of plain text, with line breaks", () => {
-    expect(instructionProblem(`Read the news.\n${"x ".repeat(992)}`)).toBeNull();
-    expect(instructionProblem("y ".repeat(1000))).toBeNull();
+describe("a routine's delete", () => {
+  const BOT = "bot" as Id<"bots">;
+  const DAILY = { kind: "weekly" as const, weekdays: [0, 1, 2, 3, 4, 5, 6], hour: 10, minute: 0 };
+  const routine = (fields: Partial<Doc<"schedules">> = {}): Doc<"schedules"> => ({
+    _id: "routine" as Id<"schedules">,
+    _creationTime: 0,
+    ownerId: "owner" as Id<"users">,
+    botId: BOT,
+    threadId: "thread" as Id<"threads">,
+    instruction: "Read the news and report.",
+    title: "News",
+    cadence: DAILY,
+    nextFireAt: NOW + 60 * MINUTE,
+    ...fields,
+  });
+  const deleteAt = (target: Doc<"schedules">, now = NOW) => ({ ...target, ...softDeleted(target, now) });
+
+  it("never fires while it can be undone, because it has no next time", () => {
+    const deleted = deleteAt(routine());
+    expect(deleted.nextFireAt).toBeUndefined();
+    expect(deleted.deleting).toEqual({ until: NOW + UNDO_MS, nextFireAt: NOW + 60 * MINUTE });
   });
 
-  it("uses the same rules as a note", () => {
-    expect(instructionProblem("")).toBe("empty");
-    expect(instructionProblem("z ".repeat(1001))).toBe("tooLong");
-    expect(instructionProblem("a‮b")).toBe("characters");
-    expect(instructionProblem("a\u200Bb")).toBe("characters");
-    expect(instructionProblem("my password=hunter2")).toBe("secret");
-    expect(INSTRUCTION_PROBLEMS.characters).toMatch(/invisible or control characters/);
+  it("counts for nothing, is left out of the prompt, and no bot can change it", () => {
+    const deleted = deleteAt(routine());
+    expect([routine(), deleted].filter(isLive)).toHaveLength(1);
+    expect(promptRoutines([routine({ _id: "kept" as Id<"schedules"> }), deleted], "UTC").map((row) => row.id)).toEqual(["kept"]);
+    expect(routineOfBot(deleted, BOT)).toBeNull();
+  });
+
+  it("comes back with the time it had on an undo", () => {
+    expect(restored(deleteAt(routine()))).toEqual({ deleting: undefined, nextFireAt: NOW + 60 * MINUTE });
+  });
+
+  it("stays paused on an undo if it was paused", () => {
+    expect(restored(deleteAt(routine({ nextFireAt: undefined })))).toEqual({ deleting: undefined, nextFireAt: undefined });
+  });
+
+  it("goes for good only once its undo window has ended", () => {
+    const deleted = deleteAt(routine());
+    expect(hardDeleteDue(deleted, NOW + UNDO_MS - 1)).toBe(false);
+    expect(hardDeleteDue(deleted, NOW + UNDO_MS)).toBe(true);
+  });
+
+  it("is not taken by an earlier delete's end after an undo, or after a second delete", () => {
+    const undone = { ...deleteAt(routine()), ...restored(deleteAt(routine())) };
+    expect(hardDeleteDue(undone, NOW + UNDO_MS)).toBe(false);
+    const deletedAgain = deleteAt(undone, NOW + 5000);
+    expect(hardDeleteDue(deletedAgain, NOW + UNDO_MS)).toBe(false);
+    expect(hardDeleteDue(deletedAgain, NOW + 5000 + UNDO_MS)).toBe(true);
+    expect(hardDeleteDue(null, NOW + UNDO_MS)).toBe(false);
+  });
+});
+
+describe("a bot's routines", () => {
+  const routine = { botId: "mine" as Id<"bots">, nextFireAt: NOW, deleting: undefined };
+
+  it("are its own, so a bot cannot reach another bot's routine", () => {
+    expect(routineOfBot(routine, "mine" as Id<"bots">)).toBe(routine);
+    expect(routineOfBot(routine, "other" as Id<"bots">)).toBeNull();
+    expect(routineOfBot(null, "mine" as Id<"bots">)).toBeNull();
+  });
+
+  it("count the next time from now under a new cadence, and a paused one stays paused", () => {
+    const sixHours = { kind: "everyHours" as const, hours: 6 };
+    expect(retimed(routine, sixHours, "Europe/Stockholm", NOW)).toEqual({ cadence: sixHours, nextFireAt: nextFireAfter(sixHours, "Europe/Stockholm", NOW) });
+    expect(retimed({ ...routine, nextFireAt: undefined }, sixHours, "Europe/Stockholm", NOW)).toEqual({ cadence: sixHours, nextFireAt: undefined });
   });
 });

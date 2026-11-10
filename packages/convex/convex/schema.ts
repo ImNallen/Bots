@@ -120,12 +120,18 @@ export default defineSchema({
     botId: v.id("bots"),
     threadId: v.id("threads"),
     instruction: v.string(),
+    // Optional only because routines made before them have none. Every new or changed routine has all three.
+    title: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    steps: v.optional(v.array(v.string())),
     cadence,
     // Absent means paused.
     nextFireAt: v.optional(v.number()),
     pausedBecause: v.optional(v.string()),
     resumedAt: v.optional(v.number()),
     lastMissed: v.optional(v.object({ at: v.number(), reason: v.string() })),
+    // Present while the owner can still undo a delete. nextFireAt is the time it had, absent if it was paused.
+    deleting: v.optional(v.object({ until: v.number(), nextFireAt: v.optional(v.number()) })),
   })
     .index("by_bot", ["botId"])
     .index("by_owner", ["ownerId"])

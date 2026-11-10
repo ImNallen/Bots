@@ -2,7 +2,10 @@ import { parseCadence } from "@bots/convex/scheduleTime";
 import { parseToolCall } from "@bots/protocol";
 import { describe, expect, it } from "vitest";
 
-const parsedByTool = (cadence: unknown) => parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "Read the news.", cadence }) }).kind === "ok";
+const TEXT = { title: "News", summary: "Tells you the news.", steps: ["Reads the news."], instruction: "Read the news." };
+const parsedByTool = (cadence: unknown) =>
+  parseToolCall({ name: "schedule_create", arguments: JSON.stringify({ ...TEXT, cadence }) }).kind === "ok" &&
+  parseToolCall({ name: "schedule_update", arguments: JSON.stringify({ routineId: "r1", cadence }) }).kind === "ok";
 
 describe("a cadence, in the tool's schema and in the backend's rule", () => {
   it.each<[unknown]>([
@@ -33,12 +36,12 @@ describe("a cadence, in the tool's schema and in the backend's rule", () => {
     expect(parseCadence(cadence)).toBeNull();
   });
 
-  it("gives the runner the cadence and the instruction, and nothing more", () => {
+  it("gives the runner the owner's words, the instruction, and the cadence, and nothing more", () => {
     const cadence = { kind: "everyHours", hours: 6 };
-    expect(parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "x", cadence }) })).toEqual({
+    expect(parseToolCall({ name: "schedule_create", arguments: JSON.stringify({ ...TEXT, cadence }) })).toEqual({
       kind: "ok",
-      invocation: { name: "schedule_propose", args: { instruction: "x", cadence } },
+      invocation: { name: "schedule_create", args: { ...TEXT, cadence } },
     });
-    expect(parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "x", cadence, description: "every Monday" }) }).kind).toBe("invalid");
+    expect(parseToolCall({ name: "schedule_create", arguments: JSON.stringify({ ...TEXT, cadence, description: "every Monday" }) }).kind).toBe("invalid");
   });
 });

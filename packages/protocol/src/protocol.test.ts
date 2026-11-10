@@ -232,7 +232,8 @@ describe("web_search", () => {
 });
 
 describe("a routine's cadence", () => {
-  const propose = (cadence: unknown) => parseToolCall({ name: "schedule_propose", arguments: JSON.stringify({ instruction: "Read the news.", cadence }) });
+  const TEXT = { title: "News", summary: "Tells you the news.", steps: ["Reads the news."], instruction: "Read the news." };
+  const propose = (cadence: unknown) => parseToolCall({ name: "schedule_create", arguments: JSON.stringify({ ...TEXT, cadence }) });
 
   it("sends the model no schema with a choice in it, because every chat run sends these", () => {
     expect(JSON.stringify(toolDefinitions)).not.toMatch(/"(oneOf|anyOf|allOf)"/);
@@ -240,10 +241,10 @@ describe("a routine's cadence", () => {
 
   it("gives each kind only its own fields", () => {
     const weekly = { kind: "weekly", weekdays: [1, 5], hour: 8, minute: 30 };
-    expect(propose(weekly)).toEqual({ kind: "ok", invocation: { name: "schedule_propose", args: { instruction: "Read the news.", cadence: weekly } } });
+    expect(propose(weekly)).toEqual({ kind: "ok", invocation: { name: "schedule_create", args: { ...TEXT, cadence: weekly } } });
     expect(propose({ kind: "everyHours", hours: 6 })).toEqual({
       kind: "ok",
-      invocation: { name: "schedule_propose", args: { instruction: "Read the news.", cadence: { kind: "everyHours", hours: 6 } } },
+      invocation: { name: "schedule_create", args: { ...TEXT, cadence: { kind: "everyHours", hours: 6 } } },
     });
   });
 
@@ -259,6 +260,57 @@ describe("a routine's cadence", () => {
     ["an unknown field", { kind: "everyHours", hours: 2, seconds: 1 }],
   ])("refuses %s", (_label, cadence) => {
     expect(propose(cadence).kind).toBe("invalid");
+  });
+});
+
+describe("routine tools", () => {
+  const TEXT = { title: "News", summary: "Tells you the news.", steps: ["Reads the news.", "Writes a summary."], instruction: "Read the news." };
+  const HOURLY = { kind: "everyHours", hours: 1 };
+  const parse = (name: string, args: unknown) => parseToolCall({ name, arguments: JSON.stringify(args) });
+
+  it("creates with the owner's words and the instruction the routine runs", () => {
+    expect(parse("schedule_create", { ...TEXT, cadence: HOURLY })).toEqual({ kind: "ok", invocation: { name: "schedule_create", args: { ...TEXT, cadence: HOURLY } } });
+  });
+
+  it.each([
+    ["no title", { summary: TEXT.summary, steps: TEXT.steps, instruction: TEXT.instruction, cadence: HOURLY }],
+    ["no steps", { title: TEXT.title, summary: TEXT.summary, instruction: TEXT.instruction, cadence: HOURLY }],
+    ["steps as one string", { ...TEXT, steps: "Reads.", cadence: HOURLY }],
+    ["no cadence", TEXT],
+    ["a field of its own", { ...TEXT, cadence: HOURLY, card: "yes" }],
+  ])("refuses a create with %s", (_label, args) => {
+    expect(parse("schedule_create", args).kind).toBe("invalid");
+  });
+
+  it("updates only what it names", () => {
+    expect(parse("schedule_update", { routineId: "r1", title: "Evening news" })).toEqual({ kind: "ok", invocation: { name: "schedule_update", args: { routineId: "r1", title: "Evening news" } } });
+    expect(parse("schedule_update", { routineId: "r1", cadence: HOURLY })).toEqual({ kind: "ok", invocation: { name: "schedule_update", args: { routineId: "r1", cadence: HOURLY } } });
+  });
+
+  it.each([
+    ["nothing to change", { routineId: "r1" }],
+    ["no id", { title: "News" }],
+    ["a bad cadence", { routineId: "r1", cadence: { kind: "everyHours" } }],
+  ])("refuses an update with %s", (_label, args) => {
+    expect(parse("schedule_update", args).kind).toBe("invalid");
+  });
+
+  it("deletes by id alone", () => {
+    expect(parse("schedule_delete", { routineId: "r1" })).toEqual({ kind: "ok", invocation: { name: "schedule_delete", args: { routineId: "r1" } } });
+    expect(parse("schedule_delete", {}).kind).toBe("invalid");
+    expect(parse("schedule_delete", { routineId: "r1", title: "News" }).kind).toBe("invalid");
+  });
+
+  it("no longer knows schedule_propose, so an old call cannot run again", () => {
+    expect(parse("schedule_propose", { instruction: "a", cadence: HOURLY })).toMatchObject({ kind: "invalid", reason: expect.stringMatching(/There is no tool named "schedule_propose"/) });
+  });
+
+  it("tells all three from every other tool", () => {
+    for (const name of ["schedule_create", "schedule_update", "schedule_delete"] as const) {
+      expect(toolEffect(name)).toBe("changesSchedule");
+      expect(returnsUntrustedText(name)).toBe(false);
+      expect(COMPUTER_TOOL_NAMES).not.toContain(name);
+    }
   });
 });
 
@@ -304,7 +356,9 @@ describe("parseToolCall", () => {
       "memory_save",
       "memory_forget",
       "description_set",
-      "schedule_propose",
+      "schedule_create",
+      "schedule_update",
+      "schedule_delete",
     ]);
     for (const tool of toolDefinitions) {
       expect(JSON.stringify(tool.function.parameters)).not.toMatch(/"(anyOf|oneOf)"/);
@@ -344,7 +398,9 @@ describe("toolEffect", () => {
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
       description_set: "changesMemory",
-      schedule_propose: "changesSchedule",
+      schedule_create: "changesSchedule",
+      schedule_update: "changesSchedule",
+      schedule_delete: "changesSchedule",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);
@@ -395,9 +451,9 @@ describe("memory tools", () => {
   });
 
   it("stays off the link's wire type, so a computerd closes the link on a routine call", () => {
-    const propose = { name: "schedule_propose", args: { instruction: "a", cadence: { kind: "everyHours", hours: 1 } } };
-    expect(toolInvocation.safeParse(propose).success).toBe(false);
-    expect(COMPUTER_TOOL_NAMES).not.toContain("schedule_propose");
+    const create = { name: "schedule_create", args: { title: "a", summary: "a", steps: ["a"], instruction: "a", cadence: { kind: "everyHours", hours: 1 } } };
+    expect(toolInvocation.safeParse(create).success).toBe(false);
+    expect(toolInvocation.safeParse({ name: "schedule_delete", args: { routineId: "a" } }).success).toBe(false);
   });
 
   it("names every published tool but the memory tools, the routine tool, and web_search as a computer tool", () => {

@@ -103,30 +103,52 @@ describe("conversationItems", () => {
   });
 
   describe("a routine's card", () => {
-    const propose = (args: unknown) => ({ id: "c1", name: "schedule_propose", arguments: JSON.stringify(args) });
-    const card = (args: unknown) => only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [propose(args)])] })], [approval()]), "approval");
+    const TEXT = { title: "Morning news", summary: "Tells you the news.", steps: ["Reads the news.", "Writes three lines."], instruction: "Read the news." };
+    const routineCall = (name: string, args: unknown) => ({ id: "c1", name, arguments: JSON.stringify(args) });
+    const card = (name: string, args: unknown) => only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [routineCall(name, args)])] })], [approval()]), "approval");
 
-    it("takes its title from the schedule and the owner's zone, and shows the instruction in full", () => {
-      const instruction = `Read the news.\n${"And the weather. ".repeat(100)}`;
-      expect(card({ instruction, cadence: { kind: "weekly", weekdays: [1, 4], hour: 9, minute: 0 } })).toMatchObject({
+    it("shows the title, the schedule in the owner's zone, and the numbered steps, and not the instruction", () => {
+      expect(card("schedule_create", { ...TEXT, cadence: { kind: "weekly", weekdays: [1, 4], hour: 9, minute: 0 } })).toMatchObject({
         title: "Create this routine? Every Monday and Thursday at 09:00, Europe/Stockholm time.",
-        arguments: [{ label: null, value: instruction }],
+        arguments: [{ label: null, value: "Morning news" }, { label: "steps", value: "1. Reads the news.\n2. Writes three lines." }],
       });
     });
 
     it("says how often for a routine with no wall time", () => {
-      expect(card({ instruction: "x", cadence: { kind: "everyHours", hours: 6 } }).title).toBe("Create this routine? Every 6 hours.");
+      expect(card("schedule_create", { ...TEXT, cadence: { kind: "everyHours", hours: 6 } }).title).toBe("Create this routine? Every 6 hours.");
+    });
+
+    it("shows a change's new words, and the instruction only when no steps came with it", () => {
+      expect(card("schedule_update", { routineId: "r1", title: "Evening news", cadence: { kind: "everyHours", hours: 2 } })).toMatchObject({
+        title: "Change this routine? Every 2 hours.",
+        arguments: [{ label: "routine", value: "r1" }, { label: "title", value: "Evening news" }],
+      });
+      expect(card("schedule_update", { routineId: "r1", instruction: "Read the weather." }).arguments).toEqual([
+        { label: "routine", value: "r1" },
+        { label: "instruction", value: "Read the weather." },
+      ]);
+    });
+
+    it("asks to delete by the routine's id", () => {
+      expect(card("schedule_delete", { routineId: "r1" })).toMatchObject({ title: "Delete this routine?", arguments: [{ label: null, value: "r1" }] });
     });
 
     it("shows what the call said if a card ever holds a schedule the rule refuses", () => {
-      const args = { instruction: "x", cadence: { kind: "everyHours", hours: 0 } };
-      expect(card(args)).toMatchObject({ title: "Create this routine?", arguments: [{ label: "instruction", value: "x" }, { label: "cadence" }] });
+      const args = { ...TEXT, cadence: { kind: "everyHours", hours: 0 } };
+      const shown = card("schedule_create", args);
+      expect(shown.title).toBe("Create this routine?");
+      expect(shown.arguments).toContainEqual({ label: "instruction", value: "Read the news." });
     });
 
-    it("words its row once it is done", () => {
-      const body = result("c1", "ok", "Created routine r1.");
-      const row = only(itemsOf([run({ bodies: [turn("", [propose({ instruction: "Read the news.", cadence: { kind: "everyHours", hours: 6 } })]), body] })]), "tool");
-      expect(row).toMatchObject({ name: "Created a routine", summary: "Read the news.", status: "finished" });
+    it("words its row once it is done, by the routine's title", () => {
+      const row = only(itemsOf([run({ bodies: [turn("", [routineCall("schedule_create", { ...TEXT, cadence: { kind: "everyHours", hours: 6 } })]), result("c1", "ok", "Created routine r1.")] })]), "tool");
+      expect(row).toMatchObject({ name: "Created a routine", summary: "Morning news", status: "finished" });
+    });
+
+    it("words an old schedule_propose row as a created routine, by its instruction", () => {
+      const old = routineCall("schedule_propose", { instruction: "Read the news.", cadence: { kind: "everyHours", hours: 6 } });
+      const row = only(itemsOf([run({ bodies: [turn("", [old]), { kind: "toolResult", toolCallId: "c1", name: "schedule_propose", outcome: "ok", output: "Created routine r1.", truncated: false }] })]), "tool");
+      expect(row).toMatchObject({ name: "Created a routine", icon: "lines", summary: "Read the news.", status: "finished" });
     });
   });
 
