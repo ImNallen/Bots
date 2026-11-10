@@ -114,13 +114,13 @@ type FakeMessage = { role: string; content?: unknown; tool_calls?: { id: string 
 type FakeRequest = {
   at: number;
   authorization: string;
-  body: { messages: FakeMessage[]; tools?: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean };
+  body: { messages: FakeMessage[]; tools?: { function: { name: string } }[]; parallel_tool_calls: boolean; stream: boolean; prompt_cache_key?: string };
 };
 
 type FakeToolCall = { id?: string; name: string; arguments: string };
 
 type Reply =
-  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string }
+  | { kind: "text"; text: string; reasoning?: string; chunkDelayMs?: number; model?: string; cachedTokens?: number }
   | { kind: "tools"; calls: FakeToolCall[]; delivery: "pieces" | "whole"; text?: string; promptTokens?: number }
   | { kind: "stall"; partial: string }
   | { kind: "status"; status: number; retryAfter?: string };
@@ -190,11 +190,13 @@ function chunk(delta: unknown, finishReason: string | null = null): unknown {
   };
 }
 
-async function finishSse(response: ServerResponse, finishReason: string, model = "fake-model", promptTokens = 11): Promise<void> {
+async function finishSse(response: ServerResponse, finishReason: string, reply: { model?: string; promptTokens?: number; cachedTokens?: number }): Promise<void> {
+  const promptTokens = reply.promptTokens ?? 11;
+  const cached = reply.cachedTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: reply.cachedTokens } };
   await writeSse(response, {
     ...(chunk({ content: "" }, finishReason) as object),
-    model,
-    usage: { prompt_tokens: promptTokens, completion_tokens: 7, total_tokens: promptTokens + 7 },
+    model: reply.model ?? "fake-model",
+    usage: { prompt_tokens: promptTokens, completion_tokens: 7, total_tokens: promptTokens + 7, ...cached },
   });
   await writeSse(response, "[DONE]");
   response.end();
@@ -221,7 +223,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
         await writeSse(response, chunk({ role: "assistant", content: piece }));
         await sleep(reply.chunkDelayMs ?? 0);
       }
-      await finishSse(response, "stop", reply.model);
+      await finishSse(response, "stop", reply);
       return;
     }
     case "tools": {
@@ -243,7 +245,7 @@ async function streamReply(response: ServerResponse, reply: Reply): Promise<void
           await writeSse(response, chunk({ tool_calls: [{ id: "null", index, function: { arguments: piece } }] }));
         }
       }
-      await finishSse(response, "tool_calls", undefined, reply.promptTokens);
+      await finishSse(response, "tool_calls", reply);
       return;
     }
     case "stall":
@@ -955,6 +957,9 @@ try {
     await check("the model call carries the decrypted key", () => {
       assert.equal(requests[0]?.authorization, `Bearer ${MISTRAL_KEY}`);
     });
+    await check("each request carries the chat's thread id as its prompt cache key", () => {
+      assert.deepEqual(requests.map((request) => request.body.prompt_cache_key), [chat.threadId, chat.threadId]);
+    });
     await check("the system prompt names the bot and calls tool output untrusted", () => {
       const system = String(requests[0]?.body.messages[0]?.content);
       assert.match(system, new RegExp(`happy-${nonce}`));
@@ -997,16 +1002,22 @@ try {
         ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-dropped-${nonce}`)] }
         : { kind: "text", text: reply, reasoning: `context-thinking-${nonce}` },
     );
-    await chat.settled(await chat.send(answered));
+    const answeredRunId = await chat.send(answered);
+    const answeredRun = await chat.settled(answeredRunId);
     const stopped = `context stopped ${nonce}`;
     fake.script(stopped, ({ toolResults }) =>
       toolResults.length === 0 ? { kind: "tools", delivery: "whole", calls: [shellCall(`echo context-kept-${nonce}`)] } : { kind: "status", status: 400 },
     );
     const stoppedRun = await chat.settled(await chat.send(stopped));
     const next = `context next ${nonce}`;
-    fake.script(next, () => ({ kind: "text", text: "fine" }));
+    const CACHED_TOKENS = 64;
+    fake.script(next, () => ({ kind: "text", text: "fine", cachedTokens: CACHED_TOKENS }));
     const nextRunId = await chat.send(next);
     const nextRun = await chat.settled(nextRunId);
+    const modelCallLog = (runId: Id<"runs">) => {
+      const line = logsText().split("\n").findLast((entry) => entry.includes(`"event":"model-call","runId":"${runId}"`));
+      return JSON.parse(line ?? "{}") as { promptTokens?: number; completionTokens?: number; cachedTokens?: number; storedBytes?: number; sentBytes?: number };
+    };
     const messages = withoutTimeLines(fake.requests(next)[0]?.body.messages ?? []);
     await check("the second run stored no reply, and the message after it was answered", () => {
       assert.equal(stoppedRun.state.kind, "failed");
@@ -1027,10 +1038,19 @@ try {
       assert.equal(messages[7]?.content, next);
     });
     await check("the model call logs its tokens, and fewer bytes sent than stored", () => {
-      const line = logsText().split("\n").findLast((entry) => entry.includes(`"event":"model-call","runId":"${nextRunId}"`));
-      const logged = JSON.parse(line ?? "{}") as { promptTokens?: number; completionTokens?: number; storedBytes?: number; sentBytes?: number };
+      const logged = modelCallLog(nextRunId);
       assert.deepEqual([logged.promptTokens, logged.completionTokens], [11, 7]);
-      assert.ok(logged.storedBytes !== undefined && logged.sentBytes !== undefined && logged.sentBytes < logged.storedBytes, line ?? "no model-call line");
+      assert.ok(logged.storedBytes !== undefined && logged.sentBytes !== undefined && logged.sentBytes < logged.storedBytes, JSON.stringify(logged));
+    });
+    await check("a reply that reports cached tokens stores the count on its turn, and its model call logs it", () => {
+      assert.deepEqual(turnsOf(nextRun).map((turn) => turn.usage), [{ promptTokens: 11, completionTokens: 7, cachedTokens: CACHED_TOKENS }]);
+      assert.equal(modelCallLog(nextRunId).cachedTokens, CACHED_TOKENS);
+    });
+    await check("a reply that reports none stores no cachedTokens on its turn, and its model call logs none", () => {
+      assert.deepEqual(turnsOf(answeredRun).map((turn) => turn.usage), [{ promptTokens: 11, completionTokens: 7 }, { promptTokens: 11, completionTokens: 7 }]);
+      const logged = modelCallLog(answeredRunId);
+      assert.equal(logged.promptTokens, 11);
+      assert.ok(!("cachedTokens" in logged), JSON.stringify(logged));
     });
   });
 
