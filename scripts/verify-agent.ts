@@ -5939,7 +5939,7 @@ try {
     await check("the next message on that thread gives Mistral a history it accepts", () => {
       const bodies = [...(pendingRun === undefined ? [] : bodiesOf(pendingRun)), { kind: "userMessage", text: "again" } as const];
       const history = historyOf(bodies.map((body) => threadEventOf({ body, _creationTime: Date.now() })));
-      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history })), null);
+      assert.equal(unansweredToolCall(toMistralMessages({ system: "s", history, timeZone: undefined })), null);
     });
 
     const longChat = await newChat({ client: first, name: "long-tool" });
