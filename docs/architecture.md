@@ -1012,3 +1012,15 @@ Bots copies these ideas:
 - OpenBot: one gateway that decides on and records every tool call, and fails closed.
 
 Grok Bot and Dots do not let users inspect or edit individual memories, according to reviews. Bots stores memory as rows, and today the owner can read, edit, and delete them in the bot's panel. The owner decided on 2026-11-07 that this screen is for now, and that a later, simpler UI will have people ask the bot instead. [The roadmap](roadmap.md) has what that needs.
+
+## Resetting the shared computer
+
+Settings offers an owner-only reset with a confirmation that all bots share the computer, active work stops, and all computer files and browser logins disappear. Convex keeps the computer row, VM slot, sizing, bots, chats, memories, and routine definitions. Local Docker computers cannot use this action.
+
+`computers.ts` owns the lifecycle. Reset increments the desired VM generation and records its request time in the same transaction that revokes the token, clears old observations and update fences, ends queued and running work, expires approvals, and releases take-overs. Admission rejects new messages, run claims, and take-overs during reset. Due routine occurrences advance without starting a run.
+
+The VM name identifies its disk incarnation. Generation zero keeps the legacy name, and later clones receive `bots-user-<vmid>-g<generation>` atomically in the clone request. Reconciliation inspects the VMID directly, including clones outside the pool. It destroys only an owned older generation, waits on locks, refuses foreign or newer identities, and configures a matching replacement. A failed call leaves durable progress and retries on the next pass. Reset ends only after the expected generation authenticates and connects.
+
+Every lifecycle write compares the captured generation. The reconciler checks freshness before and after each external call. A run claim carries its computer generation through every link retry and browsing cleanup. Screen requests bind to the authenticated connection, and losing that connection closes pending and attached streams. A stale authentication result cannot replace a newer generation's connection.
+
+There is still exactly one reconciler pass at a time in one orchestrator process. Generation comparisons fence database writes, not concurrent external calls from multiple orchestrators. Running multiple reconciler processes remains unsupported. Proxmox permissions and task failures remain errors; a missing pool member never proves disk absence. Tests with fake Proxmox calls establish recovery behavior, not a successful reset of a real VM.

@@ -76,7 +76,7 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
 }
 
 function endedByThisClaim(run: Doc<"runs">) {
-  return { kind: "ended" as const, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
+  return { kind: "ended" as const, generation: run.computerGeneration ?? 0, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
 }
 
 type AppendBody = Infer<typeof appendBody>;
@@ -155,7 +155,7 @@ export const claim = mutation({
       .query("computers")
       .withIndex("by_owner", (q) => q.eq("ownerId", run.ownerId))
       .unique();
-    if ((computer?.updateFenceUntil ?? 0) > now) {
+    if (computer?.reset !== undefined || computer?.desiredVm?.removing === true || (computer?.updateFenceUntil ?? 0) > now) {
       return { kind: "unavailable" as const };
     }
     // Every attempt passes through here, and a crash cannot lose this count. Each attempt may have paid for a model call.
@@ -168,11 +168,13 @@ export const claim = mutation({
     const leaseToken = crypto.randomUUID();
     await ctx.db.patch(runId, {
       state: { kind: "running", leaseToken, leaseUntil: now + LEASE_MS },
+      computerGeneration: run.computerGeneration ?? computer?.desiredVm?.generation ?? 0,
       lastClaimSeq: run.nextSeq,
       claimsWithoutProgress,
     });
     return {
       kind: "claimed" as const,
+      generation: run.computerGeneration ?? computer?.desiredVm?.generation ?? 0,
       leaseToken,
       threadId: run.threadId,
       botId: run.botId,

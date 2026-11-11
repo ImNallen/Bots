@@ -13,7 +13,7 @@ export const request = mutation({
   handler: async (ctx, { runId, toolCallId, toolName, subject, box, reason }) => {
     await requireService(ctx);
     const run = await ctx.db.get(runId);
-    if (run === null) {
+    if (run === null || (run.state.kind !== "queued" && run.state.kind !== "running")) {
       throw new ConvexError("No such run");
     }
     if (run.capability !== "full") {

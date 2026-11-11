@@ -51,7 +51,7 @@ describe("attachScreens", () => {
       authMode: { kind: "tailscale" },
       ownerForViewer: async (botId, subject) => {
         await new Promise((done) => setTimeout(done, ownerDelayMs));
-        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER, takeoverUntil } : null;
+        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER, generation: 0, takeoverUntil } : null;
       },
       log: (fields) => {
         logged.push(fields.event);
@@ -137,7 +137,7 @@ describe("attachScreens", () => {
     await new Promise((resolve) => socket.once("open", resolve));
     // The real computer sends nothing until the link's welcome, which comes after the relay attaches. This fake has no welcome.
     await until(() => logged.includes("screen-opened"));
-    expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot", mode: "watch" }]);
+    expect(opened).toEqual([{ ownerId: OWNER, generation: 0, botId: "my-bot", mode: "watch" }]);
     const near = computerSide[0] as WebSocket;
 
     const toViewer = new Promise<Buffer>((resolve) => socket.once("message", (data: Buffer) => resolve(data)));
@@ -191,7 +191,7 @@ describe("attachScreens", () => {
 
     it("opens a control stream during a take-over, and relays bytes both ways", async () => {
       const { socket, near } = await takenOver();
-      expect(opened).toEqual([{ ownerId: OWNER, botId: "my-bot", mode: "control" }]);
+      expect(opened).toEqual([{ ownerId: OWNER, generation: 0, botId: "my-bot", mode: "control" }]);
 
       const toViewer = new Promise<Buffer>((resolve) => socket.once("message", (data: Buffer) => resolve(data)));
       near.send(Buffer.from([1, 2, 3]));

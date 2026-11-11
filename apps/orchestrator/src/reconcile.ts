@@ -37,6 +37,7 @@ sed -n 's/^COMPUTER_TOKEN=//p' "$env_file" | tr -d '\\n' | sha256sum | cut -d' '
 `;
 
 export type DesiredVm = {
+  generation?: number;
   slot: number;
   cores: number;
   memoryMb: number;
@@ -69,8 +70,8 @@ export function addressFor(slot: number): string {
   return `10.77.0.${20 + slot}`;
 }
 
-function nameFor(vmid: number): string {
-  return `bots-user-${vmid}`;
+function nameFor(vmid: number, generation = 0): string {
+  return generation === 0 ? `bots-user-${vmid}` : `bots-user-${vmid}-g${generation}`;
 }
 
 function diskSizeGb(config: VmConfig): number {
@@ -82,8 +83,8 @@ function diskSizeGb(config: VmConfig): number {
 }
 
 // A VM with the right number and the wrong name is someone else's, so nothing here may change it.
-function assertOurs(vmid: number, config: VmConfig): void {
-  if (config.name !== nameFor(vmid) || config.template === 1) {
+function assertOurs(vmid: number, config: VmConfig, generation = 0): void {
+  if (config.name !== nameFor(vmid, generation) || config.template === 1) {
     throw new Error(`VM ${vmid} is named ${String(config.name)}, so it is not this computer's VM`);
   }
 }
@@ -198,34 +199,36 @@ export async function reconcileVm(args: {
     disconnect();
   }
 
-  let member = (await proxmox.members()).find((entry) => entry.vmid === vmid);
-
-  if (desired.removing) {
-    await report("removing");
-    if (member !== undefined) {
-      const config = await proxmox.config(vmid);
-      assertOurs(vmid, config);
-      if (config.lock !== undefined) {
-        return stopAt("waiting-for-lock");
-      }
-      if (member.running) {
-        await proxmox.stop(vmid);
-      }
+  const generation = desired.generation ?? 0;
+  let incarnation = await proxmox.inspect(vmid);
+  if (incarnation !== null) {
+    const { config } = incarnation;
+    const prefix = `bots-user-${vmid}`;
+    const match = new RegExp(`^${prefix}-g([1-9][0-9]*)$`).exec(String(config.name));
+    const actualGeneration = config.name === prefix ? 0 : match === null ? null : Number(match[1]);
+    if (config.template === 1 || actualGeneration === null || actualGeneration > generation) throw new Error(`VM ${vmid} has a foreign or newer identity`);
+    if (desired.removing || actualGeneration < generation) {
+      if (!desired.removing) disconnect();
+      await report("removing");
+      if (config.lock !== undefined) return stopAt("waiting-for-lock");
+      if (incarnation.running) await proxmox.stop(vmid);
       await proxmox.destroy(vmid);
+      incarnation = await proxmox.inspect(vmid);
+      if (incarnation !== null) return stopAt("removing");
     }
+  }
+  if (desired.removing) {
     await forget();
     return "removed";
   }
-
-  if (member === undefined) {
+  if (incarnation === null) {
     await report("cloning");
-    // A clone that outlived a killed orchestrator holds this VMID, so this fails and the next pass finds the finished VM.
-    await proxmox.clone({ template: TEMPLATE_VMID, vmid, name: nameFor(vmid) });
-    member = { vmid, running: false };
+    await proxmox.clone({ template: TEMPLATE_VMID, vmid, name: nameFor(vmid, generation) });
+    incarnation = await proxmox.inspect(vmid);
+    if (incarnation === null) return stopAt("cloning");
   }
-
-  const config = await proxmox.config(vmid);
-  assertOurs(vmid, config);
+  const config = incarnation.config;
+  assertOurs(vmid, config, generation);
   // A lock is a normal state, because a backup, a clone, or a resize holds one. The next pass tries again.
   if (config.lock !== undefined) {
     return stopAt("waiting-for-lock");
@@ -234,7 +237,7 @@ export async function reconcileVm(args: {
   await converge({ proxmox, vmid, address, desired, report });
   await assertFiltersHold(proxmox, vmid, address);
 
-  if (!member.running) {
+  if (!incarnation.running) {
     await report("starting");
     await proxmox.start(vmid);
   } else if (await proxmox.hasPendingChanges(vmid)) {

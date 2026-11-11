@@ -92,6 +92,7 @@ export default defineSchema({
     tokenHash: v.optional(v.string()),
     // Only provisioned computers have these. A dev computer is a local container.
     desiredVm: v.optional(desiredVm),
+    reset: v.optional(v.object({ generation: v.number(), requestedAt: v.number() })),
     observedVm: v.optional(observedVm),
     computerdCommit: v.optional(v.string()),
     // While this is in the future, no run of this owner can be claimed, because computerd is restarting.
@@ -151,6 +152,7 @@ export default defineSchema({
     nextSeq: v.number(),
     lastClaimSeq: v.optional(v.number()),
     claimsWithoutProgress: v.optional(v.number()),
+    computerGeneration: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
     .index("by_state", ["state.kind"])

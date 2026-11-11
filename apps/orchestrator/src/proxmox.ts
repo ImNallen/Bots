@@ -15,6 +15,7 @@ export type ExecResult = { exitCode: number; stdout: string };
 // Everything the reconcile logic does to Proxmox, so that a test can kill it between any two calls.
 export type Proxmox = {
   members: () => Promise<Member[]>;
+  inspect: (vmid: number) => Promise<{ config: VmConfig; running: boolean } | null>;
   clone: (args: { template: number; vmid: number; name: string }) => Promise<void>;
   config: (vmid: number) => Promise<VmConfig>;
   setConfig: (vmid: number, fields: Record<string, string | number>) => Promise<void>;
@@ -110,6 +111,17 @@ export function createProxmox(args: { url: string; node: string; token: string; 
           ? [{ vmid: member.vmid, running: member.status === "running" }]
           : [],
       );
+    },
+    inspect: async (vmid) => {
+      let config: VmConfig;
+      try {
+        config = await call<VmConfig>("GET", `${vmPath(vmid)}/config`);
+      } catch (error) {
+        if (error instanceof ProxmoxError && error.status === 500 && /configuration file .* does not exist/i.test(error.message)) return null;
+        throw error;
+      }
+      const status = await call<{ status: string }>("GET", `${vmPath(vmid)}/status/current`);
+      return { config, running: status.status === "running" };
     },
     clone: async ({ template, vmid, name }) => {
       await waitForTask(

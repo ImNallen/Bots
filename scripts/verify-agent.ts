@@ -4826,7 +4826,7 @@ try {
     const chat = await newChat({ client, name: "update-fence" });
 
     await check("the fence is granted to an owner with no active run", async () => {
-      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId }), { fenced: true });
+      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId, generation: 0 }), { fenced: true });
     });
     const runId = await chat.send(`fence ${nonce}`);
     await check("a queued run cannot be claimed while the fence holds", async () => {
@@ -4834,27 +4834,27 @@ try {
       assert.equal((await chat.run(runId))?.state.kind, "queued");
     });
     await check("the fence is refused while a run is queued", async () => {
-      await service.mutation(api.computers.releaseUpdateFence, { computerId });
-      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId }), { fenced: false });
+      await service.mutation(api.computers.releaseUpdateFence, { computerId, generation: 0 });
+      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId, generation: 0 }), { fenced: false });
     });
     const claim = await service.mutation(api.runs.claim, { runId });
     await check("a released fence lets the run be claimed", () => {
       assert.equal(claim.kind, "claimed");
     });
     await check("the fence is refused while a run is running", async () => {
-      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId }), { fenced: false });
+      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId, generation: 0 }), { fenced: false });
     });
     assert.ok(claim.kind === "claimed");
     await service.mutation(api.runs.finish, { runId, leaseToken: claim.leaseToken, state: { kind: "done" } });
 
     await check("refused claims do not count as attempts with no progress", async () => {
-      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId }), { fenced: true });
+      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId, generation: 0 }), { fenced: true });
       const next = await chat.send(`fence again ${nonce}`);
       for (let attempt = 0; attempt < 10; attempt += 1) {
         assert.deepEqual(await service.mutation(api.runs.claim, { runId: next }), { kind: "unavailable" });
       }
       assert.equal((await chat.run(next))?.state.kind, "queued");
-      await service.mutation(api.computers.releaseUpdateFence, { computerId });
+      await service.mutation(api.computers.releaseUpdateFence, { computerId, generation: 0 });
       const claimed = await service.mutation(api.runs.claim, { runId: next });
       assert.equal(claimed.kind, "claimed");
       assert.ok(claimed.kind === "claimed");
@@ -4862,7 +4862,7 @@ try {
     });
 
     await check("a fence that nobody releases expires, so a crash cannot strand a run", async () => {
-      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId }), { fenced: true });
+      assert.deepEqual(await service.mutation(api.computers.fenceForUpdate, { computerId, generation: 0 }), { fenced: true });
       const stranded = await chat.send(`fence crash ${nonce}`);
       assert.deepEqual(await service.mutation(api.runs.claim, { runId: stranded }), { kind: "unavailable" });
       await sleep(61_000);
@@ -5503,7 +5503,7 @@ try {
           }),
       ],
       ["credentials.remove", (client) => client.mutation(api.credentials.remove, { ownerId })],
-      ["bots.recordForgotten", (client) => client.mutation(api.bots.recordForgotten, { ownerId, botIds: [chat.botId] })],
+      ["bots.recordForgotten", (client) => client.mutation(api.bots.recordForgotten, { ownerId, generation: 0, botIds: [chat.botId] })],
       ["bots.promptFor", (client) => client.query(api.bots.promptFor, { botId: chat.botId })],
       ["credentials.ciphertextFor", (client) => client.query(api.credentials.ciphertextFor, { ownerId })],
       [
