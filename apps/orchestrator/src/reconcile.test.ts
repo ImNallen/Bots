@@ -744,3 +744,7 @@ describe("computer reset generations", () => {
     expect(reachedEnd).toBe(true);
   });
 });
+
+it.each([0, 201, -1, 1.5, Number.NaN])("refuses VM slots outside the reserved integer range: %s", (slot) => {
+  expect(() => vmidFor(slot)).toThrow("VM slot must be an integer between 1 and 200");
+});

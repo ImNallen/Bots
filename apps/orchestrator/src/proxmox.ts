@@ -117,7 +117,15 @@ export function createProxmox(args: { url: string; node: string; token: string; 
       try {
         config = await call<VmConfig>("GET", `${vmPath(vmid)}/config`);
       } catch (error) {
-        if (error instanceof ProxmoxError && error.status === 500 && /configuration file .* does not exist/i.test(error.message)) return null;
+        if (error instanceof ProxmoxError && (error.status === 403 || (error.status === 500 && /configuration file .* does not exist/i.test(error.message)))) {
+          // nextid checks the cluster inventory without VM.Audit, including after destroy removes VM ACLs.
+          try {
+            const free = await call<number>("GET", `/cluster/nextid?vmid=${vmid}`);
+            if (Number(free) === vmid) return null;
+          } catch (probeError) {
+            if (!(probeError instanceof ProxmoxError && probeError.status === 400)) throw probeError;
+          }
+        }
         throw error;
       }
       const status = await call<{ status: string }>("GET", `${vmPath(vmid)}/status/current`);

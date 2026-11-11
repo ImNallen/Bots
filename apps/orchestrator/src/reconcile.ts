@@ -63,6 +63,7 @@ export type Stage =
   | "removed";
 
 export function vmidFor(slot: number): number {
+  if (!Number.isInteger(slot) || slot < 1 || slot > 200) throw new Error("VM slot must be an integer between 1 and 200");
   return 200 + slot;
 }
 
