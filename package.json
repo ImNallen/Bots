@@ -15,7 +15,7 @@
     "typecheck": "pnpm --recursive run typecheck && tsc --project tsconfig.json",
     "test": "pnpm --recursive run test",
     "verify:reset": "node scripts/verify-reset.ts",
-    "verify:reset-ui": "node scripts/verify-reset-ui.ts",
+    "verify:reset-ui": "node scripts/verify-reset-dialog.mjs && node scripts/verify-reset-ui.ts",
     "verify:auth": "pnpm build && node scripts/verify-auth.ts",
     "verify:floating-computer": "node scripts/verify-floating-computer.ts",
     "verify:design": "node scripts/verify-design.ts",

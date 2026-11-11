@@ -46,6 +46,16 @@ try {
     assert((await confirmation.innerText()).includes("ALL computer files"));
     await page.screenshot({ path: `${destination}/${phone ? "phone" : "desktop"}-${colorScheme}-confirmation.png` });
     await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    await confirmation.waitFor({ state: "detached" });
+    await page.waitForFunction("document.activeElement?.textContent?.trim() === 'Reset computer'", undefined, { timeout: 5000 });
+    assert(await reset.evaluate((button) => button.ownerDocument.activeElement === button));
+    await reset.click();
+    await page.keyboard.press("Escape");
+    await confirmation.waitFor({ state: "detached" });
+    assert.equal(await page.locator("dialog[open]").count(), 1);
+    await confirmation.waitFor({ state: "detached" });
+    await page.waitForFunction("document.activeElement?.textContent?.trim() === 'Reset computer'", undefined, { timeout: 5000 });
+    assert(await reset.evaluate((button) => button.ownerDocument.activeElement === button));
     assert.equal((await owner.query(api.computers.current, {})).kind, "available");
     await reset.click();
     await service.mutation(api.computers.removeVm, { ownerSubject: subject });

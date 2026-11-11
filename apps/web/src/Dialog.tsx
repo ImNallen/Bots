@@ -4,14 +4,21 @@ import { Icon } from "./Icon.tsx";
 export function DialogFrame(props: { title: string; onClose: () => void; dismissible?: boolean; className?: string; children: ReactNode }) {
   const { title, onClose, dismissible = true, className = "dialog", children } = props;
   const dialog = useRef<HTMLDialogElement>(null);
+  const opener = useRef<Element | null>(null);
 
   useEffect(() => {
     const element = dialog.current;
+    opener.current ??= document.activeElement;
     // StrictMode runs this twice, and closing in a cleanup would fire onClose and drop the dialog.
     if (element !== null && !element.open) {
       element.showModal();
       element.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     }
+    return () => {
+      queueMicrotask(() => {
+        if (element !== null && !element.isConnected && opener.current instanceof HTMLElement) opener.current.focus();
+      });
+    };
   }, []);
 
   return (
