@@ -2,6 +2,7 @@ import { api } from "@bots/convex";
 import { useQuery } from "convex/react";
 import { useState, type ReactNode } from "react";
 import { AboutSection } from "./AboutSection.tsx";
+import { ComputerSection } from "./ComputerSection.tsx";
 import { readAppearance, setAppearance, type Appearance } from "./appearance.ts";
 import { DialogFrame } from "./Dialog.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
@@ -57,6 +58,7 @@ export function SettingsDialog({ email, onClose }: { email: string; onClose: () 
             </div>
             <AboutSection />
             <TimeZoneSection />
+            <ComputerSection />
             <div className="card appearance-setting">
               <div><h3>Appearance</h3><small>Make yourself comfortable.</small></div>
               <div className="appearance-options" role="group" aria-label="Appearance">

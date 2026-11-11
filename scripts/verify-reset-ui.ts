@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { api } from "@bots/convex";
+import { ConvexHttpClient } from "convex/browser";
+import { SignJWT, importJWK } from "jose";
+import { chromium } from "playwright";
+import { paths, parsePrivateJwk, readEnvFile } from "./lib.ts";
+
+const base = process.argv[2] ?? "http://localhost:5173";
+const env = readEnvFile(paths.rootEnv);
+assert(env.CONVEX_URL?.startsWith("http://127.0.0.1:") && env.JWT_PRIVATE_JWK && env.JWT_ISSUER);
+const convexUrl = env.CONVEX_URL;
+assert(convexUrl);
+const jwk = parsePrivateJwk(env.JWT_PRIVATE_JWK);
+const key = await importJWK(jwk, "ES256");
+async function token(subject: string) {
+  return await new SignJWT({ email: "reset-check@localhost", name: "Reset check" }).setProtectedHeader({ alg: "ES256", kid: jwk.kid }).setSubject(subject).setIssuer(env.JWT_ISSUER!).setAudience("bots").setIssuedAt().setExpirationTime("1h").sign(key);
+}
+const service = new ConvexHttpClient(convexUrl);
+service.setAuth(await token("service:orchestrator"));
+const browser = await chromium.launch();
+const destination = "/tmp/bots-reset-ui";
+await mkdir(destination, { recursive: true });
+try {
+  for (const phone of [false, true]) for (const colorScheme of ["light", "dark"] as const) {
+    const subject = `dev:reset-ui-${randomUUID()}@localhost`;
+    const auth = await token(subject);
+    const owner = new ConvexHttpClient(convexUrl);
+    owner.setAuth(auth);
+    await owner.mutation(api.users.ensureCurrent, {});
+    const page = await browser.newPage({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: phone, hasTouch: phone, colorScheme });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/auth/token", (route) => route.fulfill({ json: { token: auth } }));
+    await page.goto(base);
+    await page.getByRole("button", { name: /^Settings for/ }).click();
+    const reset = page.getByRole("button", { name: "Reset computer", exact: true });
+    await reset.waitFor();
+    assert(await reset.isDisabled());
+    await page.getByText(/Local Docker computers cannot/).waitFor();
+    const { computerId } = await service.mutation(api.computers.declareVm, { ownerSubject: subject, email: "reset-ui@localhost", displayName: "Reset UI", cores: 2, memoryMb: 2048, diskGb: 32 });
+    await reset.click();
+    const confirmation = page.getByRole("dialog", { name: "Reset computer?", exact: true });
+    await confirmation.waitFor();
+    assert((await confirmation.innerText()).includes("ALL computer files"));
+    await page.screenshot({ path: `${destination}/${phone ? "phone" : "desktop"}-${colorScheme}-confirmation.png` });
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal((await owner.query(api.computers.current, {})).kind, "available");
+    await reset.click();
+    // Changing the row through the real service API makes the pending UI request fail at the backend boundary.
+    await service.mutation(api.computers.removeVm, { ownerSubject: subject });
+    await confirmation.getByRole("button", { name: "Delete all computer files and reset" }).click();
+    await confirmation.getByRole("alert").waitFor();
+    await page.screenshot({ path: `${destination}/${phone ? "phone" : "desktop"}-${colorScheme}-error.png` });
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    await service.mutation(api.computers.forgetVm, { computerId, generation: 0 });
+    const fresh = await service.mutation(api.computers.declareVm, { ownerSubject: subject, email: "reset-ui@localhost", displayName: "Reset UI", cores: 2, memoryMb: 2048, diskGb: 32 });
+    await reset.click();
+    await confirmation.getByRole("button", { name: "Delete all computer files and reset" }).click();
+    await page.getByRole("button", { name: "Resetting computer…", exact: true }).waitFor();
+    await service.mutation(api.computers.recordObservedVm, { computerId: fresh.computerId, generation: 1, stage: "failed", detail: "Test clone failure" });
+    await page.getByText(/Reset is retrying: Test clone failure/).waitFor();
+    await page.reload();
+    await page.getByRole("button", { name: /^Settings for/ }).click();
+    await page.getByText(/Reset is retrying: Test clone failure/).waitFor();
+    assert(await page.getByRole("button", { name: "Resetting computer…", exact: true }).isDisabled());
+    assert(await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
+    await page.getByText(/Reset is retrying: Test clone failure/).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${destination}/${phone ? "phone" : "desktop"}-${colorScheme}-progress.png` });
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log(`verify:reset-ui passed. Screenshots: ${destination}`);
+} finally { await browser.close(); }

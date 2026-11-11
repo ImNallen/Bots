@@ -1804,3 +1804,7 @@ button.card-row:hover {
 .chat-recovery { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-card); }
 .chat-recovery h3 { font-size: 13px; font-weight: 500; }
 .chat-recovery p { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+.computer-setting { padding: 18px; }
+.computer-setting p { color: var(--muted); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.computer-setting .error { color: var(--danger); }
