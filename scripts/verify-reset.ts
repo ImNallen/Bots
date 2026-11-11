@@ -42,13 +42,23 @@ const otherRun = await other.mutation(api.threads.send, { threadId: otherThread,
 const claim = await service.mutation(api.runs.claim, { runId });
 assert.equal(claim.kind, "claimed");
 assert(claim.kind === "claimed");
+await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 1, body: { kind: "assistantTurn", text: "Earlier turn", toolCalls: [{ id: "reused", name: "shell", arguments: "{}" }], model: "test", usage: { promptTokens: 0, completionTokens: 0 } } });
+await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 2, body: { kind: "toolResult", toolCallId: "reused", name: "shell", outcome: "ok", output: "earlier result", truncated: false } });
+await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 3, body: { kind: "assistantTurn", text: "Starting calls", toolCalls: ["reused", "answered", "unanswered", "also-unanswered"].map((id) => ({ id, name: "shell", arguments: "{}" })), model: "test", usage: { promptTokens: 0, completionTokens: 0 } } });
+await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 4, body: { kind: "toolResult", toolCallId: "answered", name: "shell", outcome: "ok", output: "done", truncated: false } });
+await owner.mutation(api.runs.requestCancel, { runId });
 const approval = await service.mutation(api.approvals.request, { runId, toolCallId: "pending", toolName: "shell" });
 await owner.mutation(api.bots.takeOver, { botId });
 const routine = runConvex(["run", "scheduleChecks:createForCheck", JSON.stringify({ botId, instruction: "Keep the routine" })]);
 assert.equal(routine.kind, "ok");
 assert(routine.kind === "ok");
 const schedule: { scheduleId: string } = JSON.parse(routine.stdout);
+const seeded = runConvex(["run", "resetChecks:seed", JSON.stringify({ computerId, botId, count: 70 })]);
+assert(seeded.kind === "ok");
+const batchRoutines: string[] = JSON.parse(seeded.stdout);
 await owner.mutation(api.computers.reset, {});
+await service.mutation(api.computers.completeReset, { computerId, generation: 1 });
+assert.equal((await owner.query(api.computers.current, {})).kind, "resetting");
 const pendingReset = await owner.query(api.computers.current, {});
 await owner.mutation(api.computers.reset, {});
 assert.deepEqual(await owner.query(api.computers.current, {}), pendingReset);
@@ -65,7 +75,10 @@ assert.equal(await service.query(api.approvals.stateOf, { approvalId: approval.a
 await assert.rejects(owner.mutation(api.threads.send, { threadId, text: "Blocked" }));
 await assert.rejects(owner.mutation(api.bots.takeOver, { botId }));
 await assert.rejects(service.mutation(api.approvals.request, { runId, toolCallId: "late", toolName: "shell" }));
-await assert.rejects(service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 1, body: { kind: "assistantTurn", text: "Late", toolCalls: [], model: "test", usage: { promptTokens: 0, completionTokens: 0 } } }));
+await assert.rejects(service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 5, body: { kind: "assistantTurn", text: "Late", toolCalls: [], model: "test", usage: { promptTokens: 0, completionTokens: 0 } } }));
+await assert.rejects(service.mutation(api.runs.patchStream, { runId, leaseToken: claim.leaseToken, text: "Late stream" }));
+await assert.rejects(service.mutation(api.runs.finish, { runId, leaseToken: claim.leaseToken, state: { kind: "done" } }));
+await assert.rejects(owner.mutation(api.approvals.decide, { approvalId: approval.approvalId, decision: "approved" }));
 for (const operation of [
   () => service.mutation(api.computers.recordVmToken, { ...captured, tokenHash: "stale" }),
   () => service.mutation(api.computers.recordObservedVm, { ...captured, stage: "ready" }),
@@ -75,6 +88,22 @@ for (const operation of [
   () => service.mutation(api.computers.forgetVm, captured),
   () => service.mutation(api.computers.completeReset, captured),
 ]) await assert.rejects(operation());
+let cleanupFinished = false;
+for (let attempt = 0; attempt < 120; attempt++) {
+  const inspected = runConvex(["run", "resetChecks:inspect", JSON.stringify({ computerId })]);
+  assert(inspected.kind === "ok");
+  const state = JSON.parse(inspected.stdout);
+  if (state.cleanup === undefined) {
+    assert.equal(state.active, 0);
+    assert.equal(state.cancelled, 1);
+    assert.equal(state.pending, 0);
+    assert.equal(state.takeovers, 0);
+    cleanupFinished = true;
+    break;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+assert(cleanupFinished, "Durable cleanup finishes across multiple batches");
 const computers = await service.query(api.computers.desiredVms, {});
 const reset = computers.find((row) => row.computerId === computerId);
 assert(reset);
@@ -85,17 +114,30 @@ assert.equal(reset.hasActiveRun, false);
 assert(await owner.query(api.bots.get, { botId }));
 assert.deepEqual(await owner.query(api.memories.list, { botId }), notes);
 const events = await service.query(api.runs.eventsPage, { runId, paginationOpts: { cursor: null, numItems: 20 } });
+for (const id of ["answered", "unanswered", "also-unanswered"]) assert.equal(events.page.filter((event) => event.body.kind === "toolResult" && event.body.toolCallId === id).length, 1);
+assert.equal(events.page.filter((event) => event.body.kind === "toolResult" && event.body.toolCallId === "reused").length, 2);
 assert(events.page.some((event) => event.body.kind === "userMessage" && event.body.text === "Preserve this chat"));
 const due = runConvex(["run", "scheduleChecks:moveForCheck", JSON.stringify({ scheduleId: schedule.scheduleId, nextFireAt: Date.now() - 1000 })]);
 assert.equal(due.kind, "ok");
 const tick = runConvex(["run", "schedules:fireDue", "{}"]);
 assert.equal(tick.kind, "ok");
 const routines = await owner.query(api.schedules.listForBot, { botId });
-assert(routines?.routines.length === 1);
-assert(routines.routines[0]?.kind === "live" && (routines.routines[0].nextFireAt ?? 0) > Date.now());
+assert(routines?.routines.length === 71);
+assert(routines.routines.some((routine) => routine.kind === "live" && (routine.nextFireAt ?? 0) > Date.now()));
 const fire = runConvex(["run", "scheduleChecks:fireForCheck", JSON.stringify({ scheduleId: schedule.scheduleId })]);
 assert.equal(fire.kind, "failed");
 await service.mutation(api.computers.recordVmToken, { computerId, generation: 1, tokenHash: randomUUID() });
 await service.mutation(api.computers.recordObservedVm, { computerId, generation: 1, stage: "connecting" });
 assert.equal((await owner.query(api.computers.current, {})).kind, "resetting");
-console.log("verify:reset passed against a real local Convex backend. No Proxmox VM was accessed. Reset remains pending until a fresh connection.");
+const movedBatch = runConvex(["run", "resetChecks:makeDue", JSON.stringify({ scheduleIds: batchRoutines })]);
+assert.equal(movedBatch.kind, "ok");
+await service.mutation(api.computers.completeReset, { computerId, generation: 1 });
+assert.equal((await owner.query(api.computers.current, {})).kind, "resetting", "Completion waits for all due routine batches");
+for (let attempt = 0; attempt < 10 && (await owner.query(api.computers.current, {})).kind === "resetting"; attempt++) {
+  await service.mutation(api.computers.completeReset, { computerId, generation: 1 });
+}
+assert.equal((await owner.query(api.computers.current, {})).kind, "available");
+await service.mutation(api.computers.completeReset, { computerId, generation: 1 });
+const completedRoutines = await owner.query(api.schedules.listForBot, { botId });
+assert(completedRoutines?.routines.every((routine) => routine.kind === "live" && (routine.nextFireAt ?? 0) > Date.now()));
+console.log("verify:reset passed against a real local Convex backend. No Proxmox VM was accessed. Completion used a service call to stand in for connection evidence. Real VM connectivity remains unverified.");

@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireService } from "./identity.js";
+import { computerOfOwner, requireComputerAvailable } from "./computers.js";
 import { screenBox } from "./validators.js";
 
 // Long enough for a person who is asleep. After this the bot gets a refusal and can tell the user what it wanted.
@@ -16,6 +17,7 @@ export const request = mutation({
     if (run === null || (run.state.kind !== "queued" && run.state.kind !== "running")) {
       throw new ConvexError("No such run");
     }
+    await requireComputerAvailable(ctx, run.ownerId);
     if (run.capability !== "full") {
       throw new ConvexError("A read-only run cannot ask for approval");
     }
@@ -49,7 +51,10 @@ export const stateOf = query({
   handler: async (ctx, { approvalId }) => {
     await requireService(ctx);
     // A request that has vanished cannot have been approved.
-    return (await ctx.db.get(approvalId))?.state ?? "denied";
+    const approval = await ctx.db.get(approvalId);
+    if (approval === null) return "denied";
+    if ((await computerOfOwner(ctx, approval.ownerId))?.reset !== undefined) return "expired";
+    return approval.state;
   },
 });
 
@@ -61,6 +66,7 @@ export const decide = mutation({
     if (user === null || approval === null || approval.ownerId !== user._id) {
       throw new ConvexError("Approval not found");
     }
+    await requireComputerAvailable(ctx, approval.ownerId);
     // The first answer stands, so a second device cannot turn a refusal into a run.
     if (approval.state !== "pending") {
       throw new ConvexError("This call has already been answered");

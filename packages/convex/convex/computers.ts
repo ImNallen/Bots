@@ -1,8 +1,9 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { nextFireAfter, FALLBACK_ZONE } from "./scheduleTime.js";
-import { closeUnansweredCalls, endRun } from "./runEnd.js";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { endRun } from "./runEnd.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
 import { requireIdentity, requireService, upsertUser } from "./identity.js";
 
 // Slot n is VM 200 + n at 10.77.0.(20 + n), so 200 slots stay inside the user network.
@@ -197,8 +198,7 @@ export const fenceForUpdate = mutation({
     for (const kind of ["queued", "running"] as const) {
       const active = await ctx.db
         .query("runs")
-        .withIndex("by_state", (q) => q.eq("state.kind", kind))
-        .filter((q) => q.eq(q.field("ownerId"), computer.ownerId))
+        .withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", kind))
         .first();
       if (active !== null) {
         return { fenced: false };
@@ -269,13 +269,16 @@ export const completeReset = mutation({
   handler: async (ctx, { computerId, generation }) => {
     await requireService(ctx);
     const computer = await requireGeneration(ctx, computerId, generation);
-    if (computer?.reset !== undefined) {
-      const now = Date.now();
-      const zone = (await ctx.db.get(computer.ownerId))?.timeZone ?? FALLBACK_ZONE;
-      for await (const routine of ctx.db.query("schedules").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId))) {
-        if (routine.nextFireAt !== undefined && routine.nextFireAt <= now) await ctx.db.patch(routine._id, { nextFireAt: nextFireAfter(routine.cadence, zone, now), lastMissed: { at: routine.nextFireAt, reason: "The computer was resetting" } });
-      }
+    if (computer.reset === undefined) return;
+    if (computer.resetCleanup !== undefined) return;
+    const now = Date.now();
+    const zone = (await ctx.db.get(computer.ownerId))?.timeZone ?? FALLBACK_ZONE;
+    const due = await ctx.db.query("schedules").withIndex("by_owner_next_fire", (q) =>
+      q.eq("ownerId", computer.ownerId).gt("nextFireAt", undefined).lte("nextFireAt", now)).take(32);
+    for (const routine of due) {
+      if (routine.nextFireAt !== undefined) await ctx.db.patch(routine._id, { nextFireAt: nextFireAfter(routine.cadence, zone, now), lastMissed: { at: routine.nextFireAt, reason: "The computer was resetting" } });
     }
+    if (due.length === 32) return;
     await ctx.db.patch(computerId, { reset: undefined });
   },
 });
@@ -302,14 +305,56 @@ export const reset = mutation({
     await ctx.db.patch(computer._id, {
       desiredVm: { ...computer.desiredVm, generation }, reset: { generation, requestedAt: Date.now() },
       tokenHash: undefined, observedVm: undefined, computerdCommit: undefined, updateFenceUntil: undefined,
+      resetCleanup: { kind: "runs", callIndex: 0 },
     });
-    for (const kind of ["queued", "running"] as const) {
-      for await (const run of ctx.db.query("runs").withIndex("by_state", (q) => q.eq("state.kind", kind)).filter((q) => q.eq(q.field("ownerId"), computer.ownerId))) {
-        await closeUnansweredCalls(ctx, run);
-        await endRun(ctx, run._id, { kind: "failed", reason: "The owner reset the shared computer" });
+    await ctx.scheduler.runAfter(0, internal.computers.cleanupReset, { computerId: computer._id, generation });
+  },
+});
+
+export const cleanupReset = internalMutation({
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
+    const computer = await ctx.db.get(computerId);
+    if (computer?.reset?.generation !== generation || computer.resetCleanup === undefined) return;
+    const cleanup = computer.resetCleanup;
+    switch (cleanup.kind) {
+      case "runs": {
+        const queued = await ctx.db.query("runs").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", "queued")).first();
+        const run = queued ?? await ctx.db.query("runs").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", "running")).first();
+        if (run === null) {
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "approvals" } });
+          break;
+        }
+        const turn = await ctx.db.query("runEvents").withIndex("by_run_kind_seq", (q) => q.eq("runId", run._id).eq("body.kind", "assistantTurn")).order("desc").first();
+        const callIndex = cleanup.runId === run._id ? cleanup.callIndex : 0;
+        const call = turn?.body.kind === "assistantTurn" ? turn.body.toolCalls[callIndex] : undefined;
+        if (call !== undefined && turn !== null) {
+          const result = await ctx.db.query("runEvents").withIndex("by_run_call_seq", (q) => q.eq("runId", run._id).eq("body.toolCallId", call.id).gt("seq", turn.seq)).first();
+          if (result === null) {
+            await ctx.db.insert("runEvents", { runId: run._id, threadId: run.threadId, seq: run.nextSeq, body: { kind: "toolResult", toolCallId: call.id, name: call.name, outcome: "unavailable", output: "The owner reset the shared computer. The call outcome is unknown.", truncated: false } });
+            await ctx.db.patch(run._id, { nextSeq: run.nextSeq + 1 });
+          }
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "runs", runId: run._id, callIndex: callIndex + 1 } });
+        } else {
+          await endRun(ctx, run._id, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: "The owner reset the shared computer" });
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "runs", callIndex: 0 } });
+        }
+        break;
+      }
+      case "approvals": {
+        const approvals = await ctx.db.query("approvals").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state", "pending")).take(32);
+        for (const approval of approvals) await ctx.db.patch(approval._id, { state: "expired" });
+        if (approvals.length < 32) await ctx.db.patch(computerId, { resetCleanup: { kind: "bots", cursor: null } });
+        break;
+      }
+      case "bots": {
+        const bots = await ctx.db.query("bots").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId)).paginate({ cursor: cleanup.cursor, numItems: 32 });
+        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined });
+        await ctx.db.patch(computerId, { resetCleanup: bots.isDone ? undefined : { kind: "bots", cursor: bots.continueCursor } });
+        if (bots.isDone) return;
+        break;
       }
     }
-    for await (const approval of ctx.db.query("approvals").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state", "pending"))) await ctx.db.patch(approval._id, { state: "expired" });
-    for await (const bot of ctx.db.query("bots").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId))) await ctx.db.patch(bot._id, { takeoverUntil: undefined });
+    await ctx.scheduler.runAfter(0, internal.computers.cleanupReset, { computerId, generation });
   },
 });

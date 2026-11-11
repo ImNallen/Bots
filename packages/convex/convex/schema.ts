@@ -93,6 +93,11 @@ export default defineSchema({
     // Only provisioned computers have these. A dev computer is a local container.
     desiredVm: v.optional(desiredVm),
     reset: v.optional(v.object({ generation: v.number(), requestedAt: v.number() })),
+    resetCleanup: v.optional(v.union(
+      v.object({ kind: v.literal("runs"), runId: v.optional(v.id("runs")), callIndex: v.number() }),
+      v.object({ kind: v.literal("approvals") }),
+      v.object({ kind: v.literal("bots"), cursor: v.union(v.string(), v.null()) }),
+    )),
     observedVm: v.optional(observedVm),
     computerdCommit: v.optional(v.string()),
     // While this is in the future, no run of this owner can be claimed, because computerd is restarting.
@@ -136,6 +141,7 @@ export default defineSchema({
   })
     .index("by_bot", ["botId"])
     .index("by_owner", ["ownerId"])
+    .index("by_owner_next_fire", ["ownerId", "nextFireAt"])
     .index("by_next_fire", ["nextFireAt"]),
 
   runs: defineTable({
@@ -158,6 +164,7 @@ export default defineSchema({
     .index("by_state", ["state.kind"])
     .index("by_schedule", ["scheduleId"])
     .index("by_owner", ["ownerId"])
+    .index("by_owner_state", ["ownerId", "state.kind"])
     .index("by_owner_trigger", ["ownerId", "trigger"])
     .index("by_bot_state", ["botId", "state.kind"])
     .index("by_bot_ended", ["botId", "endedAt"]),
@@ -170,6 +177,8 @@ export default defineSchema({
   })
     .index("by_run_seq", ["runId", "seq"])
     .index("by_thread", ["threadId"])
+    .index("by_run_kind_seq", ["runId", "body.kind", "seq"])
+    .index("by_run_call_seq", ["runId", "body.toolCallId", "seq"])
     .index("by_run_outcome", ["runId", "body.outcome"]),
 
   runStreams: defineTable({
