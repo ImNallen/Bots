@@ -96,4 +96,4 @@ docker compose --env-file .env.local --file infra/control-vm/compose.yaml down
 
 Add `--volumes` to delete the workspace and journal, or the Convex data, as well.
 
-Reset rollout is gated on the [Proxmox permission prerequisite](docs/architecture.md#proxmox-permission-prerequisite-still-under-review). The pool-only token cannot recover an out-of-pool clone, and destroy removes static VMID ACL grants. Local fake API checks do not verify real-host reset.
+Reset still needs verification on a disposable real Proxmox VM before rollout. A host crash that leaves a locked clone outside the pool requires operator repair, as it did before this feature. See [the recovery limit](docs/architecture.md#proxmox-permissions-and-host-crash-recovery) and [issue 54](https://github.com/ImNallen/Bots/issues/54). Local fake API checks do not verify real-host reset.
