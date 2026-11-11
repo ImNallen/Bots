@@ -48,7 +48,6 @@ try {
     await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
     assert.equal((await owner.query(api.computers.current, {})).kind, "available");
     await reset.click();
-    // Changing the row through the real service API makes the pending UI request fail at the backend boundary.
     await service.mutation(api.computers.removeVm, { ownerSubject: subject });
     await confirmation.getByRole("button", { name: "Delete all computer files and reset" }).click();
     await confirmation.getByRole("alert").waitFor();

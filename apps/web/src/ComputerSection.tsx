@@ -50,7 +50,7 @@ export function ComputerSection() {
         </div>
       ) : null}
       <button type="button" className="btn btn-danger" disabled={computer?.kind !== "available" || request.kind === "pending"} onClick={() => setConfirming(true)}>{resetting ? "Resetting computer…" : "Reset computer"}</button>
-      {confirming && <Dialog title="Reset computer?" onClose={() => { if (request.kind !== "pending") setConfirming(false); }} footer={<>
+      {confirming && <Dialog title="Reset computer?" dismissible={request.kind !== "pending"} onClose={() => setConfirming(false)} footer={<>
         <button type="button" className="btn" data-autofocus disabled={request.kind === "pending"} onClick={() => setConfirming(false)}>Cancel</button>
         <button type="button" className="btn btn-danger" disabled={request.kind === "pending"} onClick={() => void submit()}>{request.kind === "pending" ? "Requesting reset…" : "Delete all computer files and reset"}</button>
       </>}>
