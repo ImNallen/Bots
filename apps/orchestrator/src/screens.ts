@@ -54,7 +54,7 @@ export function attachScreens(args: {
   server: Pick<Server, "on">;
   authMode: AuthMode;
   link: Pick<Link, "openStream">;
-  ownerForViewer: (botId: string, viewerSubject: string) => Promise<{ ownerId: Id<"users">; takeoverUntil: number } | null>;
+  ownerForViewer: (botId: string, viewerSubject: string) => Promise<{ ownerId: Id<"users">; generation: number; takeoverUntil: number } | null>;
   log: (fields: LogFields) => void;
   takeoverCheckMs?: number;
 }): void {
@@ -124,7 +124,7 @@ export function attachScreens(args: {
       // Bytes that arrive before the computer attaches would be lost, so the relay starts only once both ends exist.
       viewer.pause();
       link
-        .openStream({ ownerId: owner.ownerId, botId, mode })
+        .openStream({ ownerId: owner.ownerId, generation: owner.generation, botId, mode })
         .then((computer) => {
           if (typeof computer === "string") {
             // A paused socket cannot finish a close handshake, so the viewer would hang for the close timeout.

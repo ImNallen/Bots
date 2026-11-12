@@ -20,6 +20,7 @@ function freePort(): Promise<number> {
 
 let port: number;
 let link: Link;
+let generation = 0;
 
 beforeAll(async () => {
   port = await freePort();
@@ -28,7 +29,7 @@ beforeAll(async () => {
     port,
     computerWaitMs: 300,
     authenticate: async (token) =>
-      token === "good" ? { computerId: "computer" as Id<"computers">, ownerId: OWNER } : null,
+      token === "good" ? { computerId: "computer" as Id<"computers">, generation, ownerId: OWNER } : null,
     log: () => {},
   });
 });
@@ -55,7 +56,7 @@ async function connectComputer(tools?: string[]): Promise<Computer> {
 
 function callArgs(callId: string, signals?: { cancel?: AbortSignal; lost?: AbortSignal }) {
   return {
-    ownerId: OWNER,
+    generation: 0, ownerId: OWNER,
     callId,
     botId: "bot",
     tool,
@@ -254,9 +255,9 @@ describe("link", () => {
     });
 
     it("sends browsingEnd on the open link, and nothing when no computer is there", async () => {
-      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
+      link.sendBrowsingEnd({ generation: 0, ownerId: OWNER, botId: "bot", browsing });
       const computer = await connectComputer();
-      link.sendBrowsingEnd({ ownerId: OWNER, botId: "bot", browsing });
+      link.sendBrowsingEnd({ generation: 0, ownerId: OWNER, botId: "bot", browsing });
       await until(() => computer.received.some((message) => message.kind === "browsingEnd"));
       expect(computer.received.filter((message) => message.kind === "browsingEnd")).toEqual([{ kind: "browsingEnd", botId: "bot", key: "run-1" }]);
       computer.socket.close();
@@ -357,7 +358,7 @@ describe("streams", () => {
 
   it("opens a stream only when the computer dials back with its token", async () => {
     const computer = await connectComputer();
-    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode: "watch" });
+    const pending = link.openStream({ generation: 0, ownerId: OWNER, botId: "bot", mode: "watch" });
     await until(() => screenOpenFrom(computer).length === 1);
     const opened = screenOpenFrom(computer)[0];
     if (opened?.kind !== "screenOpen") {
@@ -381,7 +382,7 @@ describe("streams", () => {
   ] as const)("sends the exact bytes for a %s stream, because a computerd from before modes closes its link on a field it does not know", async (mode, field) => {
     const computer = await connectComputer();
     const raw = new Promise<string>((resolve) => computer.socket.once("message", (data: Buffer) => resolve(data.toString())));
-    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode });
+    const pending = link.openStream({ generation: 0, ownerId: OWNER, botId: "bot", mode });
     const text = await raw;
     const { streamId } = JSON.parse(text) as { streamId: string };
     expect(text).toBe(`{"kind":"screenOpen","streamId":"${streamId}","botId":"bot"${field}}`);
@@ -401,7 +402,7 @@ describe("streams", () => {
 
   it("refuses the right stream with a wrong token, and keeps it open for the real computer", async () => {
     const computer = await connectComputer();
-    const pending = link.openStream({ ownerId: OWNER, botId: "bot", mode: "watch" });
+    const pending = link.openStream({ generation: 0, ownerId: OWNER, botId: "bot", mode: "watch" });
     await until(() => screenOpenFrom(computer).length === 1);
     const opened = screenOpenFrom(computer)[0];
     if (opened?.kind !== "screenOpen") {
@@ -420,7 +421,80 @@ describe("streams", () => {
   });
 
   it("reports no computer for an owner with none", async () => {
-    expect(await link.openStream({ ownerId: "nobody" as Id<"users">, botId: "bot", mode: "watch" })).toBe("no-computer");
+    expect(await link.openStream({ generation: 0, ownerId: "nobody" as Id<"users">, botId: "bot", mode: "watch" })).toBe("no-computer");
   });
 });
 
+
+
+describe("connection stream cleanup", () => {
+  it("settles pending streams immediately on disconnect", async () => {
+    const computer = await connectComputer();
+    const pending = link.openStream({ ownerId: OWNER, generation: 0, botId: "bot", mode: "watch" });
+    await until(() => computer.received.some((message) => message.kind === "screenOpen"));
+    link.disconnect(OWNER);
+    expect(await pending).toBe("no-computer");
+    await computer.closed;
+  });
+  it("closes attached streams when their computer drops", async () => {
+    const computer = await connectComputer();
+    const pending = link.openStream({ ownerId: OWNER, generation: 0, botId: "bot", mode: "watch" });
+    await until(() => computer.received.some((message) => message.kind === "screenOpen"));
+    const opened = computer.received.find((message) => message.kind === "screenOpen");
+    if (opened?.kind !== "screenOpen") throw new Error("Missing stream request");
+    const dial = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise((resolve) => dial.once("open", resolve));
+    dial.send(JSON.stringify({ kind: "streamHello", token: "good", streamId: opened.streamId }));
+    await pending;
+    const closed = new Promise((resolve) => dial.once("close", resolve));
+    link.disconnect(OWNER);
+    await closed;
+    await computer.closed;
+  });
+});
+
+describe("reset link boundary", () => {
+  it("never retries an old call onto a new disk", async () => {
+    const old = await connectComputer();
+    const pending = link.call(callArgs("reset:old"));
+    await until(() => old.received.some((message) => message.kind === "toolCall"));
+    generation = 1;
+    const fresh = await connectComputer();
+    expect((await pending).outcome).toBe("unavailable");
+    expect(fresh.received.some((message) => message.kind === "toolCall")).toBe(false);
+    fresh.socket.close();
+    await fresh.closed;
+  });
+});
+
+describe("authentication completion order", () => {
+  it("refuses an old authentication callback after a fresh incarnation connects", async () => {
+    const delayed = Promise.withResolvers<import("./link.ts").Computer | null>();
+    const isolatedPort = await freePort();
+    const isolated = startLink({
+      host: "127.0.0.1", port: isolatedPort, computerWaitMs: 100,
+      authenticate: async (token) => token === "old" ? delayed.promise : { computerId: (token === "redeclared" ? "replacement" : "computer") as Id<"computers">, ownerId: OWNER, generation: token === "redeclared" ? 0 : 1 },
+      log: () => {},
+    });
+    const old = new WebSocket(`ws://127.0.0.1:${isolatedPort}`);
+    await new Promise((resolve) => old.once("open", resolve));
+    old.send(JSON.stringify({ kind: "hello", token: "old" }));
+    const closed = new Promise<number>((resolve) => old.once("close", resolve));
+    const fresh = new WebSocket(`ws://127.0.0.1:${isolatedPort}`);
+    await new Promise((resolve) => fresh.once("open", resolve));
+    const welcome = new Promise((resolve) => fresh.once("message", resolve));
+    fresh.send(JSON.stringify({ kind: "hello", token: "fresh" }));
+    await welcome;
+    delayed.resolve({ computerId: "computer" as Id<"computers">, ownerId: OWNER, generation: 0 });
+    expect(await closed).toBe(LINK_CLOSE.unauthorized);
+    expect(isolated.isConnected(OWNER, 1)).toBe(true);
+    const redeclared = new WebSocket(`ws://127.0.0.1:${isolatedPort}`);
+    await new Promise((resolve) => redeclared.once("open", resolve));
+    const accepted = new Promise((resolve) => redeclared.once("message", resolve));
+    redeclared.send(JSON.stringify({ kind: "hello", token: "redeclared" }));
+    await accepted;
+    expect(isolated.isConnected(OWNER, 0)).toBe(true);
+    redeclared.close();
+    fresh.close();
+  });
+});

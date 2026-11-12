@@ -119,6 +119,7 @@ export const scheduleCall = v.union(
 export type ScheduleCall = Infer<typeof scheduleCall>;
 
 export const desiredVm = v.object({
+  generation: v.optional(v.number()),
   slot: v.number(),
   cores: v.number(),
   memoryMb: v.number(),

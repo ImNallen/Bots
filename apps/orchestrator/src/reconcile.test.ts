@@ -87,12 +87,16 @@ function fakeProxmox(world: World): Proxmox {
   return {
     members: async () =>
       [...world.vms.entries()].flatMap(([id, vm]) => (vm.inPool ? [{ vmid: id, running: vm.running }] : [])),
-    clone: async ({ vmid: id }) => {
+    inspect: async (id) => {
+      const vm = world.vms.get(id);
+      return vm === undefined ? null : { config: { ...vm.config }, running: vm.running };
+    },
+    clone: async ({ vmid: id, name }) => {
       world.log.push("clone");
       if (world.vms.has(id)) {
         throw new Error(`VM ${id} already exists`);
       }
-      world.vms.set(id, clonedVm());
+      world.vms.set(id, { ...clonedVm(), config: { ...clonedVm().config, name } });
     },
     config: async (id) => ({ ...vmIn(world, id).config }),
     setConfig: async (id, fields) => {
@@ -309,10 +313,10 @@ describe("reconcileVm", () => {
     });
   }
 
-  it("fails on a clone that is still running, then finds the finished VM", async () => {
+  it("waits on an in-progress clone outside the pool, then finds the finished VM", async () => {
     const world = newWorld();
     world.vms.set(vmid, { ...clonedVm(), inPool: false, config: { ...clonedVm().config, lock: "clone" } });
-    await expect(pass(world)).rejects.toThrow("already exists");
+    expect((await pass(world)).stage).toBe("waiting-for-lock");
     const vm = vmIn(world, vmid);
     vm.inPool = true;
     delete vm.config.lock;
@@ -330,7 +334,7 @@ describe("reconcileVm", () => {
   it("refuses a VM with this number and another name", async () => {
     const world = newWorld();
     world.vms.set(vmid, { ...clonedVm(), config: { ...clonedVm().config, name: "somebody-else" } });
-    await expect(pass(world)).rejects.toThrow("not this computer's VM");
+    await expect(pass(world)).rejects.toThrow("foreign or newer identity");
     expect(world.log).toEqual([]);
   });
 
@@ -623,7 +627,7 @@ describe("reconcileVm", () => {
     it("does not destroy a VM with another name", async () => {
       const world = newWorld();
       world.vms.set(vmid, { ...clonedVm(), config: { ...clonedVm().config, name: "somebody-else" } });
-      await expect(pass(world, { want: removing })).rejects.toThrow("not this computer's VM");
+      await expect(pass(world, { want: removing })).rejects.toThrow("foreign or newer identity");
       expect(world.vms.has(vmid)).toBe(true);
       expect(world.forgotten).toBe(false);
     });
@@ -649,7 +653,7 @@ describe("reconcileVm", () => {
       await pass(world);
       const proxmox: Proxmox = {
         ...fakeProxmox(world),
-        members: async () => {
+        inspect: async () => {
           throw new Error("no route to host");
         },
       };
@@ -695,4 +699,52 @@ describe("forgetBots", () => {
     const { proxmox } = proxmoxPrinting("someoneelse\n");
     await expect(forgetBots({ proxmox, vmid: 201, script: "s", botIds: ["a"] })).resolves.toEqual([]);
   });
+});
+
+describe("computer reset generations", () => {
+  const reset = { ...desired, generation: 1 };
+  it("finds an older disk outside the pool, destroys it, and keeps its slot", async () => {
+    const world = newWorld();
+    world.vms.set(vmid, { ...clonedVm(), inPool: false });
+    await pass(world, { want: reset });
+    expect(world.log.indexOf("destroy")).toBeLessThan(world.log.indexOf("clone"));
+    expect(vmIn(world, vmid).config.name).toBe(`bots-user-${vmid}-g1`);
+    expect(world.forgotten).toBe(false);
+  });
+  it("does not destroy a locked replacement outside the pool", async () => {
+    const world = newWorld();
+    world.vms.set(vmid, { ...clonedVm(), inPool: false, config: { ...clonedVm().config, name: `bots-user-${vmid}-g1`, lock: "clone" } });
+    expect((await pass(world, { want: reset })).stage).toBe("waiting-for-lock");
+    expect(world.log).not.toContain("destroy");
+    expect(world.log).not.toContain("clone");
+  });
+  it("rejects a foreign or newer incarnation without deleting it", async () => {
+    for (const name of ["foreign", `bots-user-${vmid}-g2`]) {
+      const world = newWorld();
+      world.vms.set(vmid, { ...clonedVm(), config: { ...clonedVm().config, name } });
+      await expect(pass(world, { want: reset })).rejects.toThrow();
+      expect(world.log).not.toContain("destroy");
+    }
+  });
+  it("recovers from a kill at every effect without deleting the replacement", async () => {
+    let reachedEnd = false;
+    for (let boundary = 1; boundary <= 100; boundary++) {
+      const world = newWorld();
+      world.vms.set(vmid, clonedVm());
+      let effects = 0;
+      const kill = () => ++effects === boundary;
+      try { await pass(world, { want: reset, proxmox: withKill(fakeProxmox(world), kill), effects: kill }); reachedEnd = true; } catch (error) { if (!(error instanceof Killed)) throw error; }
+      await pass(world, { want: reset });
+      expect(vmIn(world, vmid).config.name).toBe(`bots-user-${vmid}-g1`);
+      expect(world.log.filter((entry) => entry === "destroy")).toHaveLength(1);
+      expect(world.log.filter((entry) => entry === "clone")).toHaveLength(1);
+      expectConverged(world);
+      expect(world.forgotten).toBe(false);
+    }
+    expect(reachedEnd).toBe(true);
+  });
+});
+
+it.each([0, 201, -1, 1.5, Number.NaN])("refuses VM slots outside the reserved integer range: %s", (slot) => {
+  expect(() => vmidFor(slot)).toThrow("VM slot must be an integer between 1 and 200");
 });

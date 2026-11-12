@@ -1,3 +1,4 @@
+import { computerOfOwner, requireComputerAvailable } from "./computers.js";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { internalMutation, mutation, query } from "./_generated/server.js";
@@ -142,7 +143,8 @@ export const ownerForViewer = query({
       .query("users")
       .withIndex("by_auth_subject", (q) => q.eq("authSubject", viewerSubject))
       .unique();
-    return viewer?._id === bot.ownerId ? { ownerId: bot.ownerId, takeoverUntil: bot.takeoverUntil ?? 0 } : null;
+    const computer = await computerOfOwner(ctx, bot.ownerId);
+    return viewer?._id === bot.ownerId && computer?.reset === undefined && computer?.desiredVm?.removing !== true ? { ownerId: bot.ownerId, generation: computer?.desiredVm?.generation ?? 0, takeoverUntil: bot.takeoverUntil ?? 0 } : null;
   },
 });
 
@@ -150,7 +152,8 @@ export const ownerForViewer = query({
 export const takeOver = mutation({
   args: { botId: v.id("bots") },
   handler: async (ctx, { botId }) => {
-    await requireOwnedBot(ctx, botId);
+    const bot = await requireOwnedBot(ctx, botId);
+    await requireComputerAvailable(ctx, bot.ownerId);
     const takeoverUntil = Date.now() + TAKEOVER_MS;
     await ctx.db.patch(botId, { takeoverUntil });
     return takeoverUntil;
@@ -284,9 +287,11 @@ export const purge = internalMutation({
 
 // The reconcile loop calls this after a VM has lost these bots' files, which the owner's id scopes to that VM.
 export const recordForgotten = mutation({
-  args: { ownerId: v.id("users"), botIds: v.array(v.id("bots")) },
-  handler: async (ctx, { ownerId, botIds }) => {
+  args: { ownerId: v.id("users"), generation: v.number(), botIds: v.array(v.id("bots")) },
+  handler: async (ctx, { ownerId, generation, botIds }) => {
     await requireService(ctx);
+    const computer = await computerOfOwner(ctx, ownerId);
+    if (computer === null || (computer.desiredVm?.generation ?? 0) !== generation) throw new ConvexError("Stale computer generation");
     const forgotten = new Set<string>(botIds);
     for await (const row of ctx.db.query("removedBots").withIndex("by_owner", (q) => q.eq("ownerId", ownerId))) {
       if (forgotten.has(row.botId)) {

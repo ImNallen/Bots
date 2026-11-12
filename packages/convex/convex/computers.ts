@@ -1,6 +1,10 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query } from "./_generated/server.js";
-import { requireService, upsertUser } from "./identity.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import { nextFireAfter, FALLBACK_ZONE } from "./scheduleTime.js";
+import { endRun } from "./runEnd.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
+import { requireIdentity, requireService, upsertUser } from "./identity.js";
 
 // Slot n is VM 200 + n at 10.77.0.(20 + n), so 200 slots stay inside the user network.
 // A VM holds at most 8 desktops, so a stop of each fits one call of the script, however many bots it names.
@@ -34,6 +38,7 @@ export const register = mutation({
       const computerId = await ctx.db.insert("computers", { ownerId, tokenHash });
       return { ownerId, computerId };
     }
+    if (existing.desiredVm !== undefined) throw new ConvexError("Provisioned computer tokens belong to the reconciler");
     if (existing.tokenHash !== tokenHash) {
       await ctx.db.patch(existing._id, { tokenHash });
     }
@@ -49,7 +54,7 @@ export const byTokenHash = query({
       .query("computers")
       .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
       .first();
-    return computer === null ? null : { computerId: computer._id, ownerId: computer.ownerId };
+    return computer === null ? null : { computerId: computer._id, ownerId: computer.ownerId, generation: computer.desiredVm?.generation ?? 0 };
   },
 });
 
@@ -74,6 +79,7 @@ export const declareVm = mutation({
       .query("computers")
       .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
       .unique();
+    if (existing?.reset !== undefined) throw new ConvexError("This computer is resetting");
     if (existing?.desiredVm?.removing === true) {
       throw new ConvexError("This computer is being removed");
     }
@@ -89,7 +95,7 @@ export const declareVm = mutation({
         throw new ConvexError("Every VM slot is taken");
       }
     }
-    const desiredVm = { slot, cores, memoryMb, diskGb, removing: false };
+    const desiredVm = { slot, cores, memoryMb, diskGb, removing: false, generation: existing?.desiredVm?.generation ?? 0 };
     if (existing === null) {
       const computerId = await ctx.db.insert("computers", { ownerId, desiredVm });
       return { computerId, slot };
@@ -118,6 +124,7 @@ export const removeVm = mutation({
     if (computer?.desiredVm === undefined) {
       throw new ConvexError("This user has no provisioned computer");
     }
+    if (computer.reset !== undefined) throw new ConvexError("This computer is resetting");
     await ctx.db.patch(computer._id, { tokenHash: undefined, desiredVm: { ...computer.desiredVm, removing: true } });
   },
 });
@@ -154,21 +161,19 @@ export const desiredVms = query({
 });
 
 export const recordObservedVm = mutation({
-  args: { computerId: v.id("computers"), stage: v.string(), detail: v.optional(v.string()) },
-  handler: async (ctx, { computerId, stage, detail }) => {
+  args: { computerId: v.id("computers"), generation: v.number(), stage: v.string(), detail: v.optional(v.string()) },
+  handler: async (ctx, { computerId, generation, stage, detail }) => {
     await requireService(ctx);
+    await requireGeneration(ctx, computerId, generation);
     await ctx.db.patch(computerId, { observedVm: { stage, detail, at: Date.now() } });
   },
 });
 
 export const recordVmToken = mutation({
-  args: { computerId: v.id("computers"), tokenHash: v.string() },
-  handler: async (ctx, { computerId, tokenHash }) => {
+  args: { computerId: v.id("computers"), generation: v.number(), tokenHash: v.string() },
+  handler: async (ctx, { computerId, generation, tokenHash }) => {
     await requireService(ctx);
-    const computer = await ctx.db.get(computerId);
-    if (computer === null) {
-      throw new ConvexError("No such computer");
-    }
+    const computer = await requireGeneration(ctx, computerId, generation);
     if (computer.desiredVm?.removing === true) {
       throw new ConvexError("This computer is being removed");
     }
@@ -186,18 +191,14 @@ export const recordVmToken = mutation({
 // Convex runs a mutation atomically, so this and runs.claim cannot both win. An orchestrator that dies here leaves a fence
 // that expires, so a crash delays a user's run and cannot strand it.
 export const fenceForUpdate = mutation({
-  args: { computerId: v.id("computers") },
-  handler: async (ctx, { computerId }) => {
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
     await requireService(ctx);
-    const computer = await ctx.db.get(computerId);
-    if (computer === null) {
-      throw new ConvexError("No such computer");
-    }
+    const computer = await requireGeneration(ctx, computerId, generation);
     for (const kind of ["queued", "running"] as const) {
       const active = await ctx.db
         .query("runs")
-        .withIndex("by_state", (q) => q.eq("state.kind", kind))
-        .filter((q) => q.eq(q.field("ownerId"), computer.ownerId))
+        .withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", kind))
         .first();
       if (active !== null) {
         return { fenced: false };
@@ -209,29 +210,151 @@ export const fenceForUpdate = mutation({
 });
 
 export const releaseUpdateFence = mutation({
-  args: { computerId: v.id("computers") },
-  handler: async (ctx, { computerId }) => {
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
     await requireService(ctx);
+    await requireGeneration(ctx, computerId, generation);
     await ctx.db.patch(computerId, { updateFenceUntil: undefined });
   },
 });
 
 export const recordComputerdCommit = mutation({
-  args: { computerId: v.id("computers"), commit: v.string() },
-  handler: async (ctx, { computerId, commit }) => {
+  args: { computerId: v.id("computers"), generation: v.number(), commit: v.string() },
+  handler: async (ctx, { computerId, generation, commit }) => {
     await requireService(ctx);
+    await requireGeneration(ctx, computerId, generation);
     await ctx.db.patch(computerId, { computerdCommit: commit });
   },
 });
 
 export const forgetVm = mutation({
-  args: { computerId: v.id("computers") },
-  handler: async (ctx, { computerId }) => {
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
     await requireService(ctx);
-    const computer = await ctx.db.get(computerId);
+    const computer = await requireGeneration(ctx, computerId, generation);
     if (computer?.desiredVm?.removing !== true) {
       throw new ConvexError("Only a computer being removed can be forgotten");
     }
     await ctx.db.delete(computerId);
+  },
+});
+
+export async function computerOfOwner(ctx: QueryCtx, ownerId: Id<"users">) {
+  return await ctx.db.query("computers").withIndex("by_owner", (q) => q.eq("ownerId", ownerId)).unique();
+}
+
+export async function requireComputerAvailable(ctx: QueryCtx, ownerId: Id<"users">) {
+  const computer = await computerOfOwner(ctx, ownerId);
+  if (computer?.reset !== undefined || computer?.desiredVm?.removing === true) throw new ConvexError("The computer is resetting or being removed. Try again when it connects.");
+  return computer;
+}
+
+async function requireGeneration(ctx: QueryCtx, computerId: Id<"computers">, generation: number): Promise<Doc<"computers">> {
+  const computer = await ctx.db.get(computerId);
+  if (computer === null || (computer.desiredVm?.generation ?? 0) !== generation) throw new ConvexError("Stale computer generation");
+  return computer;
+}
+
+export const checkGeneration = query({
+  args: { computerId: v.id("computers"), generation: v.number(), removing: v.boolean() },
+  handler: async (ctx, { computerId, generation, removing }) => {
+    await requireService(ctx);
+    const computer = await requireGeneration(ctx, computerId, generation);
+    if (computer.desiredVm?.removing !== removing) throw new ConvexError("Stale removal state");
+  },
+});
+
+export const completeReset = mutation({
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
+    await requireService(ctx);
+    const computer = await requireGeneration(ctx, computerId, generation);
+    if (computer.reset === undefined) return;
+    if (computer.resetCleanup !== undefined) return;
+    const now = Date.now();
+    const zone = (await ctx.db.get(computer.ownerId))?.timeZone ?? FALLBACK_ZONE;
+    const due = await ctx.db.query("schedules").withIndex("by_owner_next_fire", (q) =>
+      q.eq("ownerId", computer.ownerId).gt("nextFireAt", undefined).lte("nextFireAt", now)).take(32);
+    for (const routine of due) {
+      if (routine.nextFireAt !== undefined) await ctx.db.patch(routine._id, { nextFireAt: nextFireAfter(routine.cadence, zone, now), lastMissed: { at: routine.nextFireAt, reason: "The computer was resetting" } });
+    }
+    if (due.length === 32) return;
+    await ctx.db.patch(computerId, { reset: undefined });
+  },
+});
+
+export const current = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireIdentity(ctx);
+    const computer = user === null ? null : await computerOfOwner(ctx, user._id);
+    if (computer?.desiredVm === undefined || computer.desiredVm.removing) return { kind: "unavailable" as const };
+    if (computer.reset !== undefined) return { kind: "resetting" as const, requestedAt: computer.reset.requestedAt, stage: computer.observedVm?.stage ?? "Reset requested", detail: computer.observedVm?.detail };
+    return { kind: "available" as const };
+  },
+});
+
+export const reset = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireIdentity(ctx);
+    const computer = user === null ? null : await computerOfOwner(ctx, user._id);
+    if (computer?.desiredVm === undefined || computer.desiredVm.removing) throw new ConvexError("Reset requires a provisioned VM. Local Docker computers cannot be reset here.");
+    if (computer.reset !== undefined) return;
+    const generation = (computer.desiredVm.generation ?? 0) + 1;
+    await ctx.db.patch(computer._id, {
+      desiredVm: { ...computer.desiredVm, generation }, reset: { generation, requestedAt: Date.now() },
+      tokenHash: undefined, observedVm: undefined, computerdCommit: undefined, updateFenceUntil: undefined,
+      resetCleanup: { kind: "runs", callIndex: 0 },
+    });
+    await ctx.scheduler.runAfter(0, internal.computers.cleanupReset, { computerId: computer._id, generation });
+  },
+});
+
+export const cleanupReset = internalMutation({
+  args: { computerId: v.id("computers"), generation: v.number() },
+  handler: async (ctx, { computerId, generation }) => {
+    const computer = await ctx.db.get(computerId);
+    if (computer?.reset?.generation !== generation || computer.resetCleanup === undefined) return;
+    const cleanup = computer.resetCleanup;
+    switch (cleanup.kind) {
+      case "runs": {
+        const queued = await ctx.db.query("runs").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", "queued")).first();
+        const run = queued ?? await ctx.db.query("runs").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state.kind", "running")).first();
+        if (run === null) {
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "approvals" } });
+          break;
+        }
+        const turn = await ctx.db.query("runEvents").withIndex("by_run_kind_seq", (q) => q.eq("runId", run._id).eq("body.kind", "assistantTurn")).order("desc").first();
+        const callIndex = cleanup.runId === run._id ? cleanup.callIndex : 0;
+        const call = turn?.body.kind === "assistantTurn" ? turn.body.toolCalls[callIndex] : undefined;
+        if (call !== undefined && turn !== null) {
+          const result = await ctx.db.query("runEvents").withIndex("by_run_call_seq", (q) => q.eq("runId", run._id).eq("body.toolCallId", call.id).gt("seq", turn.seq)).first();
+          if (result === null) {
+            await ctx.db.insert("runEvents", { runId: run._id, threadId: run.threadId, seq: run.nextSeq, body: { kind: "toolResult", toolCallId: call.id, name: call.name, outcome: "unavailable", output: "The owner reset the shared computer. The call outcome is unknown.", truncated: false } });
+            await ctx.db.patch(run._id, { nextSeq: run.nextSeq + 1 });
+          }
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "runs", runId: run._id, callIndex: callIndex + 1 } });
+        } else {
+          await endRun(ctx, run._id, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: "The owner reset the shared computer" });
+          await ctx.db.patch(computerId, { resetCleanup: { kind: "runs", callIndex: 0 } });
+        }
+        break;
+      }
+      case "approvals": {
+        const approvals = await ctx.db.query("approvals").withIndex("by_owner_state", (q) => q.eq("ownerId", computer.ownerId).eq("state", "pending")).take(32);
+        for (const approval of approvals) await ctx.db.patch(approval._id, { state: "expired" });
+        if (approvals.length < 32) await ctx.db.patch(computerId, { resetCleanup: { kind: "bots", cursor: null } });
+        break;
+      }
+      case "bots": {
+        const bots = await ctx.db.query("bots").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId)).paginate({ cursor: cleanup.cursor, numItems: 32 });
+        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined });
+        await ctx.db.patch(computerId, { resetCleanup: bots.isDone ? undefined : { kind: "bots", cursor: bots.continueCursor } });
+        if (bots.isDone) return;
+        break;
+      }
+    }
+    await ctx.scheduler.runAfter(0, internal.computers.cleanupReset, { computerId, generation });
   },
 });

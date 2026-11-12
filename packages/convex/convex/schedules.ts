@@ -1,3 +1,4 @@
+import { computerOfOwner, requireComputerAvailable } from "./computers.js";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -132,6 +133,7 @@ async function newestRunsOf(ctx: QueryCtx, scheduleId: Id<"schedules">, count: n
 
 export async function startReadOnlyRun(ctx: MutationCtx, schedule: Doc<"schedules">, deadlineAt = Date.now() + RUN_LIMIT_MS): Promise<Id<"runs">> {
   const { threadId, botId, ownerId } = schedule;
+  await requireComputerAvailable(ctx, ownerId);
   if ((await activeRunOfBot(ctx, botId)) !== null) {
     throw new ConvexError("This bot already has an active run");
   }
@@ -193,6 +195,11 @@ async function considerDue(ctx: MutationCtx, schedule: Doc<"schedules">, schedul
   const bot = await ctx.db.get(schedule.botId);
   if (bot === null) {
     await ctx.db.delete(schedule._id);
+    return "acted";
+  }
+  const computer = await computerOfOwner(ctx, schedule.ownerId);
+  if (computer?.reset !== undefined || computer?.desiredVm?.removing === true) {
+    await ctx.db.patch(schedule._id, { nextFireAt: nextFireAfter(schedule.cadence, await zoneOfOwner(ctx, schedule.ownerId), now), lastMissed: { at: scheduledFor, reason: "The computer is resetting" } });
     return "acted";
   }
   const decision = decideFire({

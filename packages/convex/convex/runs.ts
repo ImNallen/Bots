@@ -2,6 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import { computerOfOwner, requireComputerAvailable } from "./computers.js";
 import { capText } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
@@ -33,6 +34,7 @@ async function requireLease(
   if (run === null || run.state.kind !== "running" || run.state.leaseToken !== args.leaseToken) {
     throw new ConvexError("Lease lost");
   }
+  await requireComputerAvailable(ctx, run.ownerId);
   return run;
 }
 
@@ -76,7 +78,7 @@ async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"sc
 }
 
 function endedByThisClaim(run: Doc<"runs">) {
-  return { kind: "ended" as const, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
+  return { kind: "ended" as const, generation: run.computerGeneration ?? 0, ownerId: run.ownerId, botId: run.botId, capability: run.capability };
 }
 
 type AppendBody = Infer<typeof appendBody>;
@@ -146,17 +148,17 @@ export const claim = mutation({
     if (run === null || !noRunnerHolds(run, now)) {
       return { kind: "unavailable" as const };
     }
-    if (pastDeadline(run, now)) {
-      await endPastDeadline(ctx, run);
-      return endedByThisClaim(run);
-    }
     // The runner polls, so this run starts when the fence ends. It comes before the count below, because no attempt happened.
     const computer = await ctx.db
       .query("computers")
       .withIndex("by_owner", (q) => q.eq("ownerId", run.ownerId))
       .unique();
-    if ((computer?.updateFenceUntil ?? 0) > now) {
+    if (computer?.reset !== undefined || computer?.desiredVm?.removing === true || (computer?.updateFenceUntil ?? 0) > now) {
       return { kind: "unavailable" as const };
+    }
+    if (pastDeadline(run, now)) {
+      await endPastDeadline(ctx, run);
+      return endedByThisClaim(run);
     }
     // Every attempt passes through here, and a crash cannot lose this count. Each attempt may have paid for a model call.
     const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
@@ -168,11 +170,13 @@ export const claim = mutation({
     const leaseToken = crypto.randomUUID();
     await ctx.db.patch(runId, {
       state: { kind: "running", leaseToken, leaseUntil: now + LEASE_MS },
+      computerGeneration: run.computerGeneration ?? computer?.desiredVm?.generation ?? 0,
       lastClaimSeq: run.nextSeq,
       claimsWithoutProgress,
     });
     return {
       kind: "claimed" as const,
+      generation: run.computerGeneration ?? computer?.desiredVm?.generation ?? 0,
       leaseToken,
       threadId: run.threadId,
       botId: run.botId,
@@ -192,6 +196,7 @@ export const heartbeat = mutation({
     if (run === null || run.state.kind !== "running" || run.state.leaseToken !== leaseToken) {
       return { kind: "lost" as const };
     }
+    if ((await computerOfOwner(ctx, run.ownerId))?.reset !== undefined) return { kind: "lost" as const };
     const now = Date.now();
     await ctx.db.patch(runId, { state: { ...run.state, leaseUntil: now + LEASE_MS } });
     return { kind: "renewed" as const, cancelRequested: run.cancelRequested || pastDeadline(run, now) };

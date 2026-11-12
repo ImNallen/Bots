@@ -26,18 +26,19 @@ const MAX_ISSUED_PER_SOCKET = 4096;
 const STREAM_ATTACH_TIMEOUT_MS = 10_000;
 const MAX_STREAMS_PER_OWNER = 8;
 
-export type Computer = { computerId: Id<"computers">; ownerId: Id<"users"> };
+export type Computer = { computerId: Id<"computers">; generation: number; ownerId: Id<"users"> };
 
 export type LinkOutcome =
   | ToolResult
   | { outcome: "unavailable"; output: string; truncated: false };
 
 export type Link = {
-  isConnected: (ownerId: Id<"users">) => boolean;
-  openStream: (args: { ownerId: Id<"users">; botId: string; mode: StreamMode }) => Promise<WebSocket | "no-computer" | "too-many">;
+  isConnected: (ownerId: Id<"users">, generation?: number) => boolean;
+  openStream: (args: { ownerId: Id<"users">; generation: number; botId: string; mode: StreamMode }) => Promise<WebSocket | "no-computer" | "too-many">;
   disconnect: (ownerId: Id<"users">) => void;
   call: (args: {
     ownerId: Id<"users">;
+    generation: number;
     callId: string;
     botId: string;
     tool: ToolInvocation;
@@ -45,7 +46,7 @@ export type Link = {
     lost: AbortSignal;
     cancel: AbortSignal;
   }) => Promise<LinkOutcome>;
-  sendBrowsingEnd: (args: { ownerId: Id<"users">; botId: string; browsing: Browsing }) => void;
+  sendBrowsingEnd: (args: { ownerId: Id<"users">; generation: number; botId: string; browsing: Browsing }) => void;
 };
 
 type Connection = {
@@ -65,7 +66,7 @@ type SocketState =
   | { kind: "ready"; connection: Connection }
   | { kind: "stream" };
 
-type PendingStream = { ownerId: Id<"users">; attach: (socket: WebSocket) => void };
+type PendingStream = { connection: Connection; attach: (socket: WebSocket) => void };
 
 type Step =
   | { kind: "result"; result: ToolResult }
@@ -95,6 +96,7 @@ export function startLink(args: {
   const { log } = args;
   const connections = new Map<Id<"users">, Connection>();
   const onConnect = new Set<() => void>();
+  const newestGeneration = new Map<Id<"computers">, number>();
   const pendingStreams = new Map<string, PendingStream>();
   const openStreams = new Map<Id<"users">, number>();
 
@@ -185,6 +187,11 @@ export function startLink(args: {
         socket.close(LINK_CLOSE.unauthorized);
         return;
       }
+      if (computer.generation < (newestGeneration.get(computer.computerId) ?? 0)) {
+        socket.close(LINK_CLOSE.unauthorized);
+        return;
+      }
+      newestGeneration.set(computer.computerId, computer.generation);
       state = { kind: "ready", connection: addConnection(socket, computer, accepts) };
       send(socket, { kind: "welcome" });
       log({ level: "info", event: "computer-connected", computerId: computer.computerId });
@@ -201,7 +208,7 @@ export function startLink(args: {
       if (socket.readyState !== WebSocket.OPEN) {
         return;
       }
-      if (computer === null || computer.ownerId !== pending.ownerId || !pendingStreams.delete(streamId)) {
+      if (computer === null || computer.ownerId !== pending.connection.computer.ownerId || computer.generation !== pending.connection.computer.generation || connections.get(computer.ownerId) !== pending.connection || !pendingStreams.delete(streamId)) {
         log({ level: "warn", event: "link-rejected", reason: "stream-not-for-this-computer" });
         socket.close(LINK_CLOSE.unauthorized);
         return;
@@ -362,10 +369,13 @@ export function startLink(args: {
   }
 
   return {
-    isConnected: (ownerId) => connections.has(ownerId),
-    openStream: ({ ownerId, botId, mode }) => {
+    isConnected: (ownerId, generation) => {
       const connection = connections.get(ownerId);
-      if (connection === undefined) {
+      return connection !== undefined && (generation === undefined || connection.computer.generation === generation);
+    },
+    openStream: ({ ownerId, generation, botId, mode }) => {
+      const connection = connections.get(ownerId);
+      if (connection === undefined || connection.computer.generation !== generation) {
         return Promise.resolve("no-computer");
       }
       const open = openStreams.get(ownerId) ?? 0;
@@ -383,16 +393,23 @@ export function startLink(args: {
       };
       return new Promise((resolve) => {
         const streamId = randomUUID();
-        const timeout = setTimeout(() => {
+        const dropped = () => {
+          clearTimeout(timeout);
           pendingStreams.delete(streamId);
+          connection.onDrop.delete(dropped);
           release();
           resolve("no-computer");
-        }, STREAM_ATTACH_TIMEOUT_MS);
+        };
+        const timeout = setTimeout(dropped, STREAM_ATTACH_TIMEOUT_MS);
+        connection.onDrop.add(dropped);
         pendingStreams.set(streamId, {
-          ownerId,
+          connection,
           attach: (socket) => {
             clearTimeout(timeout);
-            socket.once("close", release);
+            connection.onDrop.delete(dropped);
+            const close = () => socket.close(LINK_CLOSE.replaced);
+            connection.onDrop.add(close);
+            socket.once("close", () => { connection.onDrop.delete(close); release(); });
             resolve(socket);
           },
         });
@@ -408,15 +425,18 @@ export function startLink(args: {
       dropConnection(connection);
       connection.socket.close(LINK_CLOSE.unauthorized);
     },
-    sendBrowsingEnd: ({ ownerId, botId, browsing }) => {
+    sendBrowsingEnd: ({ ownerId, generation, botId, browsing }) => {
       const connection = connections.get(ownerId);
-      if (connection !== undefined) {
+      if (connection !== undefined && connection.computer.generation === generation) {
         send(connection.socket, { kind: "browsingEnd", botId, key: browsing.key });
       }
     },
     async call(call) {
       for (;;) {
         const connection = connections.get(call.ownerId);
+        if (connection !== undefined && connection.computer.generation !== call.generation) {
+          return { outcome: "unavailable", output: "The computer was reset. This old call cannot run on the new computer.", truncated: false };
+        }
         if (connection !== undefined && !connection.accepts.has(call.tool.name)) {
           return { outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false };
         }

@@ -1,3 +1,4 @@
+import { requireComputerAvailable } from "./computers.js";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -116,6 +117,7 @@ export const send = mutation({
   args: { threadId: v.id("threads"), text: v.string(), attachmentIds: v.optional(v.array(v.id("attachments"))) },
   handler: async (ctx, { threadId, text, attachmentIds = [] }) => {
     const thread = await requireOwnedThread(ctx, threadId);
+    await requireComputerAvailable(ctx, thread.ownerId);
     // A deleted bot's thread lasts until its purge ends, and a run started there would bring back the bot's files.
     if ((await ctx.db.get(thread.botId)) === null) {
       throw new ConvexError("Bot not found");

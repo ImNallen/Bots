@@ -393,6 +393,7 @@ async function runTool(args: {
   deps.log({ level: "info", event: "tool-dispatch", callId, tool: tool.name });
   const result = await deps.link.call({
     ownerId: claim.ownerId,
+    generation: claim.generation,
     callId,
     botId: claim.botId,
     tool,
@@ -426,7 +427,7 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   function endLoggedOutWindow(): void {
     const browsing = browsingToEnd({ capability: claim.capability, runId, events: events.filter((event) => event.runId === runId).map((event) => event.body) });
     if (browsing !== undefined) {
-      deps.link.sendBrowsingEnd({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+      deps.link.sendBrowsingEnd({ ownerId: claim.ownerId, generation: claim.generation, botId: claim.botId, browsing });
     }
   }
 
@@ -516,7 +517,7 @@ export function startRunner(args: Omit<RunnerDeps, "slotFor">): void {
     if (claim.kind === "ended") {
       const browsing = browsingOf(claim.capability, runId);
       if (browsing !== undefined) {
-        args.link.sendBrowsingEnd({ ownerId: claim.ownerId, botId: claim.botId, browsing });
+        args.link.sendBrowsingEnd({ ownerId: claim.ownerId, generation: claim.generation, botId: claim.botId, browsing });
       }
       return;
     }

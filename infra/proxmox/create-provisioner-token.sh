@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run on the Proxmox host, after create-user-template.sh. Gives the orchestrator on VM 110 a token that can act only
-# on the VMs in one pool. The token goes straight to VM 110, and this script never prints it. Safe to rerun.
+# on the VMs in one pool. A host-crashed clone outside the pool still needs operator repair.
+# The token goes straight to VM 110, and this script never prints it. Safe to rerun.
 set -euo pipefail
 
 POOL=bots
