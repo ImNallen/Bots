@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import { completeWithRetry, createSseParser, createTurnAccumulator, parseRetryAfterMs } from "./mistral.ts";
+import { completeWithRetry, createSseParser, createTurnAccumulator, parseRetryAfterMs, rejectedKeyReason, requestBody, type MistralMessage } from "./mistral.ts";
 
 function parseAll(chunks: string[]): string[] {
   const payloads: string[] = [];
@@ -254,6 +254,58 @@ describe("what a call offers the model", () => {
   it("sends the prompt cache key at the top level of the body, with and without tools", async () => {
     expect((await bodyFor([])).prompt_cache_key).toBe("thread-1");
     expect((await bodyFor([{ type: "function" }])).prompt_cache_key).toBe("thread-1");
+  });
+});
+
+describe("a Together request and its stream", () => {
+  const messages: MistralMessage[] = [
+    { role: "system", content: "rules" },
+    { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: "data:image/png;base64,AAAA" }] },
+  ];
+
+  it("asks for usage on the stream, sends OpenAI's picture shape, and keeps the cache key and one call at a time", () => {
+    const body = requestBody({ provider: "together", model: "thinkingmachines/Inkling-2-Small", messages, tools: [{ type: "function" }], promptCacheKey: "thread-1" });
+    expect(body).toMatchObject({
+      model: "thinkingmachines/Inkling-2-Small",
+      stream: true,
+      stream_options: { include_usage: true },
+      prompt_cache_key: "thread-1",
+      tool_choice: "auto",
+      parallel_tool_calls: false,
+    });
+    expect(body.messages[1]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }] });
+  });
+
+  it("leaves a Mistral request as it was, with no stream options and Mistral's own picture shape", () => {
+    const body = requestBody({ provider: "mistral", model: "mistral-large-4", messages, tools: [], promptCacheKey: "thread-1" });
+    expect(Object.keys(body).toSorted()).toEqual(["messages", "model", "prompt_cache_key", "stream"]);
+    expect(body.messages).toBe(messages);
+    expect(requestBody({ model: "m", messages, tools: [], promptCacheKey: "t" }).messages).toBe(messages);
+  });
+
+  it("reads streamed reasoning from either of Together's fields, and a cached count from either place", () => {
+    const turn = accumulate([
+      delta({ role: "assistant", content: "", reasoning_content: "Look " }),
+      delta({ reasoning: "first." }),
+      delta({ content: "Red, then blue." }, "stop"),
+      { choices: [], usage: { prompt_tokens: 200, completion_tokens: 31, cached_tokens: 128 } },
+    ]).finish();
+    expect(turn).toMatchObject({ text: "Red, then blue.", reasoning: "Look first.", usage: { promptTokens: 200, completionTokens: 31, cachedTokens: 128 } });
+    const nested = accumulate([delta({ content: "hi" }, "stop"), { choices: [], usage: { prompt_tokens: 9, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } }]).finish();
+    expect(nested.usage).toEqual({ promptTokens: 9, completionTokens: 1, cachedTokens: 0 });
+  });
+
+  it("reads Together's tool call, whose arguments arrive in a second chunk with only the index", () => {
+    const turn = accumulate([
+      delta({ tool_calls: [{ index: 0, id: "call_01a1d69609e67f908eac6303", type: "function", function: { name: "desktop_look", arguments: "" } }] }),
+      delta({ tool_calls: [{ index: 0, function: { arguments: "{}" } }] }, "tool_calls"),
+    ]).finish();
+    expect(turn.toolCalls).toEqual([{ id: "call_01a1d69609e67f908eac6303", name: "desktop_look", arguments: "{}" }]);
+  });
+
+  it("names the provider and where to replace its key when the key is refused", () => {
+    expect(rejectedKeyReason("together")).toBe("Together rejected the API key. Replace it in Settings, under Together key.");
+    expect(rejectedKeyReason("mistral")).toMatch(/^Mistral rejected the API key\. .*Mistral key\.$/);
   });
 });
 

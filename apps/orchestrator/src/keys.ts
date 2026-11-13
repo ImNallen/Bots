@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { REJECTION_STATUS, resolveIdentity, type AuthMode, type Identity } from "./auth.ts";
 import type { LogFields } from "./log.ts";
-import { checkMistralKey } from "./mistral.ts";
+import { PROVIDER_LABEL, checkApiKey, type ModelProvider } from "./mistral.ts";
 import { encryptApiKey } from "./secrets.ts";
 import type { Service } from "./service.ts";
 
@@ -14,11 +14,13 @@ const keyBody = z.strictObject({ key: z.string().trim().min(8).max(512) });
 export function keyRoutes(args: {
   authMode: AuthMode;
   masterKey: Buffer;
-  mistralBaseUrl: string;
+  provider: ModelProvider;
+  baseUrl: string;
   service: Service;
   log: (fields: LogFields) => void;
 }) {
-  const { service, log } = args;
+  const { service, log, provider } = args;
+  const label = PROVIDER_LABEL[provider];
   const app = new Hono<{ Variables: { identity: Identity } }>();
 
   app.use("*", async (c, next) => {
@@ -53,28 +55,28 @@ export function keyRoutes(args: {
         return c.json({ error: "Send a JSON body with a key between 8 and 512 characters." }, 400);
       }
       const apiKey = body.data.key;
-      const check = await checkMistralKey({ baseUrl: args.mistralBaseUrl, apiKey });
+      const check = await checkApiKey({ baseUrl: args.baseUrl, apiKey });
       switch (check) {
         case "rejected":
-          log({ level: "info", event: "key-refused-by-mistral", subject: c.get("identity").subject });
-          return c.json({ error: "Mistral rejected this key." }, 400);
+          log({ level: "info", event: `key-refused-by-${provider}`, subject: c.get("identity").subject });
+          return c.json({ error: `${label} rejected this key.` }, 400);
         case "unreachable":
-          return c.json({ error: "Could not reach Mistral to check this key. Try again." }, 502);
+          return c.json({ error: `Could not reach ${label} to check this key. Try again.` }, 502);
         case "accepted":
           break;
       }
       const ownerId = await ownerIdFor(c.get("identity"));
-      const encrypted = encryptApiKey({ masterKey: args.masterKey, ownerId, apiKey });
-      await service.mutation(api.credentials.store, { ownerId, ...encrypted });
-      log({ level: "info", event: "key-stored", ownerId });
+      const encrypted = encryptApiKey({ masterKey: args.masterKey, ownerId, apiKey, provider });
+      await service.mutation(api.credentials.store, { ownerId, provider, ...encrypted });
+      log({ level: "info", event: "key-stored", ownerId, provider });
       return c.json({ configured: true, last4: encrypted.last4 });
     },
   );
 
   app.delete("/", async (c) => {
     const ownerId = await ownerIdFor(c.get("identity"));
-    await service.mutation(api.credentials.remove, { ownerId });
-    log({ level: "info", event: "key-removed", ownerId });
+    await service.mutation(api.credentials.remove, { ownerId, provider });
+    log({ level: "info", event: "key-removed", ownerId, provider });
     return c.json({ configured: false, last4: null });
   });
 

@@ -53,7 +53,7 @@ function Composer(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: 
   const search = useSearch({ from: "/app/bots/$botId" });
   const screenCoversChat = useContext(ScreenCoversChat);
   const isPhone = useIsPhone();
-  const key = useQuery(api.credentials.status);
+  const key = useQuery(api.credentials.status, {});
   const voice = useVoiceInput({ botId, onTranscript: (transcript) => setText((current) => appendTranscript(current, transcript)), visible: !screenCoversChat && (!isPhone || (search.info !== true && search.routines !== true)) });
   const locked = view.fieldDisabled || sending || held !== null;
   const canSend = (text.trim() !== "" || attachments.ids.length > 0) && attachments.ready && !voice.pending;

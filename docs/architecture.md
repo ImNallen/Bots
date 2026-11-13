@@ -1,6 +1,6 @@
 # Architecture
 
-Bots is a self-hosted agent platform for one person or a small group. Each user brings a Mistral API key and gets one VM, which all of that user's bots share. Bots keep working when every client is off, because they run on a Proxmox server.
+Bots is a self-hosted agent platform for one person or a small group. Each user brings a Mistral API key, or a Together key for Inkling 2 Small, and gets one VM, which all of that user's bots share. Bots keep working when every client is off, because they run on a Proxmox server.
 
 ```text
 Web, Tauri, and Expo clients
@@ -982,9 +982,17 @@ The composer records only after the user taps the microphone and grants browser 
 
 The transcript appends to the current draft with a functional state update, so edits made while the request is pending remain. Transcription never calls `threads.send`. The user can edit the draft and choose when to send it. A transient failure keeps the recording in browser memory for retry. Cancellation discards it and aborts an in-flight request. Session identity checks reject late permission results and transcripts, while stream tracks are stopped on completion, cancellation, and unmount. Route changes that hide the composer stop capture, as do page hiding and focus moving into Settings. A transcription already underway may finish while the tab is hidden, since its microphone is already off.
 
+## Which model a bot answers with
+
+Every bot of a user answers with one model, which the user picks under Model in Settings: Mistral Large 4 through Mistral, or Inkling 2 Small through Together. `users.modelProvider` holds the choice, and no value means Mistral, so a user from before this choice keeps Mistral. The runner reads the choice before each model call, so a change reaches the next call of a run that is already going. Voice input always uses the Mistral key, because Together has no transcription model in Bots.
+
+The runner builds every request in Mistral's format, and `toOpenAiMessages` in `apps/orchestrator/src/together.ts` turns it into OpenAI's format at the last step. Three things differ. A picture's address becomes an object. A thinking chunk becomes `reasoning_content`, the field that Inkling streams its reasoning in, because Together's guide asks for reasoning to come back under the key it went out on. A PDF becomes a line that says the model cannot read it, because OpenAI's format has no PDF chunk. A Together request also sends `stream_options.include_usage`, because an OpenAI-style stream reports its token counts only when asked.
+
+The newest look's picture stays inside its tool result. A probe on 2026-11-13 showed that Together accepts a picture there for `thinkingmachines/Inkling-2-Small`, and the model named both colours of a test image. The same probe showed that Together accepts `parallel_tool_calls`, `prompt_cache_key`, and `stream_options`, and that it reports a cached count under `prompt_tokens_details`. In a run of three calls with Bots' system prompt and 21 tools, the second and third calls had 5,376 of about 5,550 prompt tokens cached. A call with a model whose ids do not fit `TOOL_CALL_ID` gets new ids before they are stored, so a thread can switch between the two providers.
+
 ## Where secrets live
 
-The orchestrator holds Mistral keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A Mistral key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. Bots call connector tools without receiving the tokens.
+The orchestrator holds Mistral and Together keys and OAuth tokens, encrypted with a master key that only it can read. Convex stores the ciphertext and the key's last 4 characters, and the web UI shows those 4. A key uses AES-256-GCM with the owner's user ID as authenticated data, so a ciphertext copied to another user's row does not decrypt. A Together key's authenticated data also names Together, so it does not decrypt in a Mistral row. A Mistral key's names only the owner, as every key's did before Together. A Mistral row has no `provider`, and a Together row has `provider: "together"`. Bots call connector tools without receiving the tokens.
 
 The orchestrator signs a short-lived JWT with the subject `service:orchestrator` for its own Convex calls, and every service function checks that exact subject. User subjects always start with `dev:` or `tailscale:`, so a user token cannot pass that check.
 

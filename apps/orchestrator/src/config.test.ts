@@ -67,6 +67,13 @@ describe("parseConfig", () => {
     expect(config.transcriptionModel).toBe("other-transcription-model");
   });
 
+  it("defaults to Inkling 2 Small on Together, and reads the Together settings", () => {
+    expect(parseConfig(validEnv).together).toEqual({ baseUrl: "https://api.together.ai", model: "thinkingmachines/Inkling-2-Small" });
+    const config = parseConfig({ ...validEnv, TOGETHER_BASE_URL: "http://127.0.0.1:9/", TOGETHER_MODEL: "other" });
+    expect(config.together).toEqual({ baseUrl: "http://127.0.0.1:9", model: "other" });
+    expect(() => parseConfig({ ...validEnv, TOGETHER_BASE_URL: "not a url" })).toThrow(/TOGETHER_BASE_URL/);
+  });
+
   it("parses tailscale mode, ignores DEV_LOGIN, and needs no computer token", () => {
     const config = parseConfig({
       ...validEnv,

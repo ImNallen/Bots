@@ -63,6 +63,7 @@ startRunner({
   search: createSearch({ url: config.searxngUrl, fetch }),
   masterKey: config.masterKey,
   mistral: config.mistral,
+  together: config.together,
   ownerScope,
   log,
 });
@@ -104,16 +105,12 @@ app.get("/auth/token", async (c) => {
 
 app.all("/auth/*", (c) => c.json({ error: "not-found" }, 404));
 
-app.route(
-  "/api/mistral-key",
-  keyRoutes({
-    authMode: config.authMode,
-    masterKey: config.masterKey,
-    mistralBaseUrl: config.mistral.baseUrl,
-    service,
-    log,
-  }),
-);
+for (const [path, provider, baseUrl] of [
+  ["/api/mistral-key", "mistral", config.mistral.baseUrl],
+  ["/api/together-key", "together", config.together.baseUrl],
+] as const) {
+  app.route(path, keyRoutes({ authMode: config.authMode, masterKey: config.masterKey, provider, baseUrl, service, log }));
+}
 
 app.route("/api/attachments", attachmentRoutes({ authMode: config.authMode, service }));
 app.route("/api/voice", voiceRoutes({ authMode: config.authMode, service, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, model: config.transcriptionModel }));

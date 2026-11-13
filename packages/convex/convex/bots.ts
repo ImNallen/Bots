@@ -221,6 +221,7 @@ export const promptFor = query({
       about: owner?.about,
       notes: promptNotes(await notesOf(ctx, botId)),
       timeZone: owner?.timeZone,
+      modelProvider: owner?.modelProvider ?? "mistral",
       routines: promptRoutines(await routinesOfBot(ctx, botId), owner?.timeZone),
     };
   },

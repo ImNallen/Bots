@@ -42,6 +42,30 @@ describe("API key encryption", () => {
   });
 });
 
+describe("a Together key's encryption", () => {
+  const togetherKey = "tgp_v1_together-secret-wxyz";
+  const encrypted = encryptApiKey({ masterKey, ownerId: "owner-a", apiKey: togetherKey, provider: "together" });
+
+  it("round trips under its own provider", () => {
+    expect(decryptApiKey({ masterKey, ownerId: "owner-a", provider: "together", encrypted })).toBe(togetherKey);
+  });
+
+  it("fails as a Mistral key, so a Together row cannot be moved into a Mistral row, and the reverse fails too", () => {
+    expect(() => decryptApiKey({ masterKey, ownerId: "owner-a", encrypted })).toThrow();
+    const mistral = encryptApiKey({ masterKey, ownerId: "owner-a", apiKey });
+    expect(() => decryptApiKey({ masterKey, ownerId: "owner-a", provider: "together", encrypted: mistral })).toThrow();
+  });
+
+  it("fails under another owner", () => {
+    expect(() => decryptApiKey({ masterKey, ownerId: "owner-b", provider: "together", encrypted })).toThrow();
+  });
+
+  it("leaves a Mistral key as before, so keys stored before Together still decrypt", () => {
+    const mistral = encryptApiKey({ masterKey, ownerId: "owner-a", apiKey, provider: "mistral" });
+    expect(decryptApiKey({ masterKey, ownerId: "owner-a", encrypted: mistral })).toBe(apiKey);
+  });
+});
+
 describe("hashComputerToken", () => {
   it("is the hex sha256 of the token", () => {
     expect(hashComputerToken("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

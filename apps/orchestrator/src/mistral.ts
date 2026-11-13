@@ -1,5 +1,12 @@
 import { z } from "zod";
 import type { LogFields } from "./log.ts";
+import { toOpenAiMessages } from "./together.ts";
+
+// Every bot of a user answers with one provider's model. The messages are built in Mistral's format, and a Together request
+// translates them to OpenAI's at the last step.
+export type ModelProvider = "mistral" | "together";
+
+export const PROVIDER_LABEL: Record<ModelProvider, string> = { mistral: "Mistral", together: "Together" };
 
 export type MistralContentChunk =
   | { type: "text"; text: string }
@@ -49,6 +56,9 @@ const streamChunk = z.looseObject({
         delta: z
           .looseObject({
             content: z.union([z.string(), z.array(z.unknown())]).nullish(),
+            // Together streams a reasoning model's thinking as text in one of these, depending on the model.
+            reasoning: z.string().nullish(),
+            reasoning_content: z.string().nullish(),
             tool_calls: z.array(toolCallDelta).nullish(),
           })
           .nullish(),
@@ -61,6 +71,8 @@ const streamChunk = z.looseObject({
       prompt_tokens: z.number().nullish(),
       completion_tokens: z.number().nullish(),
       prompt_tokens_details: z.looseObject({ cached_tokens: z.number().nullish() }).nullish(),
+      // Together's guide says some of its models report the count here instead.
+      cached_tokens: z.number().nullish(),
     })
     .nullish(),
 });
@@ -203,7 +215,7 @@ export function createTurnAccumulator(args: { fallbackModel: string }) {
       model = chunk.model ?? model;
       if (chunk.usage !== undefined && chunk.usage !== null) {
         // No count is not a count of 0, so the key stays absent until Mistral reports one.
-        const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? usage.cachedTokens;
+        const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.cached_tokens ?? usage.cachedTokens;
         usage = {
           promptTokens: chunk.usage.prompt_tokens ?? usage.promptTokens,
           completionTokens: chunk.usage.completion_tokens ?? usage.completionTokens,
@@ -217,6 +229,11 @@ export function createTurnAccumulator(args: { fallbackModel: string }) {
           addContentPart({ type: "text", text: content });
         } else if (Array.isArray(content)) {
           content.forEach(addContentPart);
+        }
+        for (const thinking of [choice.delta?.reasoning, choice.delta?.reasoning_content]) {
+          if (typeof thinking === "string" && thinking !== "") {
+            addContentPart({ type: "thinking", thinking });
+          }
         }
         (choice.delta?.tool_calls ?? []).forEach(addToolCallDelta);
       }
@@ -259,8 +276,10 @@ const MAX_DELAY_MS = 5 * 60 * 1000;
 const STREAM_IDLE_MS = 120_000;
 const KEY_CHECK_TIMEOUT_MS = 10_000;
 
-export const REJECTED_KEY_REASON =
-  "Mistral rejected the API key. Replace it in the Mistral key section on the home page.";
+export function rejectedKeyReason(provider: ModelProvider): string {
+  const label = PROVIDER_LABEL[provider];
+  return `${label} rejected the API key. Replace it in Settings, under ${label} key.`;
+}
 
 type Attempt =
   | { kind: "ok"; turn: CompletedTurn }
@@ -270,6 +289,7 @@ type Attempt =
 export type CompletionResult = { kind: "ok"; turn: CompletedTurn } | { kind: "failed"; reason: string };
 
 type CompletionArgs = {
+  provider?: ModelProvider;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -311,7 +331,7 @@ async function readStream(args: { response: Response; completion: CompletionArgs
   }
   const ignored = accumulator.ignoredChunkTypes();
   if (ignored.length > 0) {
-    completion.log({ level: "info", event: "mistral-ignored-chunks", types: ignored });
+    completion.log({ level: "info", event: "mistral-ignored-chunks", provider: completion.provider ?? "mistral", types: ignored });
   }
   return { kind: "ok", turn: accumulator.finish() };
 }
@@ -322,7 +342,21 @@ async function errorDetail(args: { response: Response; apiKey: string }): Promis
   return body.replaceAll(args.apiKey, "[key]").slice(0, 300).replace(/\s+/g, " ").trim();
 }
 
+// Mistral reports usage on every stream, and an OpenAI-style stream such as Together's reports it only when asked.
+export function requestBody(completion: Pick<CompletionArgs, "provider" | "model" | "messages" | "tools" | "promptCacheKey">) {
+  const together = completion.provider === "together";
+  return {
+    model: completion.model,
+    messages: together ? toOpenAiMessages(completion.messages) : completion.messages,
+    ...(completion.tools.length === 0 ? {} : { tools: completion.tools, tool_choice: "auto", parallel_tool_calls: false }),
+    stream: true,
+    ...(together ? { stream_options: { include_usage: true } } : {}),
+    prompt_cache_key: completion.promptCacheKey,
+  };
+}
+
 async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
+  const provider = completion.provider ?? "mistral";
   const idle = new AbortController();
   let idleTimer: NodeJS.Timeout | undefined;
   const touch = () => {
@@ -335,17 +369,11 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
     const response = await fetch(`${completion.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${completion.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: completion.model,
-        messages: completion.messages,
-        ...(completion.tools.length === 0 ? {} : { tools: completion.tools, tool_choice: "auto", parallel_tool_calls: false }),
-        stream: true,
-        prompt_cache_key: completion.promptCacheKey,
-      }),
+      body: JSON.stringify(requestBody(completion)),
       signal,
     });
     if (response.status === 401 || response.status === 403) {
-      return { kind: "failed", reason: REJECTED_KEY_REASON };
+      return { kind: "failed", reason: rejectedKeyReason(provider) };
     }
     if (response.status === 429 || response.status >= 500) {
       return {
@@ -356,7 +384,7 @@ async function attemptCompletion(completion: CompletionArgs): Promise<Attempt> {
     }
     if (!response.ok) {
       const detail = await errorDetail({ response, apiKey: completion.apiKey });
-      return { kind: "failed", reason: `Mistral refused the request with status ${response.status}: ${detail}` };
+      return { kind: "failed", reason: `${PROVIDER_LABEL[provider]} refused the request with status ${response.status}: ${detail}` };
     }
     const tracked = response.body?.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
@@ -411,15 +439,17 @@ export async function completeWithRetry(completion: CompletionArgs): Promise<Com
     }
     const backoffMs = FIRST_BACKOFF_MS * 2 ** (attempt - 1);
     const delayMs = Math.min(Math.max(backoffMs, result.retryAfterMs ?? 0), MAX_DELAY_MS);
-    completion.log({ level: "warn", event: "mistral-retry", attempt, detail: result.detail, delayMs });
+    completion.log({ level: "warn", event: "mistral-retry", provider: completion.provider ?? "mistral", attempt, detail: result.detail, delayMs });
     await abortableDelay(delayMs, completion.signal);
   }
-  return { kind: "failed", reason: `Mistral failed after ${MAX_ATTEMPTS} attempts. The last attempt got ${lastDetail}.` };
+  const label = PROVIDER_LABEL[completion.provider ?? "mistral"];
+  return { kind: "failed", reason: `${label} failed after ${MAX_ATTEMPTS} attempts. The last attempt got ${lastDetail}.` };
 }
 
 export type KeyCheck = "accepted" | "rejected" | "unreachable";
 
-export async function checkMistralKey(args: { baseUrl: string; apiKey: string }): Promise<KeyCheck> {
+// Mistral and Together both list their models at this path, and both answer 401 to a key they do not know.
+export async function checkApiKey(args: { baseUrl: string; apiKey: string }): Promise<KeyCheck> {
   try {
     const response = await fetch(`${args.baseUrl}/v1/models`, {
       headers: { Authorization: `Bearer ${args.apiKey}` },

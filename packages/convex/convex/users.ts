@@ -4,6 +4,7 @@ import { requireIdentity, requireService, upsertUser } from "./identity.js";
 import { parseAbout } from "./memories.js";
 import { isTimeZone } from "./scheduleTime.js";
 import { followTimeZone } from "./schedules.js";
+import { modelProvider } from "./validators.js";
 
 export const ensureCurrent = mutation({
   args: { browserTimeZone: v.optional(v.string()) },
@@ -56,6 +57,18 @@ export const setTimeZone = mutation({
     }
     await ctx.db.patch(user._id, { timeZone });
     await followTimeZone(ctx, user._id, timeZone, Date.now());
+  },
+});
+
+// Mistral is the default, so choosing it clears the field, and a rollback to code without this field finds nothing to clear.
+export const setModelProvider = mutation({
+  args: { provider: modelProvider },
+  handler: async (ctx, { provider }) => {
+    const { user } = await requireIdentity(ctx);
+    if (user === null) {
+      throw new ConvexError("User not found");
+    }
+    await ctx.db.patch(user._id, { modelProvider: provider === "mistral" ? undefined : provider });
   },
 });
 

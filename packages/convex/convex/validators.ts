@@ -133,6 +133,10 @@ export const observedVm = v.object({
   at: v.number(),
 });
 
+// A credential or a user with no provider means Mistral, which was the only provider before Together.
+export const modelProvider = v.union(v.literal("mistral"), v.literal("together"));
+export type ModelProvider = Infer<typeof modelProvider>;
+
 export const approvalLevel = v.union(v.literal("everything"), v.literal("outside"), v.literal("shell"), v.literal("nothing"), v.literal("automatic"));
 export type ApprovalLevel = Infer<typeof approvalLevel>;
 
