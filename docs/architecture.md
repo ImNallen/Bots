@@ -104,7 +104,8 @@ Each request also sends `prompt_cache_key` with the thread's id, which Mistral's
 Inside a run, a request is now the one before it plus the new turn and its results. These things still change the start of a request:
 
 - A new message from the owner. The exchange before it closes, so its steps leave, and the shared part ends at that exchange's first message.
-- A second `desktop_look`. The older look's tool message loses its picture and its marks.
+- A second look. The older look's tool message loses its marks, and its picture if it had one.
+- A picture of 720x450 or larger. Together and Mistral cache nothing for a request that holds one, so only `desktop_look` sends a picture. [Where a picture lives](#where-a-picture-lives) has the measurements.
 - A read-only run's final call, which adds a rule to the system message and offers no tools.
 - A change to a note, the description, a routine, or the owner's time zone, which the system message or each time line holds.
 
@@ -402,7 +403,7 @@ Tailscale sends a user's identity with every request, whichever page caused it, 
 
 ### How a bot uses its desktop
 
-The `browser_*` tools drive a page through CDP, and CDP cannot reach Chromium's own buttons, menus, and address bar, a native dialog such as a file chooser, or another app. The desktop tools reach all of them. `desktop_look` returns a picture of the bot's screen with a numbered box on each thing it can act on, and a text list of those marks. `desktop_click`, `desktop_type`, `desktop_key`, and `desktop_scroll` act on a mark from the newest look, and each returns a new look.
+The `browser_*` tools drive a page through CDP, and CDP cannot reach Chromium's own buttons, menus, and address bar, a native dialog such as a file chooser, or another app. The desktop tools reach all of them. `desktop_look` returns a picture of the bot's screen with a numbered box on each thing it can act on, and a text list of those marks. `desktop_click`, `desktop_type`, `desktop_key`, and `desktop_scroll` act on a mark from the newest look, and each returns a new look. The model sees the picture of a look only from `desktop_look`. After an action it reads the new marks as text, and [Where a picture lives](#where-a-picture-lives) explains why.
 
 The tools name marks, not points. `mistral-large-4` hit 26% to 51% of targets when it gave pixel coordinates on 1280x800 screenshots of real sites, and its answers changed between identical requests. Numbered boxes took that to 79% to 85%. Most misses were small labels it misread, and the text list next to the picture removes the need to read them.
 
@@ -435,7 +436,9 @@ The card says what will happen in words, such as `Click entry "Address and searc
 
 A run keeps only its newest look, in a `screens` row: the view as JSON and the picture's bytes. `runs.append` writes it under the run's lease and sequence fence, and the `toolResult` event keeps only the short output, such as `Clicked button "Sign in" in Chromium.`. `endRun` deletes the row, and so does the purge. A routine never keeps one. So no picture of the owner's logged-in pages outlives its run, and storage grows only with active runs. The limits on the picture and the marks put a row under about 600 KB.
 
-Before each model call of a chat run, the runner reads that row. The newest look's tool message carries its text and its picture, and every older desktop result says that its marks no longer work. A request therefore holds one picture, which cost about 1,400 prompt tokens in an earlier probe, however long the history is. That probe also showed that `mistral-large-4` accepts a picture inside a tool message. An answered request's looks do not reach a later call at all. A look that a run with no reply left in its whole steps replays as text only, because its row is gone.
+Before each model call of a chat run, the runner reads that row. The newest look's tool message carries its text, and every older desktop result says that its marks no longer work. The newest look's picture goes in only when `desktop_look` made that look. After a click, typing, a key, or a scroll, the tool message carries the marks and a line that says to call `desktop_look` to see the screen. A request therefore holds at most one picture, which cost about 1,400 prompt tokens in an earlier probe, however long the history is. That probe also showed that `mistral-large-4` accepts a picture inside a tool message. The row still keeps the picture of every look, because an approval card outlines its target on it.
+
+The picture stays out after an action because of the prompt cache. On 2026-11-13, requests sent straight to Together and Mistral grew a run by one look at a time. With no picture, or a picture of 640x400, each request had the one before it cached, up to the newest look. With a picture of 720x450 or larger in the newest look, Together cached nothing in any of the six requests, in every repeat, and Mistral cached nothing in most of them. A real desktop run on Inkling 2 Small had exactly the system message and the tools cached, 5,376 tokens, on all of its later calls, while its prompt grew. The runs on the control VM before that averaged 28,600 prompt tokens on a call after a desktop step. So a picture in every request after an action made each step pay the whole run again. `pnpm verify:desktop-tools` prints each call's prompt and cached tokens, so a deploy shows whether the cache now grows. An answered request's looks do not reach a later call at all. A look that a run with no reply left in its whole steps replays as text only, because its row is gone.
 
 The link's frame is 2 MiB. `fitToLink` drops the picture, and then marks, before a result can pass it, because a frame over the limit would close the link and the resent call would get the same answer from the journal at every reconnect. The journal keeps no picture, so a repeated call gets its marks and no picture.
 

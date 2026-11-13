@@ -384,6 +384,15 @@ Done in code, and not deployed. The owner asked for it on 2026-11-13, after a co
 
 This changes the schema and not `packages/protocol`, so deploying it restarts nothing on a VM. Going back to a commit before this one needs every credentials row with `provider` deleted, and `modelProvider` and `voiceModel` cleared from every user, because the older schema has none of these fields and Convex checks every stored row at a deploy. The older code also reads a user's credentials with `.unique()` on `by_owner`, which fails when a user has two keys.
 
+### A desktop picture only from a look, on 2026-11-13
+
+Done in code, and not deployed. The owner asked how to make computer use cheaper. Among the owner's 20 newest chat runs, the 4 that used the desktop made 146 of the 182 model calls and sent 72% of the prompt tokens. A desktop step added only 150 to 500 tokens, but a desktop run averaged 36 calls, and its calls had only the system message and the tools cached. Requests sent straight to Together and Mistral showed why: a request with a picture of 720x450 or larger gets nothing cached. [Where a picture lives](architecture.md#where-a-picture-lives) has the measurements. The model now sees a picture only after `desktop_look`, and after a click, typing, a key, or a scroll it reads the new marks as text. What is stored and what an approval card shows do not change.
+
+- `pnpm verify:desktop-tools` passed against the deploy before this change, on Inkling 2 Small. Its 8 calls had 5,376 tokens cached each while the prompt grew from 5,543 to 7,933. The check now prints these counts.
+- It changes tool descriptions in `packages/protocol`, so a deploy updates `computerd` on each VM when its owner has no run.
+- After the deploy, run `pnpm verify:desktop-tools` again. It passes if the bot still names the menu's items, and the cached count should grow with the prompt. A bot may call `desktop_look` more often now, which costs calls back, so compare the call count too.
+- One run read a page by scrolling the desktop 22 times after it had a `browser_snapshot`. This change does not address that.
+
 ### Later: hide memory's details
 
 The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.

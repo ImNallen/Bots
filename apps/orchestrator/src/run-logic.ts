@@ -10,7 +10,7 @@ import {
   type ToolInvocation,
   type ToolName,
 } from "@bots/protocol";
-import { OLDER_LOOK, type ShownScreen } from "./desktop.ts";
+import { OLDER_LOOK, TEXT_ONLY_LOOK, type ShownScreen } from "./desktop.ts";
 import type { History, HistoryItem } from "./history.ts";
 import type { MistralMessage, MistralUserChunk } from "./mistral.ts";
 
@@ -175,14 +175,21 @@ function endedEarlyText(item: Extract<HistoryItem, { kind: "endedEarly" }>): str
   return lines.join("\n");
 }
 
-// Only the newest look carries its picture and marks, so a request holds one picture however long the history is. A call that
-// brought nothing back showed no look, and a hint to look again would invite the model to repeat a call the owner denied.
+// Only the newest look carries its marks, and only a newest look from desktop_look carries its picture, because Together and
+// Mistral cache no part of a request that holds a large picture. A call that brought nothing back showed no look, and a hint to
+// look again would invite the model to repeat a call the owner denied.
 function toolMessage(event: ToolResultBody, screen: ShownScreen | undefined): MistralMessage {
   const base = { role: "tool" as const, tool_call_id: event.toolCallId, name: replayedName(event.name) };
   const text = toolResultContent(event);
   if (screen !== undefined && screen.toolCallId === event.toolCallId) {
-    const picture = screen.imageUrl === null ? [] : [{ type: "image_url" as const, image_url: screen.imageUrl }];
-    return { ...base, content: [{ type: "text", text: `${text}\n\n${screen.text}` }, ...picture] };
+    const shown = `${text}\n\n${screen.text}`;
+    if (screen.imageUrl === null) {
+      return { ...base, content: [{ type: "text", text: shown }] };
+    }
+    if (event.name !== "desktop_look") {
+      return { ...base, content: `${shown}\n${TEXT_ONLY_LOOK}` };
+    }
+    return { ...base, content: [{ type: "text", text: shown }, { type: "image_url", image_url: screen.imageUrl }] };
   }
   const showedALook = event.name.startsWith("desktop_") && !BROUGHT_NOTHING_BACK.has(event.outcome);
   return { ...base, content: showedALook ? `${text}\n${OLDER_LOOK}` : text };

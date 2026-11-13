@@ -67,6 +67,10 @@ report(calls.includes("desktop_look") && calls.includes("desktop_click"), "the b
 report(results.some((result) => result.name === "desktop_click" && result.outcome === "ok" && /Chromium/.test(result.output)), "a click's result names what it clicked", results.map((result) => `${result.name}: ${result.output.split("\n")[0]}`).join(" | "));
 report(/new tab/i.test(reply) && /new window/i.test(reply), "the reply names the menu's first items, which only the desktop can show", reply.slice(0, 200));
 report(!results.some((result) => result.output.includes("data:image")), "no picture reaches the stored history");
+const usage = readerRun.events.flatMap(({ body }) => (body.kind === "assistantTurn" ? [body.usage] : []));
+console.log(
+  `tokens  ${usage.length} model calls, prompt/cached per call: ${usage.map((u) => `${u.promptTokens}/${u.cachedTokens ?? "?"}`).join(" ")}, completion ${usage.reduce((sum, u) => sum + u.completionTokens, 0)}`,
+);
 
 const asker = await newBot("card", "outside");
 const askerRunId = await client.mutation(api.threads.send, { threadId: asker.threadId, text: MENU_TASK });

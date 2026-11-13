@@ -276,24 +276,24 @@ const TOOLS = {
   },
   desktop_click: {
     description:
-      "Click a mark from the newest desktop_look. button is left, right, middle, or double. If the element moved or changed since that look, nothing is clicked. Returns a new look.",
+      "Click a mark from the newest desktop result, which desktop_look and every desktop action return. button is left, right, middle, or double. If the element moved or changed since then, nothing is clicked. Returns the new marks as text, without a picture. Call desktop_look only when you need to see the screen.",
     args: desktopClickArgs,
     effect: "controlsComputer",
   },
   desktop_type: {
     description:
-      "Type up to 1,000 characters. With a mark from the newest desktop_look, it clicks that mark first. Without one, it types where the keyboard focus is. Set replace to press ctrl+a first, which works in text fields and not in a terminal. Set submit to press Enter afterward. Returns a new look.",
+      "Type up to 1,000 characters. With a mark from the newest desktop result, it clicks that mark first. Without one, it types where the keyboard focus is. Set replace to press ctrl+a first, which works in text fields and not in a terminal. Set submit to press Enter afterward. Returns the new marks as text, without a picture. Call desktop_look only when you need to see the screen.",
     args: desktopTypeArgs,
     effect: "controlsComputer",
   },
   desktop_key: {
     description:
-      "Press a key or a combination in the active window, such as Return, Escape, Tab, ctrl+l, alt+F4, or ctrl+shift+t, from 1 to 10 times. Returns a new look.",
+      "Press a key or a combination in the active window, such as Return, Escape, Tab, ctrl+l, alt+F4, or ctrl+shift+t, from 1 to 10 times. Returns the new marks as text, without a picture. Call desktop_look only when you need to see the screen.",
     args: desktopKeyArgs,
     effect: "controlsComputer",
   },
   desktop_scroll: {
-    description: "Turn the mouse wheel over a mark from the newest desktop_look, by 1 to 10 steps. Returns a new look.",
+    description: "Turn the mouse wheel over a mark from the newest desktop result, by 1 to 10 steps. Returns the new marks as text, without a picture. Call desktop_look only when you need to see the screen.",
     args: desktopScrollArgs,
     effect: "controlsComputer",
   },
