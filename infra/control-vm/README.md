@@ -117,7 +117,7 @@ bash create-probe-vms.sh --remove
 
 To run the network check from VMs that the template creates, run `bash clone-user-vm.sh <VM> <address> 2 2048 16` twice in place of `create-probe-vms.sh`, and wait until `cloud-init status` in each VM says `done`. A clone is tagged `bots-user`, so remove both before you next run `create-provisioner-token.sh`.
 
-To prove that provisioning survives a kill, run this as root on the control VM, from `/opt/bots`. It kills the real orchestrator once for each stage, and it takes about 12 minutes. It refuses to run if the pool holds a VM with no computer.
+To prove that provisioning and reset survive a kill, run this as root on the control VM, from `/opt/bots`. It kills the real orchestrator once for each provisioning stage, and that part took about 12 minutes. It then resets one test VM nine times, with a kill at each stage of a reset. This is the check of reset on a real host. The reset part has not run yet, so nobody has timed it. It refuses to run if the pool holds a VM with no computer.
 
 ```sh
 node --env-file=.env.local scripts/verify-reconcile.ts
