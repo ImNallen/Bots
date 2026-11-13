@@ -9,6 +9,7 @@ import {
   cadence,
   desiredVm,
   modelProvider,
+  voiceModel,
   noteSource,
   observedVm,
   runCapability,
@@ -42,6 +43,8 @@ export default defineSchema({
     highlightedBotIds: v.optional(v.array(v.id("bots"))),
     // The provider whose model every bot of this user answers with. No value means Mistral.
     modelProvider: v.optional(modelProvider),
+    // The model that turns this user's voice input into text. No value means Voxtral on Mistral.
+    voiceModel: v.optional(voiceModel),
   }).index("by_auth_subject", ["authSubject"]),
 
   bots: defineTable({

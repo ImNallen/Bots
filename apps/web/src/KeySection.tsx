@@ -10,15 +10,15 @@ const COPY: Record<KeyProvider, { title: string; intro: string; missing: string;
     title: "Mistral API key",
     intro: "One key for all of your bots. You stay in control.",
     missing: "No key is set. Add one so your bots can answer with Mistral Large 4.",
-    usedBy: "Used by Mistral Large 4 and by voice input.",
-    needed: "Mistral Large 4 and voice input need a key.",
+    usedBy: "Used by Mistral Large 4 and by Voxtral voice input.",
+    needed: "Mistral Large 4 and Voxtral need a key.",
   },
   together: {
     title: "Together API key",
     intro: "A Together key lets your bots answer with Inkling 2 Small.",
     missing: "No key is set. Add one to use Inkling 2 Small.",
-    usedBy: "Used when your bots answer with Inkling 2 Small.",
-    needed: "Inkling 2 Small needs a key to answer.",
+    usedBy: "Used by Inkling 2 Small, and by Whisper and Parakeet voice input.",
+    needed: "Inkling 2 Small, Whisper, and Parakeet need a key.",
   },
 };
 

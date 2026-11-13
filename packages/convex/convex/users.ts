@@ -4,7 +4,7 @@ import { requireIdentity, requireService, upsertUser } from "./identity.js";
 import { parseAbout } from "./memories.js";
 import { isTimeZone } from "./scheduleTime.js";
 import { followTimeZone } from "./schedules.js";
-import { modelProvider } from "./validators.js";
+import { modelProvider, voiceModel } from "./validators.js";
 
 export const ensureCurrent = mutation({
   args: { browserTimeZone: v.optional(v.string()) },
@@ -69,6 +69,26 @@ export const setModelProvider = mutation({
       throw new ConvexError("User not found");
     }
     await ctx.db.patch(user._id, { modelProvider: provider === "mistral" ? undefined : provider });
+  },
+});
+
+// Voxtral is the default, so choosing it clears the field, as choosing Mistral clears modelProvider.
+export const setVoiceModel = mutation({
+  args: { model: voiceModel },
+  handler: async (ctx, { model }) => {
+    const { user } = await requireIdentity(ctx);
+    if (user === null) {
+      throw new ConvexError("User not found");
+    }
+    await ctx.db.patch(user._id, { voiceModel: model === "voxtral" ? undefined : model });
+  },
+});
+
+export const voiceModelFor = query({
+  args: { ownerId: v.id("users") },
+  handler: async (ctx, { ownerId }) => {
+    await requireService(ctx);
+    return (await ctx.db.get(ownerId))?.voiceModel ?? "voxtral";
   },
 });
 

@@ -1,46 +1,64 @@
 import { api } from "@bots/convex";
+import type { Doc } from "@bots/convex/dataModel";
 import { useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Icon } from "./Icon.tsx";
 import type { KeyProvider } from "./KeySection.tsx";
 import { errorMessage } from "./session.tsx";
 
-const MODELS: Record<KeyProvider, { name: string; key: string }> = {
-  mistral: { name: "Mistral Large 4", key: "Mistral key" },
-  together: { name: "Inkling 2 Small, through Together", key: "Together key" },
+const KEY_NAME: Record<KeyProvider, string> = { mistral: "Mistral key", together: "Together key" };
+
+const CHAT_MODELS: Record<KeyProvider, string> = {
+  mistral: "Mistral Large 4",
+  together: "Inkling 2 Small, through Together",
 };
 
-export function ModelSection() {
-  const user = useQuery(api.users.current);
-  const current: KeyProvider = user?.modelProvider ?? "mistral";
-  const key = useQuery(api.credentials.status, { provider: current });
-  const setModelProvider = useMutation(api.users.setModelProvider);
-  const [save, setSave] = useState<{ kind: "idle" } | { kind: "pending" } | { kind: "saved" } | { kind: "failed"; message: string }>({ kind: "idle" });
-  if (user === undefined) {
-    return <p role="status">Loading your model.</p>;
-  }
+type VoiceModel = NonNullable<Doc<"users">["voiceModel"]>;
 
-  async function choose(provider: KeyProvider) {
-    setSave({ kind: "pending" });
+const VOICE_MODELS: Record<VoiceModel, { name: string; provider: KeyProvider }> = {
+  voxtral: { name: "Voxtral, through Mistral", provider: "mistral" },
+  "whisper-large-v3": { name: "Whisper Large v3, through Together", provider: "together" },
+  "parakeet-v3": { name: "Parakeet v3, through Together", provider: "together" },
+};
+
+export function voiceProviderOf(model: VoiceModel | undefined): KeyProvider {
+  return VOICE_MODELS[model ?? "voxtral"].provider;
+}
+
+type Save = { kind: "idle" } | { kind: "pending" } | { kind: "saved" } | { kind: "failed"; message: string };
+
+function Choice<T extends string>(props: {
+  label: string;
+  note: string;
+  value: T;
+  options: Record<T, string>;
+  keyProvider: KeyProvider;
+  missingKey: string;
+  save: (value: T) => Promise<void>;
+}): ReactNode {
+  const key = useQuery(api.credentials.status, { provider: props.keyProvider });
+  const [state, setState] = useState<Save>({ kind: "idle" });
+
+  async function choose(value: T) {
+    setState({ kind: "pending" });
     try {
-      await setModelProvider({ provider });
-      setSave({ kind: "saved" });
+      await props.save(value);
+      setState({ kind: "saved" });
     } catch (error) {
-      setSave({ kind: "failed", message: errorMessage(error) });
+      setState({ kind: "failed", message: errorMessage(error) });
     }
   }
 
   return (
     <>
-      <p className="set-intro">Every one of your bots answers with this model. Voice input always uses your Mistral key.</p>
       <div className="card">
         <label className="card-row">
-          <span>Model<small>A change reaches the next step of a bot that is working.</small></span>
+          <span>{props.label}<small>{props.note}</small></span>
           <span className="select">
-            <select value={current} disabled={save.kind === "pending"} onChange={(event) => void choose(event.target.value as KeyProvider)}>
-              {(Object.keys(MODELS) as KeyProvider[]).map((provider) => (
-                <option key={provider} value={provider}>
-                  {MODELS[provider].name}
+            <select value={props.value} disabled={state.kind === "pending"} onChange={(event) => void choose(event.target.value as T)}>
+              {(Object.keys(props.options) as T[]).map((value) => (
+                <option key={value} value={value}>
+                  {props.options[value]}
                 </option>
               ))}
             </select>
@@ -48,19 +66,55 @@ export function ModelSection() {
           </span>
         </label>
       </div>
-      {save.kind === "failed" ? (
+      {state.kind === "failed" ? (
         <p className="error panel-note" role="alert">
-          {save.message}
+          {state.message}
         </p>
       ) : key !== undefined && !key.configured ? (
         <p className="error panel-note" role="alert">
-          No {MODELS[current].key} is set, so your bots cannot answer. Add one under {MODELS[current].key}.
+          No {KEY_NAME[props.keyProvider]} is set, so {props.missingKey}. Add one under {KEY_NAME[props.keyProvider]}.
         </p>
-      ) : save.kind === "saved" ? (
+      ) : state.kind === "saved" ? (
         <p className="panel-note" role="status">
           Saved.
         </p>
       ) : null}
+    </>
+  );
+}
+
+export function ModelSection() {
+  const user = useQuery(api.users.current);
+  const setModelProvider = useMutation(api.users.setModelProvider);
+  const setVoiceModel = useMutation(api.users.setVoiceModel);
+  if (user === undefined) {
+    return <p role="status">Loading your models.</p>;
+  }
+  const chat: KeyProvider = user?.modelProvider ?? "mistral";
+  const voice: VoiceModel = user?.voiceModel ?? "voxtral";
+  const voiceNames = Object.fromEntries(Object.entries(VOICE_MODELS).map(([id, model]) => [id, model.name])) as Record<VoiceModel, string>;
+
+  return (
+    <>
+      <p className="set-intro">Every one of your bots answers with these. Each model needs the key of the service it runs on.</p>
+      <Choice
+        label="Model"
+        note="A change reaches the next step of a bot that is working."
+        value={chat}
+        options={CHAT_MODELS}
+        keyProvider={chat}
+        missingKey="your bots cannot answer"
+        save={async (provider) => void (await setModelProvider({ provider }))}
+      />
+      <Choice
+        label="Voice input"
+        note="Turns what you dictate into text before you send it."
+        value={voice}
+        options={voiceNames}
+        keyProvider={VOICE_MODELS[voice].provider}
+        missingKey="voice input is off"
+        save={async (model) => void (await setVoiceModel({ model }))}
+      />
     </>
   );
 }

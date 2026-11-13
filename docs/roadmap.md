@@ -372,7 +372,9 @@ These are proposals, so change them if you find a better answer:
 
 ### Inkling 2 Small through Together on 2026-11-13
 
-Done in code, and not deployed. The owner asked for it on 2026-11-13, after a comparison of cost and benchmarks, with a Together key for each user in Settings. Settings has a Model section, where a user picks Mistral Large 4 or Inkling 2 Small for all of their bots, and a Together key section that works as the Mistral key section does. Voice input stays on the Mistral key. [Which model a bot answers with](architecture.md#which-model-a-bot-answers-with) has the design.
+Done in code, and not deployed. The owner asked for it on 2026-11-13, after a comparison of cost and benchmarks, with a Together key for each user in Settings. Settings has a Model section, where a user picks Mistral Large 4 or Inkling 2 Small for all of their bots, and a Together key section that works as the Mistral key section does. The Model section also picks the voice input model: Voxtral on Mistral, as before, or Whisper Large v3 or Parakeet v3 on Together. [Which model a bot answers with](architecture.md#which-model-a-bot-answers-with) and [How voice input becomes a draft](architecture.md#how-voice-input-becomes-a-draft) have the design.
+
+- The voice route, driven with a stubbed Convex and the real Together API, wrote spoken Swedish word for word with Parakeet v3 and Whisper Large v3, and spoken English with Whisper. `pnpm verify:voice` has not run on the voice choice, and it covers only Voxtral against a fake endpoint.
 
 - `pnpm typecheck`, `pnpm test`, and `pnpm build` passed. New tests cover the message translation, the request body, Together's reasoning and cached-count fields, its tool call stream, the key's encryption under each provider, and the config.
 - A live check sent the runner's own requests to `thinkingmachines/Inkling-2-Small` on Together: Bots' system prompt and 21 tools, a `desktop_look` call, a test picture in its tool result, and a follow-up. Every call succeeded, the model named the picture's colours, and the later calls had 97% of their prompt tokens cached. It cost under a cent.
@@ -380,7 +382,7 @@ Done in code, and not deployed. The owner asked for it on 2026-11-13, after a co
 - `pnpm verify:auth` passed, and a full `pnpm verify:agent` passed, all 532 checks, as `main` does, against a local backend that held this change's functions. So a Mistral user's key handling and runs work as before. Neither has a Together scenario yet, so the Together key route and the Model setting have not run against a real backend or orchestrator, and the Settings sections have not been seen in a browser.
 - No real bot has done real work on Inkling 2 Small yet, so its quality on Bots' tasks is unmeasured. Compare it with Mistral Large 4 on the same tasks after the deploy.
 
-This changes the schema and not `packages/protocol`, so deploying it restarts nothing on a VM. Going back to a commit before this one needs every credentials row with `provider` deleted, and `modelProvider` cleared from every user, because the older schema has neither field and Convex checks every stored row at a deploy. The older code also reads a user's credentials with `.unique()` on `by_owner`, which fails when a user has two keys.
+This changes the schema and not `packages/protocol`, so deploying it restarts nothing on a VM. Going back to a commit before this one needs every credentials row with `provider` deleted, and `modelProvider` and `voiceModel` cleared from every user, because the older schema has none of these fields and Convex checks every stored row at a deploy. The older code also reads a user's credentials with `.unique()` on `by_owner`, which fails when a user has two keys.
 
 ### Later: hide memory's details
 

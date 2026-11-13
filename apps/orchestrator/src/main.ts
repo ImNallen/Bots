@@ -113,7 +113,7 @@ for (const [path, provider, baseUrl] of [
 }
 
 app.route("/api/attachments", attachmentRoutes({ authMode: config.authMode, service }));
-app.route("/api/voice", voiceRoutes({ authMode: config.authMode, service, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, model: config.transcriptionModel }));
+app.route("/api/voice", voiceRoutes({ authMode: config.authMode, service, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, togetherBaseUrl: config.together.baseUrl, model: config.transcriptionModel }));
 app.all("/api/*", (c) => c.json({ error: "not-found" }, 404));
 
 app.get("*", (c) => {
