@@ -6,12 +6,15 @@ import { ComputerSection } from "./ComputerSection.tsx";
 import { readAppearance, setAppearance, type Appearance } from "./appearance.ts";
 import { DialogFrame } from "./Dialog.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
-import { MistralKeySection } from "./MistralKeySection.tsx";
+import { KeySection } from "./KeySection.tsx";
+import { ModelSection } from "./ModelSection.tsx";
 import { TimeZoneSection } from "./TimeZoneSection.tsx";
 
 const SECTIONS = {
   general: { label: "General", icon: "user" },
+  model: { label: "Model", icon: "gear" },
   mistralKey: { label: "Mistral key", icon: "key" },
+  togetherKey: { label: "Together key", icon: "key" },
 } as const satisfies Record<string, { label: string; icon: IconName }>;
 
 type Section = keyof typeof SECTIONS;
@@ -68,8 +71,14 @@ export function SettingsDialog({ email, onClose }: { email: string; onClose: () 
               </div>
             </div>
           </Pane>
+          <Pane id="model" open={open}>
+            <ModelSection />
+          </Pane>
           <Pane id="mistralKey" open={open}>
-            <MistralKeySection />
+            <KeySection provider="mistral" />
+          </Pane>
+          <Pane id="togetherKey" open={open}>
+            <KeySection provider="together" />
           </Pane>
         </div>
       </div>

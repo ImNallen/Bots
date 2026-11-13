@@ -133,6 +133,14 @@ export const observedVm = v.object({
   at: v.number(),
 });
 
+// A credential or a user with no provider means Mistral, which was the only provider before Together.
+export const modelProvider = v.union(v.literal("mistral"), v.literal("together"));
+export type ModelProvider = Infer<typeof modelProvider>;
+
+// Voxtral runs on Mistral, and the other two on Together. A user with no value uses Voxtral, as every user did before this choice.
+export const voiceModel = v.union(v.literal("voxtral"), v.literal("whisper-large-v3"), v.literal("parakeet-v3"));
+export type VoiceModel = Infer<typeof voiceModel>;
+
 export const approvalLevel = v.union(v.literal("everything"), v.literal("outside"), v.literal("shell"), v.literal("nothing"), v.literal("automatic"));
 export type ApprovalLevel = Infer<typeof approvalLevel>;
 

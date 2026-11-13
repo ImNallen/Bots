@@ -370,6 +370,20 @@ These are proposals, so change them if you find a better answer:
 - Raise or remove the limit of 40 turns once a run sheds its own steps. Two of the 11 measured runs ended there.
 - Give a tool result its own time when it lands 10 minutes or more after the last time shown, so a run that waited on a card reads the time without asking its shell.
 
+### Inkling 2 Small through Together on 2026-11-13
+
+Done in code, and not deployed. The owner asked for it on 2026-11-13, after a comparison of cost and benchmarks, with a Together key for each user in Settings. Settings has a Model section, where a user picks Mistral Large 4 or Inkling 2 Small for all of their bots, and a Together key section that works as the Mistral key section does. The Model section also picks the voice input model: Voxtral on Mistral, as before, or Whisper Large v3 or Parakeet v3 on Together. [Which model a bot answers with](architecture.md#which-model-a-bot-answers-with) and [How voice input becomes a draft](architecture.md#how-voice-input-becomes-a-draft) have the design.
+
+- The voice route, driven with a stubbed Convex and the real Together API, wrote spoken Swedish word for word with Parakeet v3 and Whisper Large v3, and spoken English with Whisper. `pnpm verify:voice` has not run on the voice choice, and it covers only Voxtral against a fake endpoint.
+
+- `pnpm typecheck`, `pnpm test`, and `pnpm build` passed. New tests cover the message translation, the request body, Together's reasoning and cached-count fields, its tool call stream, the key's encryption under each provider, and the config.
+- A live check sent the runner's own requests to `thinkingmachines/Inkling-2-Small` on Together: Bots' system prompt and 21 tools, a `desktop_look` call, a test picture in its tool result, and a follow-up. Every call succeeded, the model named the picture's colours, and the later calls had 97% of their prompt tokens cached. It cost under a cent.
+- On the control VM's usage of 11 to 13 November, about 20 calls a day, Mistral Large 4 costs about $6.70 a month and Inkling 2 Small about $1.90, at Together's prices of $0.30, $0.03 cached, and $1.00 per million tokens.
+- `pnpm verify:auth` passed, and a full `pnpm verify:agent` passed, all 532 checks, as `main` does, against a local backend that held this change's functions. So a Mistral user's key handling and runs work as before. Neither has a Together scenario yet, so the Together key route and the Model setting have not run against a real backend or orchestrator, and the Settings sections have not been seen in a browser.
+- No real bot has done real work on Inkling 2 Small yet, so its quality on Bots' tasks is unmeasured. Compare it with Mistral Large 4 on the same tasks after the deploy.
+
+This changes the schema and not `packages/protocol`, so deploying it restarts nothing on a VM. Going back to a commit before this one needs every credentials row with `provider` deleted, and `modelProvider` and `voiceModel` cleared from every user, because the older schema has none of these fields and Convex checks every stored row at a deploy. The older code also reads a user's credentials with `.unique()` on `by_owner`, which fails when a user has two keys.
+
 ### Later: hide memory's details
 
 The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.
@@ -407,7 +421,8 @@ These are open on purpose. Fix each one when the work reaches it.
 - A markdown link's text can differ from where it goes, and a phone has no hover to show the address. An image shows its URL, and a link does not.
 - A stopped run loses the words that had streamed so far, because the timeline returns a stream only for an active run.
 - The bot list strips markdown from a last message with a few patterns, on text already cut to 140 characters, so some marks can still show.
-- A run's failure reason for a missing or rejected Mistral key still says "the home page", but the key is now in Settings. `apps/orchestrator/src/runner.ts` and `apps/orchestrator/src/mistral.ts` hold that text.
+- On Inkling 2 Small, a PDF attachment reaches the model as a line that says it cannot read PDFs, because Together's OpenAI format has no PDF chunk. Images and text files work.
+- The Model setting covers all of a user's bots. Comparing the two models on one task means changing it between runs.
 - A bot's row compares a take-over's end with the device's clock, so a device with a wrong clock shows "You have the screen" for too long or too short a time. The orchestrator decides what the bot does with its own clock.
 - On a phone on its side with the keyboard open, the controls do not all fit. They scroll beside the stream, so the second row of keys and the Give back button can start out of sight. This was simulated, not seen on a phone.
 - A tablet with a real keyboard still gets the typing box and key bar, because `pointer: coarse` says nothing about a keyboard.

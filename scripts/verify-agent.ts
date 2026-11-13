@@ -1252,7 +1252,7 @@ try {
       });
       await check("those attempts changed nothing", async () => {
         const stored = await service.query(api.bots.promptFor, { botId });
-        assert.deepEqual(stored, { name, title: before.title, description: before.description, notes: [], routines: [] });
+        assert.deepEqual(stored, { name, title: before.title, description: before.description, modelProvider: "mistral", notes: [], routines: [] });
       });
 
       const after = { botId, name: `renamed-${nonce}`, title: `Lead ${nonce}`, description: `Summarize the ${nonce} changelog.` };
@@ -1291,7 +1291,7 @@ try {
 
     await first.mutation(api.bots.remove, { botId });
     await check("a bot that is gone reads as a bot named Bot", async () => {
-      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", notes: [], routines: [] });
+      assert.deepEqual(await service.query(api.bots.promptFor, { botId }), { name: "Bot", modelProvider: "mistral", notes: [], routines: [] });
     });
 
     const chats: Chat[] = [];

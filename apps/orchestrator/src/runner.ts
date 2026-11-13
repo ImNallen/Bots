@@ -31,7 +31,7 @@ import {
 import { decideByRules, desktopAim } from "./rules.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { historyOf, threadEventOf, type ThreadEvent } from "./history.ts";
-import { completeWithRetry, type CompletionResult, type MistralUserChunk } from "./mistral.ts";
+import { PROVIDER_LABEL, completeWithRetry, type CompletionResult, type MistralUserChunk, type ModelProvider } from "./mistral.ts";
 import {
   MAX_ASSISTANT_TURNS,
   browsingForCall,
@@ -57,8 +57,15 @@ const EXPIRED_POLL_MS = 5000;
 const EVENTS_PAGE_ITEMS = 64;
 const EVENTS_PAGE_BYTES = 4 * 1024 * 1024;
 
-const NO_KEY_REASON = "No Mistral API key is set. Add one in the Mistral key section on the home page.";
-const UNREADABLE_KEY_REASON = "The stored Mistral key could not be decrypted. Set it again on the home page.";
+function noKeyReason(provider: ModelProvider): string {
+  const label = PROVIDER_LABEL[provider];
+  return `No ${label} API key is set. Add one in Settings, under ${label} key.`;
+}
+
+function unreadableKeyReason(provider: ModelProvider): string {
+  const label = PROVIDER_LABEL[provider];
+  return `The stored ${label} key could not be decrypted. Set it again in Settings, under ${label} key.`;
+}
 const STEP_LIMIT_REASON = `The run stopped after ${MAX_ASSISTANT_TURNS} model turns.`;
 
 type Claim = Extract<FunctionReturnType<typeof api.runs.claim>, { kind: "claimed" }>;
@@ -81,6 +88,7 @@ export type RunnerDeps = {
   search: Search;
   masterKey: Buffer;
   mistral: { baseUrl: string; model: string };
+  together: { baseUrl: string; model: string };
   ownerScope: Id<"users"> | undefined;
   log: (fields: LogFields) => void;
 };
@@ -230,17 +238,19 @@ async function callModel(args: {
   run: PromptRun;
 }): Promise<CompletionResult> {
   const { deps, runId, claim, lease, events, run } = args;
-  const credential = await deps.service.query(api.credentials.ciphertextFor, { ownerId: claim.ownerId });
+  // The owner's choice is read for each call, so a change in Settings reaches the next call of a run already going.
+  const profile = await deps.service.query(api.bots.promptFor, { botId: claim.botId });
+  const provider = profile.modelProvider;
+  const credential = await deps.service.query(api.credentials.ciphertextFor, { ownerId: claim.ownerId, provider });
   if (credential === null) {
-    return { kind: "failed", reason: NO_KEY_REASON };
+    return { kind: "failed", reason: noKeyReason(provider) };
   }
   let apiKey: string;
   try {
-    apiKey = decryptApiKey({ masterKey: deps.masterKey, ownerId: claim.ownerId, encrypted: credential });
+    apiKey = decryptApiKey({ masterKey: deps.masterKey, ownerId: claim.ownerId, provider, encrypted: credential });
   } catch {
-    return { kind: "failed", reason: UNREADABLE_KEY_REASON };
+    return { kind: "failed", reason: unreadableKeyReason(provider) };
   }
-  const profile = await deps.service.query(api.bots.promptFor, { botId: claim.botId });
   let attachments: Map<string, MistralUserChunk[]>;
   try {
     attachments = await loadAttachmentInputs({
@@ -270,7 +280,8 @@ async function callModel(args: {
   });
   const history = historyOf(events);
   const result = await completeWithRetry({
-    ...deps.mistral,
+    provider,
+    ...deps[provider],
     apiKey,
     ...modelRequest({
       prompt: {
@@ -296,7 +307,7 @@ async function callModel(args: {
   });
   await writer.flush();
   if (result.kind === "ok") {
-    deps.log({ level: "info", event: "model-call", runId, ...result.turn.usage, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
+    deps.log({ level: "info", event: "model-call", runId, provider, model: result.turn.model, ...result.turn.usage, storedBytes: history.storedBytes, sentBytes: history.sentBytes });
   }
   return result;
 }

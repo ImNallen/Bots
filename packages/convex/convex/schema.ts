@@ -8,6 +8,8 @@ import {
   botShape,
   cadence,
   desiredVm,
+  modelProvider,
+  voiceModel,
   noteSource,
   observedVm,
   runCapability,
@@ -39,6 +41,10 @@ export default defineSchema({
     about: v.optional(v.string()),
     timeZone: v.optional(v.string()),
     highlightedBotIds: v.optional(v.array(v.id("bots"))),
+    // The provider whose model every bot of this user answers with. No value means Mistral.
+    modelProvider: v.optional(modelProvider),
+    // The model that turns this user's voice input into text. No value means Voxtral on Mistral.
+    voiceModel: v.optional(voiceModel),
   }).index("by_auth_subject", ["authSubject"]),
 
   bots: defineTable({
@@ -113,7 +119,11 @@ export default defineSchema({
     tag: v.string(),
     keyVersion: v.number(),
     last4: v.string(),
-  }).index("by_owner", ["ownerId"]),
+    // No value means a Mistral key, so the rows from before Together keep their meaning.
+    provider: v.optional(v.literal("together")),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_and_provider", ["ownerId", "provider"]),
 
   threads: defineTable({
     botId: v.id("bots"),

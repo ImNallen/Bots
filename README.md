@@ -17,11 +17,11 @@ pnpm bootstrap
 pnpm dev
 ```
 
-Open http://localhost:5173, open Settings from the account row at the bottom of the sidebar, add a Mistral key, and create a bot. The Convex dashboard is at http://127.0.0.1:6791. To sign in to it, use the admin key in `packages/convex/.env.local`.
+Open http://localhost:5173, open Settings from the account row at the bottom of the sidebar, add a Mistral key, and create a bot. To answer with Inkling 2 Small instead, add a Together key and choose it under Model in Settings. The Convex dashboard is at http://127.0.0.1:6791. To sign in to it, use the admin key in `packages/convex/.env.local`.
 
 Use **Attach files** in chat, drop files onto the composer, or paste an image. A message accepts up to four PNG, JPEG, WebP, PDF, or UTF-8 text/code files. Images and PDFs can be up to 8 MiB each. Text/code files can be up to 256 KiB. Files can be sent without message text. Upload errors offer a retry, and each draft attachment can be removed before sending. Attachments supply context to the chat model and are not copied to the bot's computer.
 
-Use the microphone button to dictate a message. The composer shows a live waveform and a timer. Press **Done** to finish recording and transcribe into the current draft. You can edit the text before pressing **Send**. **Cancel** discards voice input, and **Try again** retries a failed transcription without recording again. Recording stops after two minutes or when you leave the chat. Voice input needs microphone permission, HTTPS or localhost, a supported browser, and your Mistral key. Bots does not save the recording.
+Use the microphone button to dictate a message. The composer shows a live waveform and a timer. Press **Done** to finish recording and transcribe into the current draft. You can edit the text before pressing **Send**. **Cancel** discards voice input, and **Try again** retries a failed transcription without recording again. Recording stops after two minutes or when you leave the chat. Voice input needs microphone permission, HTTPS or localhost, a supported browser, and the key of the voice model chosen under Model in Settings: a Mistral key for Voxtral, or a Together key for Whisper Large v3 or Parakeet v3. Bots does not save the recording.
 
 `pnpm bootstrap` generates the signing key, the master key, the computer token, and SearXNG's secret key, starts the containers, and deploys the Convex functions. It also builds and starts `computerd` behind its `netguard` sidecar, which limits what a bot can reach. It is safe to rerun, and it never replaces a key that still works.
 
@@ -36,8 +36,10 @@ The orchestrator reads these optional settings from `.env.local`:
 | `LINK_HOST` | `127.0.0.1` | The address where `computerd` connects |
 | `LINK_PORT` | `8788` | The port where `computerd` connects. `pnpm bootstrap` passes it to the container |
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai` | The Mistral API |
-| `MISTRAL_MODEL` | `mistral-large-4` | The model every bot uses |
+| `MISTRAL_MODEL` | `mistral-large-4` | The model a bot uses when its owner chose Mistral under Model |
 | `MISTRAL_TRANSCRIPTION_MODEL` | `voxtral-mini-transcribe-3-0` | The model used for voice dictation |
+| `TOGETHER_BASE_URL` | `https://api.together.ai` | The Together API |
+| `TOGETHER_MODEL` | `thinkingmachines/Inkling-2-Small` | The model a bot uses when its owner chose Inkling 2 Small under Model |
 | `COMPUTER_WAIT_SECONDS` | `300` | How long a tool call waits for an absent computer before it records `unavailable` |
 | `SEARXNG_URL` | `http://127.0.0.1:8789` | The SearXNG that `web_search` asks. `pnpm bootstrap` starts it on this port |
 

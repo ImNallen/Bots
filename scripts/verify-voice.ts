@@ -233,7 +233,7 @@ try {
   assert.equal((await postAudio(botId, Buffer.alloc(8 * 1024 * 1024 + 1))).status, 413);
   assert.equal((await fetch(`${base}/api/voice/${botId}`, { method: "POST", headers: { "Content-Type": "audio/webm", "X-Forwarded-For": "198.51.100.2" }, body: audioFixture })).status, 403);
   mode = "error"; const error = await postAudio(botId); const detail = await error.text(); assert.equal(error.status, 502); assert(!detail.includes("voice-check-key")); mode = "ok";
-  const tailscale = voiceRoutes({ authMode: { kind: "tailscale" }, service: { query: (fn, ...args) => service.query(fn, ...args) }, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, model: config.transcriptionModel });
+  const tailscale = voiceRoutes({ authMode: { kind: "tailscale" }, service: { query: (fn, ...args) => service.query(fn, ...args) }, masterKey: config.masterKey, mistralBaseUrl: config.mistral.baseUrl, togetherBaseUrl: config.together.baseUrl, model: config.transcriptionModel });
   assert.equal((await tailscale.request(`http://localhost/${botId}`, { method: "POST", headers: { "Content-Type": "audio/webm" }, body: audioFixture })).status, 401);
   assert.equal((await tailscale.request(`http://localhost/${botId}`, { method: "POST", headers: { "Content-Type": "audio/webm", "tailscale-user-login": "someone-else@example.com" }, body: audioFixture })).status, 404);
   const unsupported = await context.newPage(); await unsupported.addInitScript("window.MediaRecorder = undefined"); await unsupported.goto(`${base}/bots/${botId}`); await unsupported.locator("#message").waitFor();

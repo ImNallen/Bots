@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { audioFormat } from "./voice.ts";
+import { audioFormat, voiceRequest } from "./voice.ts";
 
 describe("recording signatures", () => {
   it("accepts matching WebM, Ogg, and WAV containers", () => {
@@ -11,5 +11,16 @@ describe("recording signatures", () => {
     expect(audioFormat("audio/webm", new TextEncoder().encode("not audio"))).toBeNull();
     expect(audioFormat("audio/webm", new TextEncoder().encode("RIFF1234WAVE"))).toBeNull();
     expect(audioFormat("audio/mp4", new TextEncoder().encode("ftyp"))).toBeNull();
+  });
+});
+
+describe("which service and model a recording goes to", () => {
+  it("sends Voxtral to Mistral with the configured model and no extra fields, as before", () => {
+    expect(voiceRequest("voxtral", "voxtral-mini-transcribe-3-0")).toEqual({ provider: "mistral", model: "voxtral-mini-transcribe-3-0", fields: {} });
+  });
+
+  it("sends Whisper and Parakeet to Together, and asks it to detect the language instead of assuming English", () => {
+    expect(voiceRequest("whisper-large-v3", "voxtral")).toEqual({ provider: "together", model: "openai/whisper-large-v3", fields: { language: "auto" } });
+    expect(voiceRequest("parakeet-v3", "voxtral")).toEqual({ provider: "together", model: "nvidia/parakeet-tdt-0.6b-v3", fields: { language: "auto" } });
   });
 });

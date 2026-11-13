@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import type { ModelProvider } from "./mistral.ts";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
@@ -12,11 +13,16 @@ export type EncryptedKey = {
   last4: string;
 };
 
-// The owner's id is authenticated data, so a ciphertext moved to another user's row fails to decrypt.
-export function encryptApiKey(args: { masterKey: Buffer; ownerId: string; apiKey: string }): EncryptedKey {
+// The owner's id is authenticated data, so a ciphertext moved to another user's row fails to decrypt. A Together key also binds
+// its provider, so it cannot be moved into a Mistral row. A Mistral key binds only the owner, as every key did before Together.
+function additionalData(ownerId: string, provider: ModelProvider): Buffer {
+  return Buffer.from(provider === "mistral" ? ownerId : `${ownerId}:${provider}`, "utf8");
+}
+
+export function encryptApiKey(args: { masterKey: Buffer; ownerId: string; apiKey: string; provider?: ModelProvider }): EncryptedKey {
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, args.masterKey, iv);
-  cipher.setAAD(Buffer.from(args.ownerId, "utf8"));
+  cipher.setAAD(additionalData(args.ownerId, args.provider ?? "mistral"));
   const ciphertext = Buffer.concat([cipher.update(args.apiKey, "utf8"), cipher.final()]);
   return {
     ciphertext: ciphertext.toString("base64"),
@@ -30,10 +36,11 @@ export function encryptApiKey(args: { masterKey: Buffer; ownerId: string; apiKey
 export function decryptApiKey(args: {
   masterKey: Buffer;
   ownerId: string;
+  provider?: ModelProvider;
   encrypted: Pick<EncryptedKey, "ciphertext" | "iv" | "tag">;
 }): string {
   const decipher = createDecipheriv(ALGORITHM, args.masterKey, Buffer.from(args.encrypted.iv, "base64"));
-  decipher.setAAD(Buffer.from(args.ownerId, "utf8"));
+  decipher.setAAD(additionalData(args.ownerId, args.provider ?? "mistral"));
   decipher.setAuthTag(Buffer.from(args.encrypted.tag, "base64"));
   return Buffer.concat([
     decipher.update(Buffer.from(args.encrypted.ciphertext, "base64")),

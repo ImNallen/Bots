@@ -12,6 +12,7 @@ export type Config = {
   masterKey: Buffer;
   convexUrl: string;
   mistral: { baseUrl: string; model: string };
+  together: { baseUrl: string; model: string };
   transcriptionModel: string;
   searxngUrl: string;
   webDistDir: string;
@@ -26,6 +27,8 @@ const DEFAULT_LINK_PORT = 8788;
 const DEFAULT_COMPUTER_WAIT_SECONDS = 5 * 60;
 const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai";
 const DEFAULT_MISTRAL_MODEL = "mistral-large-4";
+const DEFAULT_TOGETHER_BASE_URL = "https://api.together.ai";
+const DEFAULT_TOGETHER_MODEL = "thinkingmachines/Inkling-2-Small";
 // The port that infra/control-vm/compose.yaml publishes SearXNG on.
 const DEFAULT_SEARXNG_URL = "http://127.0.0.1:8789";
 const MASTER_KEY_BYTES = 32;
@@ -173,6 +176,10 @@ export function parseConfig(env: Env): Config {
     mistral: {
       baseUrl: parseUrl({ value: env.MISTRAL_BASE_URL || DEFAULT_MISTRAL_BASE_URL, name: "MISTRAL_BASE_URL" }),
       model: env.MISTRAL_MODEL || DEFAULT_MISTRAL_MODEL,
+    },
+    together: {
+      baseUrl: parseUrl({ value: env.TOGETHER_BASE_URL || DEFAULT_TOGETHER_BASE_URL, name: "TOGETHER_BASE_URL" }),
+      model: env.TOGETHER_MODEL || DEFAULT_TOGETHER_MODEL,
     },
     transcriptionModel: env.MISTRAL_TRANSCRIPTION_MODEL || "voxtral-mini-transcribe-3-0",
     searxngUrl: parseSearxngUrl(env),
