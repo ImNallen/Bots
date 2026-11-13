@@ -13,6 +13,9 @@ export type ShownScreen = { toolCallId: string; text: string; imageUrl: string |
 export const OLDER_LOOK =
   "[Only the newest look's picture and marks are shown. A mark from an older look no longer works, so call desktop_look for new marks.]";
 
+export const TEXT_ONLY_LOOK =
+  "[These marks work for your next desktop call. This result has no picture, so call desktop_look only when you need to see the screen.]";
+
 export function windowName(window: WindowRef): string {
   if (window.kind === "panel") {
     return "the panel";

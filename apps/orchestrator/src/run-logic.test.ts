@@ -1,7 +1,7 @@
 import type { Id } from "@bots/convex/dataModel";
 import { toolDefinitions, type KeyCombo, type ToolInvocation } from "@bots/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OLDER_LOOK } from "./desktop.ts";
+import { OLDER_LOOK, TEXT_ONLY_LOOK } from "./desktop.ts";
 import { historyOf, threadEventOf } from "./history.ts";
 import type { MistralMessage, MistralUserChunk } from "./mistral.ts";
 import {
@@ -21,6 +21,7 @@ import {
   type RunEventBody,
   type ToolCall,
 } from "./run-logic.ts";
+import { toOpenAiMessages } from "./together.ts";
 
 const user: RunEventBody = { kind: "userMessage", text: "hi" };
 
@@ -548,6 +549,21 @@ describe("toMistralMessages with looks at the screen", () => {
       ],
     });
     expect(JSON.stringify(messages).match(/"image_url":/g)).toHaveLength(1);
+  });
+
+  it("gives a newest look that came from a click its marks as text, with no picture anywhere in the request", () => {
+    const clicked: RunEventBody = { kind: "toolResult", toolCallId: "click", name: "desktop_click", outcome: "ok", output: "Clicked.", truncated: false };
+    const history = historyFor([...events, turn([{ ...call("click"), name: "desktop_click" }]), clicked]);
+    const messages = toMistralMessages({ system: "s", history, timeZone: undefined, screen: { ...screen, toolCallId: "click" } });
+    expect(messages.at(-1)).toEqual({
+      role: "tool",
+      tool_call_id: "click",
+      name: "desktop_click",
+      content: `outcome: ok\n\nClicked.\n\nScreen 1280x800. No window is active.\n${TEXT_ONLY_LOOK}`,
+    });
+    expect(messages.find((message) => message.role === "tool" && message.tool_call_id === "new")?.content).toBe(`outcome: ok\n\nLooked at the screen.\n${OLDER_LOOK}`);
+    expect(JSON.stringify(messages)).not.toContain("image_url");
+    expect(JSON.stringify(toOpenAiMessages(messages))).not.toContain("image_url");
   });
 
   it("replays every look of a run whose screen is gone as one line, with no picture", () => {
