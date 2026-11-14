@@ -100,6 +100,7 @@ await seed({ title: "Weekly discoveries", summary: "Finds new music.", steps: ["
 await seed({ title: "Stockholm watch", summary: "Watches the city news.", steps: ["Reads the city news."], instruction: "Read Stockholm city news.", cadence: { kind: "weekly", weekdays: [1], hour: 9, minute: 0 }, active: false });
 await seed({ instruction: LEGACY_INSTRUCTION, cadence: { kind: "everyHours", hours: 6 }, active: false });
 check("seedRunsForCheck", { scheduleId: watchId, count: 1, state: { kind: "failed", reason: "Valve's news page did not load." }, endedAt: Date.now() - 60_000 });
+check("seedRunsForCheck", { scheduleId: watchId, count: 1, state: { kind: "done" }, endedAt: Date.now() - 30_000, quiet: true });
 const watchRun = seedDoneRun(watchId);
 const goneId = await seed({ title: "Old patch watch", summary: "Watched the old patch notes.", steps: ["Read the old patch notes."], instruction: "Read the old patch notes.", cadence: { kind: "everyHours", hours: 12 }, active: false });
 const GONE_REPORT = "The old patch notes have not changed since last week.";
@@ -131,7 +132,7 @@ try {
     assert.match((await detail.locator(".routine-when-next").first().textContent()) ?? "", /^Next run .* · Europe\/Stockholm$/);
     assert.deepEqual(await detail.locator(".routine-steps li").allTextContents(), WATCH.steps.map((step, index) => `${index + 1}${step}`));
     assert.deepEqual(await detail.locator(".routine-limits li").allTextContents(), ["Read only", "Logged out", "Reports in this chat"]);
-    assert.deepEqual(await detail.locator(".routine-run-words").allTextContents(), ["Succeeded", "Failed: Valve's news page did not load."]);
+    assert.deepEqual(await detail.locator(".routine-run-words").allTextContents(), ["Succeeded", "Nothing to report", "Failed: Valve's news page did not load."]);
     assert.equal(await desktop.locator(".routines-panel").getByRole("button", { name: /Delete|Test now|Change in chat/ }).count(), 0, "The details have no action buttons.");
     assert.equal(await desktop.getByText(WATCH.instruction).count(), 0, "The raw instruction shows nowhere in the panel.");
     await desktop.getByText("Results arrive in your conversation.").waitFor();
@@ -230,6 +231,8 @@ try {
       assert.equal(await gone.locator(".report-from").textContent(), "From a routine you deleted");
       assert.equal(await gone.getByRole("link").count(), 0, "A deleted routine's caption opens nothing.");
       assert.equal(await chat.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "No horizontal page overflow in the chat.");
+      assert.equal(await chat.evaluate("getComputedStyle(document.querySelector('a.report-from')).textDecorationLine"), "underline", "The routine's caption is underlined, so it reads as a link.");
+      assert.equal(await chat.evaluate("getComputedStyle(document.querySelector('span.report-from')).textDecorationLine"), "none", "A deleted routine's caption is not underlined.");
       await screenshot(chat, `${device}-${theme}-report`);
       await report.getByRole("link", { name: `From your routine ${WATCH.title}` }).click();
       await chat.locator(".routine-detail").getByRole("heading", { name: WATCH.title }).waitFor();

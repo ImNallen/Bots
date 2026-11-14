@@ -59,8 +59,9 @@ export const seedRunsForCheck = internalMutation({
     endedAt: v.optional(v.number()),
     deadlineAt: v.optional(v.number()),
     asReports: v.optional(v.boolean()),
+    quiet: v.optional(v.literal(true)),
   },
-  handler: async (ctx, { scheduleId, count, state, endedAt, deadlineAt, asReports }) => {
+  handler: async (ctx, { scheduleId, count, state, endedAt, deadlineAt, asReports, quiet }) => {
     const schedule = await ctx.db.get(scheduleId);
     if (schedule === null) {
       throw new ConvexError("Schedule not found");
@@ -78,6 +79,7 @@ export const seedRunsForCheck = internalMutation({
         deadlineAt,
         endedAt,
         state,
+        quiet,
         cancelRequested: false,
         nextSeq: 2,
       });
