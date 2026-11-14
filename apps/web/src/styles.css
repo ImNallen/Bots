@@ -500,11 +500,6 @@ pre {
   overflow-wrap: anywhere;
 }
 
-.report-label {
-  color: var(--muted);
-  font-size: 11.5px;
-}
-
 /* No specificity, so the spacing between blocks below always wins over this. */
 :where(.bub ul, .bub ol, .bub pre, .bub blockquote, .bub hr) {
   margin: 0;
@@ -1434,7 +1429,6 @@ button.card-row:hover {
 .mine { align-self: flex-end; width: auto; max-width: min(80%, 510px); margin: 0 0 14px; padding: 16px; background: var(--sel); color: var(--fg); white-space: pre-wrap; }
 .assistant-message { display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; }
 .assistant-author { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 500; }
-.report { padding: 24px; background: var(--raised); border: 1px solid var(--line); }
 .tool { display: inline-flex; align-self: flex-start; align-items: center; gap: 6px; max-width: 100%; min-width: 0; margin: 0; padding: 0; color: var(--muted); font-size: 11px; }
 .ask { display: flex; align-self: flex-start; flex-direction: column; gap: 12px; width: 100%; margin: 0; padding: 16px; background: var(--sel); border: 1px solid var(--line); border-radius: var(--radius-card); overflow-wrap: anywhere; }
 .opts { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1799,7 +1793,8 @@ button.card-row:hover {
 .tool-steps .tool { font-size: 12px; }
 .tool-steps .out { align-self: stretch; width: 100%; margin: 0; }
 .reply-actions { display: flex; gap: 20px; color: var(--muted); font-size: 12px; }
-.reply-actions button:hover { color: var(--fg); }
+.reply-actions button:hover, .reply-actions a:hover { color: var(--fg); }
+.report-from { min-width: 0; overflow-wrap: anywhere; text-decoration: none; }
 .reply-actions button:disabled { opacity: .5; }
 .chat-recovery { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-card); }
 .chat-recovery h3 { font-size: 13px; font-weight: 500; }

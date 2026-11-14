@@ -1,6 +1,7 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { describeCadence } from "@bots/convex/scheduleTime";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import activeUrl from "./assets/ui/routine-active.svg";
@@ -318,7 +319,9 @@ function useRerenderAt(times: readonly number[]) {
 export function RoutinesSection({ botId, botName, onNewRoutine }: { botId: Id<"bots">; botName: string; onNewRoutine: () => void }) {
   const list = useQuery(api.schedules.listForBot, { botId });
   const remove = useMutation(api.schedules.remove);
-  const [selectedId, setSelectedId] = useState<Id<"schedules"> | null>(null);
+  const { routine: selectedId } = useSearch({ from: "/app/bots/$botId" });
+  const navigate = useNavigate({ from: "/bots/$botId" });
+  const setSelectedId = (routine: Id<"schedules"> | undefined) => void navigate({ search: (previous) => ({ ...previous, routine }), replace: true });
   const [menuId, setMenuId] = useState<Id<"schedules"> | null>(null);
   const [swipedId, setSwipedId] = useState<Id<"schedules"> | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -381,7 +384,7 @@ export function RoutinesSection({ botId, botName, onNewRoutine }: { botId: Id<"b
         </>
       ) : (
         <>
-          <button type="button" className="btn routine-back" onClick={() => setSelectedId(null)}><Icon name="back" /> All routines</button>
+          <button type="button" className="btn routine-back" onClick={() => setSelectedId(undefined)}><Icon name="back" /> All routines</button>
           <RoutineDetail key={selected._id} routine={selected} clock={clock} onError={setFailure} />
         </>
       )}

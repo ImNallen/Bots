@@ -37,8 +37,8 @@ function result(toolCallId: string, outcome: Extract<Body, { kind: "toolResult" 
 
 const shell = (command: string, callId = "c1") => ({ id: callId, name: "shell", arguments: JSON.stringify({ command }) });
 
-function itemsOf(runs: Run[], pending: PendingApproval[] = [], omittedOlder = false): DisplayItem[] {
-  return conversationItems({ timeline: { runs, omittedOlder }, pending, now: NOW, locale: "en-US", timeZone: "Europe/Stockholm" });
+function itemsOf(runs: Run[], pending: PendingApproval[] = [], omittedOlder = false, routines: Timeline["routines"] = []): DisplayItem[] {
+  return conversationItems({ timeline: { runs, omittedOlder, routines }, pending, now: NOW, locale: "en-US", timeZone: "Europe/Stockholm" });
 }
 
 function only<K extends DisplayItem["kind"]>(items: DisplayItem[], kind: K): Extract<DisplayItem, { kind: K }> {
@@ -87,6 +87,16 @@ describe("conversationItems", () => {
       const items = itemsOf([run({ bodies: [report] })]);
       expect(kinds(items)).toEqual(["time", "report"]);
       expect(only(items, "report").text).toBe("Version **2** shipped.");
+    });
+
+    it("names the routine that posted it by its title and id", () => {
+      const items = itemsOf([run({ bodies: [report] })], [], false, [{ _id: "s" as Id<"schedules">, title: "Morning news" }]);
+      expect(only(items, "report").routine).toEqual({ id: "s", title: "Morning news" });
+    });
+
+    it("names no routine once the routine is gone from the timeline's routines", () => {
+      const items = itemsOf([run({ bodies: [report] })], [], false, [{ _id: "other" as Id<"schedules">, title: "Other" }]);
+      expect(only(items, "report").routine).toBeNull();
     });
 
     it("sits between the owner's messages in order, with no status line", () => {

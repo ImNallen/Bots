@@ -1,7 +1,8 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BotFace, type FaceState } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
 import type { DisplayItem, ToolOutput } from "./conversation.ts";
@@ -205,7 +206,7 @@ export function BotAuthor({ character, botName, state = "idle" }: { character: C
   return <div className="assistant-author"><BotFace character={character} size={24} state={state} /><span>{botName}</span></div>;
 }
 
-function ReplyActions({ text, onRetry }: { text?: string; onRetry?: () => Promise<void> }) {
+function ReplyActions({ text, onRetry, children }: { text?: string; onRetry?: () => Promise<void>; children?: ReactNode }) {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -224,9 +225,21 @@ function ReplyActions({ text, onRetry }: { text?: string; onRetry?: () => Promis
     <div className="reply-actions">
       {text !== undefined && <button type="button" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>}
       {onRetry && <button type="button" disabled={busy} onClick={() => void retry()}>{busy ? "Retrying…" : "Retry"}</button>}
+      {children}
     </div>
     {problem && <p className="error" role="alert">{problem}</p>}
   </>;
+}
+
+function ReportSource({ routine }: { routine: Extract<DisplayItem, { kind: "report" }>["routine"] }) {
+  if (routine === null) {
+    return <span className="report-from">From a routine you deleted</span>;
+  }
+  return (
+    <Link className="report-from" from="/bots/$botId" to="." search={(previous) => ({ ...previous, info: true, routines: true, routine: routine.id })}>
+      From your routine {routine.title}
+    </Link>
+  );
 }
 
 function StatusLine({ item, character, botName }: { item: Extract<DisplayItem, { kind: "status" }>; character: Character; botName: string }) {
@@ -260,10 +273,11 @@ export function ChatItem({ item, character, botName = "Bot", onRetry, completed 
       );
     case "report":
       return (
-        <div className="bub report">
-          <p className="report-label">Routine report</p>
-          <Markdown text={item.text} />
-        </div>
+        <article className="assistant-message">
+          <BotAuthor character={character} botName={botName} />
+          <div className="bub"><Markdown text={item.text} /></div>
+          <ReplyActions text={item.text}><ReportSource routine={item.routine} /></ReplyActions>
+        </article>
       );
     case "tool":
       return <ToolRow item={item} />;

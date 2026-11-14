@@ -70,7 +70,7 @@ async function routineEndingOf(ctx: QueryCtx, runId: Id<"runs">): Promise<Routin
   return routineEnding(newestFirst);
 }
 
-async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"schedules">, text: string): Promise<void> {
+export async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"schedules">, text: string): Promise<void> {
   const threadId = await ensureChatThread(ctx, run);
   const reportRunId = await ctx.db.insert("runs", {
     threadId,

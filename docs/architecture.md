@@ -741,6 +741,8 @@ Raw pages stay in that thread, so they cannot push the owner's messages off the 
 
 `routineEnding` in `runs.ts` decides which, from the stored events of the run's last turn, and `runs.finish` sets `quiet` on a run that stayed quiet. A `stay_quiet` result with the outcome `ok` means quiet. Only the runner writes that result, and only after the call's arguments parsed. A run that ends with neither text nor such a call fails with a reason, because a success with nothing to show would hide that the owner got nothing. An empty reply is not a way to stay quiet, because it cannot be told apart from a model that broke. A failed or stopped run posts nothing. `earlierReports` skips quiet runs before it takes the newest 3, and `runToPurge` keeps the newest 3 runs that reported, so a run of quiet checks never pushes the last report out of the next run's prompt, and a quiet run's text never reaches it as a report.
 
+The chat shows a report as a message from the bot, with Copy and no Retry, and a caption that names its routine. `threads.timeline` reads each report's routine once and returns its id and title, counting the row's bytes toward the timeline's 8 MiB. A routine that is deleted or in its undo window is left out, so its reports say "From a routine you deleted" and link nowhere. The caption opens the routines panel at that routine through the `routine` search parameter, which is also what selects a routine in the panel.
+
 A report's row has trigger `schedule` and no `scheduleId`, so `runs.by_schedule` holds only a routine's own runs. `threads.timeline` counts only trigger `user` toward its 30 runs and reads at most 200 runs. So a chat with 40 reports keeps the owner's messages on the page, and only about 200 reports in a row push them off. The page then says that older messages are not shown.
 
 A bot has one browser, so it has one active run across all of its threads. `activeRunOfBot` is the one check, and `threads.send`, `threads.activeRun`, `startReadOnlyRun`, `fireDue`, `schedules.remove`, and `bots.remove` use it. `bots.overview` shows a routine's run as what the bot is doing, and its last message stays the chat's.
@@ -863,7 +865,7 @@ We tested these on Chromium 156 in a container, with its sandbox on, a visible X
 
 ## How a routine fires
 
-A routine is a saved instruction and a schedule, owned by one bot. The owner asks the bot in plain words, and the bot creates, changes, or deletes it. After that it runs with nobody watching, as a [read-only run](#how-a-read-only-run-works), and its report appears in the bot's chat. The owner sees the bot's routines in its info panel, pauses and resumes them there, and deletes one there with an undo.
+A routine is a saved instruction and a schedule, owned by one bot. The owner asks the bot in plain words, and the bot creates, changes, or deletes it. After that it runs with nobody watching, as a [read-only run](#how-a-read-only-run-works). Its report appears in the bot's chat as a message from the bot, or nothing appears when the owner asked to hear only when something happens and it has not. The owner sees the bot's routines in its info panel, pauses and resumes them there, and deletes one there with an undo.
 
 ### What the owner reads and what the routine runs
 
