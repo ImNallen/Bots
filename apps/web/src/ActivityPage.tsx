@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import type { ReactNode } from "react";
-import { withoutMarkdown } from "./activity.ts";
+import { quietWords, withoutMarkdown } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
 import { characterOf } from "./character.ts";
 import { timeLabel } from "./conversation.ts";
@@ -46,6 +46,7 @@ function RunRow({ row, clock }: { row: Page["runs"][number]; clock: Clock }) {
           </span>
         )}
         {row.lastText !== null && <span className="activity-said">{withoutMarkdown(row.lastText)}</span>}
+        {row.quiet !== null && <span className="activity-said">{quietWords(row.quiet.reason)}</span>}
       </RowLink>
     </li>
   );

@@ -2350,7 +2350,7 @@ try {
     await second.mutation(api.users.ensureCurrent, {});
     const DEADLINE_REASON = "The routine ran past its 30 minute limit";
     const NO_REPORT_REASON = "The routine ended without a report";
-    const READ_TOOLS = ["browser_navigate", "browser_snapshot", "read_file", "web_fetch", "web_search"];
+    const READ_TOOLS = ["browser_navigate", "browser_snapshot", "read_file", "stay_quiet", "web_fetch", "web_search"];
     const FORBIDDEN = ["browser_click", "browser_press", "browser_type", "description_set", "memory_forget", "memory_save", "shell", "write_file"];
     const USAGE = { promptTokens: 1, completionTokens: 1 };
     const chats: Chat[] = [];
@@ -2841,6 +2841,44 @@ try {
         assert.equal(requests[3]?.body.tools, undefined);
         assert.equal(threeDone.state.kind, "done");
         assert.equal((await reportsIn(first, limited.threadId)).at(-1)?.text, `three report ${nonce}`);
+      });
+
+      const quiet = await chatFor(first, "readonly-quiet");
+      prepareWorkspace(quiet, 'echo "price 120" > price.txt');
+      const quietInstruction = `readonly quiet ${nonce}`;
+      const quietReason = `The price is still 120, above the 100 you asked about ${nonce}.`;
+      fake.script(quietInstruction, ({ toolResults }) =>
+        toolResults.length === 0 ? tools(readCall("price.txt")) : tools(call("stay_quiet", { reason: quietReason })),
+      );
+      const quietRoutine = newRoutine(quiet.botId, quietInstruction);
+      const quietRun = fire(quietRoutine);
+      const quietDone = await ended(quiet, quietRoutine, quietRun);
+      await check("a routine that calls stay_quiet ends done, posts nothing in the chat, and calls the model no more", async () => {
+        assert.equal(quietDone.state.kind, "done");
+        assert.deepEqual(resultsOf(quietDone).map((result) => [result.name, result.outcome]), [["read_file", "ok"], ["stay_quiet", "ok"]]);
+        assert.equal(fake.requests(quietInstruction).length, 2);
+        assert.deepEqual(await reportsIn(first, quiet.threadId), []);
+        assert.ok(!inJournal(quietRun, callIdOf(quietDone, "stay_quiet")), "stay_quiet reached computerd's journal");
+      });
+      await check("Activity shows a quiet run as done, with its reason in place of its text", async () => {
+        const row = (await first.query(api.activity.page, {})).runs.find((entry) => entry._id === quietRun);
+        assert.deepEqual(row?.state, { kind: "done" });
+        assert.deepEqual(row.quiet, { reason: quietReason });
+        assert.equal(row.lastText, null);
+      });
+      const quietChatText = `readonly quiet chat ${nonce}`;
+      const quietChatAnswer = `chat answer ${nonce}`;
+      fake.script(quietChatText, ({ toolResults }) =>
+        toolResults.length === 0 ? tools(call("stay_quiet", { reason: "Nothing new." })) : { kind: "text", text: quietChatAnswer },
+      );
+      const quietChatRun = await quiet.settled(await quiet.send(quietChatText));
+      await check("a chat run is not offered stay_quiet, and a call to it stores an error that says it is only for routines", () => {
+        assert.ok(!(offeredBy(fake.requests(quietChatText)[0]) ?? []).includes("stay_quiet"));
+        const result = resultsOf(quietChatRun).find((entry) => entry.name === "stay_quiet");
+        assert.equal(result?.outcome, "error");
+        assert.match(result.output, /only for routines/);
+        assert.equal(quietChatRun.state.kind, "done");
+        assert.ok(turnsOf(quietChatRun).some((turn) => turn.text === quietChatAnswer));
       });
 
       const busy = await chatFor(first, "readonly-reports");

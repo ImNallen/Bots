@@ -4,6 +4,7 @@ import {
   isDesktopInputRequest,
   isDesktopInvocation,
   isMemoryInvocation,
+  isQuietInvocation,
   isScheduleInvocation,
   isSearchInvocation,
   makeCallId,
@@ -25,6 +26,7 @@ import {
   FINAL_CALL_OUTPUT,
   NOT_SENT_CANCELLED_OUTPUT,
   READ_ONLY_OUTPUT,
+  ROUTINE_ONLY_OUTPUT,
   decideTool,
   waitForApproval,
 } from "./approvals.ts";
@@ -67,6 +69,7 @@ function unreadableKeyReason(provider: ModelProvider): string {
   return `The stored ${label} key could not be decrypted. Set it again in Settings, under ${label} key.`;
 }
 const STEP_LIMIT_REASON = `The run stopped after ${MAX_ASSISTANT_TURNS} model turns.`;
+const QUIET_OUTPUT = "Nothing will be posted in your owner's chat. This routine is over.";
 
 type Claim = Extract<FunctionReturnType<typeof api.runs.claim>, { kind: "claimed" }>;
 type RunEvent = ThreadEvent & { runId: Id<"runs"> };
@@ -176,7 +179,8 @@ async function loadScreen(service: Service, runId: Id<"runs">): Promise<StoredSc
 
 type ToolResultBase = { kind: "toolResult"; toolCallId: string; name: string };
 
-// What a valid call becomes before any approval. A memory or routine call is stored by Convex. A search goes to SearXNG from here.
+// What a valid call becomes before any approval. A memory or routine call is stored by Convex, and stay_quiet's result is stored as
+// this runner wrote it. A search goes to SearXNG from here.
 // A computer call goes to the link, and a desktop input goes there with the aim that the owner approves.
 type Prepared =
   | { kind: "invalid"; reason: string }
@@ -207,6 +211,9 @@ async function prepareCall(invocation: ModelInvocation, toolCallId: string, scre
   }
   if (isSearchInvocation(invocation)) {
     return { kind: "search", query: invocation.args.query };
+  }
+  if (isQuietInvocation(invocation)) {
+    return { kind: "stored", body: { kind: "toolResult", toolCallId, name: invocation.name, outcome: "ok", output: QUIET_OUTPUT, truncated: false } };
   }
   if (!isDesktopInputRequest(invocation)) {
     return { kind: "computer", tool: invocation, detail: {} };
@@ -334,6 +341,10 @@ async function runTool(args: {
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
     return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
+  }
+  if (decision === "routineOnly") {
+    deps.log({ level: "info", event: "tool-refused", runId, toolCallId: call.id });
+    return { ...base, outcome: "error", output: ROUTINE_ONLY_OUTPUT, truncated: false };
   }
   const prepared = await prepareCall(invocation, call.id, () => loadScreen(deps.service, runId));
   if (prepared.kind === "invalid") {

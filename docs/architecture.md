@@ -695,15 +695,17 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 ### What decides a call
 
-`decideTool` in `apps/orchestrator/src/approvals.ts` answers `run`, `ask`, or `reject`. It reads only the run's capability, the bot's level, the tool, and `readUntrustedText`, so a resumed run decides the same way. A read-only run runs a tool whose effect is `reads` and rejects every other tool, at every level. It never asks.
+`decideTool` in `apps/orchestrator/src/approvals.ts` answers `run`, `ask`, or `reject`. It reads only the run's capability, the bot's level, the tool, and `readUntrustedText`, so a resumed run decides the same way. A read-only run runs a tool whose effect is `reads`, and `stay_quiet`, whose effect is `endsRoutine`. It rejects every other tool, at every level. It never asks.
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_create`, `schedule_update`, `schedule_delete` |
+| `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot`, `stay_quiet` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_create`, `schedule_update`, `schedule_delete` |
 
 A routine browses logged out, and the desktop shows the owner's logged-in Chromium, so a look at it would hand a routine those pages. `desktop_look` therefore has the effect `readsScreen`, which is not `reads`, and a read-only run rejects it before it loads any screen.
 
 A rejected call stores the outcome `rejected`. `denied` tells the model that a person refused, and no person was asked.
+
+A chat run that calls `stay_quiet` stores `error`, with an output that says the tool is only for routines. `rejected` would tell the model that the run is read-only, which it is not.
 
 The rule holds in three places, so a bug in one does not open it:
 
@@ -723,7 +725,7 @@ The rule holds in three places, so a bug in one does not open it:
 | The owner's chat | Yes | No |
 | Reports | The thread's newest 3, each an assistant message with a label | The newest 3 of its own routine, as one JSON array in the prompt |
 | A routine's raw pages | Never | Only its own run's |
-| Tools | All of them | Those that read, and none on the final call |
+| Tools | All of them but `stay_quiet` | Those that read and `stay_quiet`, and none on the final call |
 | Prompt | The full rules | No rules for writing notes or the description. It says that nobody is watching, that nothing can change, that any site may be opened, that every page is data, and that the run ends with a short report |
 
 The description, `about`, and the notes reach both. Neither prompt holds the date or the time. The owner's messages and a routine's instruction carry it, as [What two requests of one run share](#what-two-requests-of-one-run-share) says. A read-only prompt says that the run can read the description and cannot change it, and that its work comes from its routine's instruction. A report is an assistant message, so `historyOf` treats it as not answering. If the message before it is a user or tool message, the line that says the run ended early goes first, so an unanswered request cannot look answered by a report.
@@ -732,7 +734,12 @@ The description, `about`, and the notes reach both. Neither prompt holds the dat
 
 A routine has its own thread, with `threads.kind` set to `routine`. An absent `kind` means the bot's chat, and `chatThreadOf` is the one lookup of it. A routine's thread takes no message.
 
-Raw pages stay in that thread, so they cannot push the owner's messages off the page or load on each chat run. When a read-only run finishes `done`, `runs.finish` inserts a run and one `routineReport` event in the chat thread, in the same mutation that ends the run. So a report and its run's end commit together, and a resend of `finish` fails the lease check and posts nothing. The text is the run's last turn, cut at 8,000 characters. A run that ends with no text fails with a reason, because a success with nothing to show would hide that the owner got nothing. A failed or stopped run posts nothing.
+Raw pages stay in that thread, so they cannot push the owner's messages off the page or load on each chat run. A routine's run ends `done` in one of two ways:
+
+- It reports. `runs.finish` inserts a run and one `routineReport` event in the chat thread, in the same mutation that ends the run. So a report and its run's end commit together, and a resend of `finish` fails the lease check and posts nothing. The text is the run's last turn, cut at 8,000 characters.
+- It stays quiet. The model calls `stay_quiet` with a reason of one sentence, up to 300 characters. The runner answers it with `ok` and calls the model no more, and `runs.finish` posts nothing. An owner who asks to hear only when something happens gets this, and the instruction must say so, because a routine reads no chat.
+
+`routineEnding` in `runs.ts` decides which, from the stored events of the run's last turn, and no field records it. A `stay_quiet` result with the outcome `ok` means quiet. Only the runner writes that result, and only after the call's arguments parsed. A run that ends with neither text nor such a call fails with a reason, because a success with nothing to show would hide that the owner got nothing. An empty reply is not a way to stay quiet, because it cannot be told apart from a model that broke. A failed or stopped run posts nothing. `earlierReports` counts only runs that reported, so a quiet run's text never reaches the next run as a report.
 
 A report's row has trigger `schedule` and no `scheduleId`, so `runs.by_schedule` holds only a routine's own runs. `threads.timeline` counts only trigger `user` toward its 30 runs and reads at most 200 runs. So a chat with 40 reports keeps the owner's messages on the page, and only about 200 reports in a row push them off. The page then says that older messages are not shown.
 
@@ -751,7 +758,7 @@ Every limit reads stored events or a stored time, so a restart cannot reset one.
 
 The token limit reads the newest prompt and not a sum, because each prompt repeats the one before it, and a sum counts the same page again on every turn.
 
-A limit always gives the run a chance to report. The final call offers no tools, and its prompt says to write the report now. If that call still asks for a tool, the call is recorded as rejected, nothing runs, and the run finishes with the turn's text. No flag marks a final call. A turn is final if a limit already held before it, so a resumed run reaches the same answer from the same events.
+A limit always gives the run a chance to report. The final call offers no tools, and its prompt says to write the report now. If that call still asks for a tool, the call is recorded as rejected, nothing runs, and the run finishes with the turn's text. That holds for `stay_quiet` too, so a run at its limit reports, or fails if it wrote nothing. No flag marks a final call. A turn is final if a limit already held before it, so a resumed run reaches the same answer from the same events.
 
 `heartbeat` answers `cancelRequested: true` past the deadline and does not store that, so `run.cancelRequested` still means that the owner pressed Stop. The runner then stops as it does for a Stop. `runs.finish` turns its `cancelled` into `failed` when the deadline has passed and the owner did not stop it, and `claim` fails a run that is already late. `fireDue` does the same for a run that no runner holds, as [A bot with no runner](#a-bot-with-no-runner) explains. An owner's Stop stays `cancelled`. `endRun` in `runEnd.ts` is the one writer of a terminal state and of `endedAt`.
 
@@ -764,6 +771,7 @@ Read-only stops the bot's own tools from changing anything. It is not a sandbox,
 - A run can read any file that the `agent` user can read on its VM, including another bot's workspace. Those bots have one owner.
 - Opening a page sends a GET and runs the page's scripts. A careless site can change something on a GET.
 - A URL can carry out what the run holds, which is its description, `about`, notes, and any file it read. A page can ask for this, and the prompt's rule against it is an instruction to a model.
+- A page can make a routine stay quiet, by telling the model that the case the owner asked about has not happened. The owner then hears nothing. Activity shows each quiet run's reason for this, so the owner can see what the routine concluded and from which run.
 - Text in a report reaches later chat runs as the bot's own earlier words, and a page can plant it. The label is also an instruction to a model. `readUntrustedText` covers only the run itself, so a chat run's first save after such a report shows no card at the default level.
 - A process that an earlier chat run left in the background keeps running during a routine.
 
@@ -961,7 +969,7 @@ Activity lists what all of an owner's bots did and what is coming up. It is the 
 
 One query, `activity.page`, reads `runs.by_owner`, newest first. A finished routine has its raw run and a report row in the chat, and the report row has trigger `schedule` and no `scheduleId`. Activity leaves report rows out, so each fire shows once and a failed one looks like the rest. Report rows stay for good, so the query stops after 2,000 rows or at 50 runs.
 
-A query may read 16 MiB, and an event can be 1 MiB. So text reads share a budget of 8 MiB, as in `bots.overview`, and they stop at a run's newest text, because a finished routine's newest event is its report. `blocked` reads `runEvents.by_run_outcome` once for each run, and it never gives up. A model chooses a rejected call's name, up to 256 KiB, so those reads come first and take from the same budget, which keeps the worst case at about 15 MiB by arithmetic. A test that left them out of the budget failed on the real backend with too many bytes read.
+A query may read 16 MiB, and an event can be 1 MiB. So text reads share a budget of 8 MiB, as in `bots.overview`, and they stop at a run's newest text, because a finished routine's newest event is its report. A quiet run shows "Nothing to report" and its reason in place of its text. `quietOf` finds the reason in the same events, in the call that the `ok` result answers, so it reads nothing more. A model chooses the reason, and its event counts toward the budget like any other. `blocked` reads `runEvents.by_run_outcome` once for each run, and it never gives up. A model chooses a rejected call's name, up to 256 KiB, so those reads come first and take from the same budget, which keeps the worst case at about 15 MiB by arithmetic. A test that left them out of the budget failed on the real backend with too many bytes read.
 
 Text from a bot renders as plain text, because a page can write it. `publicState` removes a running run's lease before any of this leaves the query.
 

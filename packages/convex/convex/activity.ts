@@ -79,6 +79,28 @@ export function lastMessageOf(newestEvents: readonly RunEventBody[], max = MAX_L
   return null;
 }
 
+const STAY_QUIET = "stay_quiet";
+
+function reasonIn(callArguments: string): string | null {
+  try {
+    const { reason } = JSON.parse(callArguments) as { reason?: unknown };
+    return typeof reason === "string" ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
+// A routine with nothing to report ends with a stay_quiet that the runner answered ok, which it does only once the call parsed. Its
+// reason is in the turn that made the call, which can be past the events read here.
+export function quietOf(newestEvents: readonly RunEventBody[]): { reason: string | null } | null {
+  const quiet = newestEvents.find((event) => event.kind === "toolResult" && event.name === STAY_QUIET && event.outcome === "ok");
+  if (quiet?.kind !== "toolResult") {
+    return null;
+  }
+  const call = newestEvents.flatMap((event) => (event.kind === "assistantTurn" ? event.toolCalls : [])).find((entry) => entry.id === quiet.toolCallId);
+  return { reason: call === undefined ? null : reasonIn(call.arguments) };
+}
+
 function bytesOf(event: Doc<"runEvents">): number {
   return encoder.encode(JSON.stringify(event)).length;
 }
@@ -140,6 +162,7 @@ export function runRow(args: {
   const { run, bot, titleOf, newestEvents, blocked } = args;
   const title = run.scheduleId === undefined ? undefined : titleOf(run.scheduleId);
   const afterInstruction = newestEvents.filter((event) => event.kind !== "scheduleFired");
+  const quiet = quietOf(afterInstruction);
   return {
     _id: run._id,
     bot: lookOf(bot),
@@ -148,7 +171,8 @@ export function runRow(args: {
     state: publicState(run.state),
     createdAt: run._creationTime,
     endedAt: run.endedAt,
-    lastText: lastMessageOf(afterInstruction, ROW_TEXT_OVER_TWO_LINES),
+    lastText: quiet === null ? lastMessageOf(afterInstruction, ROW_TEXT_OVER_TWO_LINES) : null,
+    quiet: quiet === null ? null : { reason: quiet.reason === null ? null : oneLine(quiet.reason, ROW_TEXT_OVER_TWO_LINES) },
     blocked,
   };
 }

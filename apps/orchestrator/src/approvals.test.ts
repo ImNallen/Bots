@@ -30,6 +30,7 @@ const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
   schedule_create: { everything: true, outside: false, shell: false, nothing: false },
   schedule_update: { everything: true, outside: false, shell: false, nothing: false },
   schedule_delete: { everything: true, outside: false, shell: false, nothing: false },
+  stay_quiet: { everything: false, outside: false, shell: false, nothing: false },
 };
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
 const SCHEDULE_TOOLS: ToolName[] = ["schedule_create", "schedule_update", "schedule_delete"];
@@ -37,12 +38,13 @@ const SCHEDULE_TOOLS: ToolName[] = ["schedule_create", "schedule_update", "sched
 const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS];
 
 const READS: ToolName[] = ["read_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot"];
+const RUNS_READ_ONLY: ToolName[] = [...READS, "stay_quiet"];
 
 describe("decideTool for a read-only run", () => {
   it.each(ALL_LEVELS.flatMap((level) => TOOLS.flatMap((toolName) => [false, true].map((readUntrustedText) => ({ level, toolName, readUntrustedText })))))(
-    "at $level, $toolName with readUntrustedText $readUntrustedText never asks, and runs only what reads",
+    "at $level, $toolName with readUntrustedText $readUntrustedText never asks, and runs only what reads and stay_quiet",
     (args) => {
-      expect(decideTool({ capability: "readOnly", ...args })).toBe(READS.includes(args.toolName) ? "run" : "reject");
+      expect(decideTool({ capability: "readOnly", ...args })).toBe(RUNS_READ_ONLY.includes(args.toolName) ? "run" : "reject");
     },
   );
 
@@ -50,6 +52,15 @@ describe("decideTool for a read-only run", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, readUntrustedText: false }) === "reject");
     expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS]);
   });
+});
+
+describe("decideTool for stay_quiet in a full run", () => {
+  it.each(ALL_LEVELS.flatMap((level) => [false, true].map((readUntrustedText) => ({ level, readUntrustedText }))))(
+    "at $level with readUntrustedText $readUntrustedText refuses it as routine-only, and does not call the run read-only",
+    (args) => {
+      expect(decideTool({ capability: "full", toolName: "stay_quiet", ...args })).toBe("routineOnly");
+    },
+  );
 });
 
 describe("decideTool for a full run", () => {
@@ -98,8 +109,8 @@ describe("decideTool for a full run", () => {
     expect(save(searched)).toBe("ask");
   });
 
-  it("asks for every tool at everything", () => {
-    expect(asked("everything")).toEqual(TOOLS);
+  it("asks for every tool at everything, but stay_quiet, which a full run refuses", () => {
+    expect(asked("everything")).toEqual(TOOLS.filter((toolName) => toolName !== "stay_quiet"));
   });
 
   const DESKTOP_INPUT: ToolName[] = ["desktop_click", "desktop_type", "desktop_key", "desktop_scroll"];
