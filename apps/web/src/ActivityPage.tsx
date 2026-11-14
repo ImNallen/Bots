@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import type { ReactNode } from "react";
-import { quietWords, withoutMarkdown } from "./activity.ts";
+import { withoutMarkdown } from "./activity.ts";
 import { BotFace } from "./BotFace.tsx";
 import { characterOf } from "./character.ts";
 import { timeLabel } from "./conversation.ts";
@@ -27,7 +27,7 @@ function RowLink(props: { bot: Page["runs"][number]["bot"]; atRoutines: boolean;
 
 function RunRow({ row, clock }: { row: Page["runs"][number]; clock: Clock }) {
   const isRoutine = row.trigger === "schedule";
-  const { words, tone } = runStateWords(row.state);
+  const { words, tone } = runStateWords({ state: row.state, quiet: row.quiet !== null });
   return (
     <li>
       <RowLink bot={row.bot} atRoutines={isRoutine}>
@@ -46,7 +46,7 @@ function RunRow({ row, clock }: { row: Page["runs"][number]; clock: Clock }) {
           </span>
         )}
         {row.lastText !== null && <span className="activity-said">{withoutMarkdown(row.lastText)}</span>}
-        {row.quiet !== null && <span className="activity-said">{quietWords(row.quiet.reason)}</span>}
+        {row.quiet?.reason != null && <span className="activity-said">{row.quiet.reason}</span>}
       </RowLink>
     </li>
   );

@@ -59,6 +59,10 @@ describe("runStateWords", () => {
     [{ kind: "failed", reason: "No key." }, "Failed: No key.", "bad"],
     [{ kind: "cancelled" }, "Stopped", "plain"],
   ] as const)("words %j", (state, words, tone) => {
-    expect(runStateWords(state)).toEqual({ words, tone });
+    expect(runStateWords({ state, quiet: false })).toEqual({ words, tone });
+  });
+
+  it("says a run that stayed quiet had nothing to report", () => {
+    expect(runStateWords({ state: { kind: "done" }, quiet: true })).toEqual({ words: "Nothing to report", tone: "plain" });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { quietWords, shownActivity, subLineOf } from "./activity.ts";
+import { shownActivity, subLineOf } from "./activity.ts";
 
 const lastMessage = "See you tomorrow.";
 
@@ -54,12 +54,5 @@ describe("subLineOf", () => {
     expect(step(null)).toBe("Thinking");
     expect(step("a_tool_from_later")).toBe("Working");
     expect(step("constructor")).toBe("Working");
-  });
-});
-
-describe("quietWords", () => {
-  it("says a quiet routine had nothing to report, with its reason when there is one", () => {
-    expect(quietWords("The price is still 120.")).toBe("Nothing to report. The price is still 120.");
-    expect(quietWords(null)).toBe("Nothing to report");
   });
 });

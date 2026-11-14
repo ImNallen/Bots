@@ -68,11 +68,6 @@ export function withoutMarkdown(message: string): string {
     .replace(/\*\*|__|~~|`/g, "");
 }
 
-// A routine that stays quiet posts nothing, so its reason is the only sign of what it checked.
-export function quietWords(reason: string | null): string {
-  return reason === null ? "Nothing to report" : `Nothing to report. ${reason}`;
-}
-
 export type SubLine = { text: string | null; tone: "plain" | "ask" | "bad" };
 
 export function shownActivity({ activity, takeoverUntil }: RowState, now: number): ShownActivity {

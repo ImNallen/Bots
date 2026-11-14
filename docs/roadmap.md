@@ -406,6 +406,13 @@ Done in code, with a scripted fake model, and not deployed. The owner wants Bots
 
 This changes `packages/protocol`, so deploying it restarts `computerd` on every VM, though `computerd` behaves the same. Going back to a commit before this one needs `quiet` cleared from every run, because the older schema has no such field and Convex checks every stored row at a deploy. An older orchestrator meets a stored `stay_quiet` only in a routine's own thread, where it replays as a call to a tool the request does not offer.
 
+Three follow-ups the owner approved the same day, also done in code and not deployed:
+
+- A routine's next run reads the date and reason of its newest check, when that check stayed quiet after the newest report, so it knows what it last found. `runs.lastQuietCheck` returns it, and a newer report supersedes it.
+- The routines panel and Activity say "Nothing to report" for a quiet run, in place of "Succeeded". The panel reads the run's `quiet` field, so it reads nothing more.
+- The routine's name under a report is underlined, so it reads as a link. A deleted routine's caption is not.
+- `pnpm typecheck`, `pnpm test`, and `pnpm build` pass. `VERIFY_SCENARIOS=A,readonly,schedule,activity pnpm verify:agent` passed with 182 checks. Its `readonly` scenario checks that a fifth run reads the fourth's quiet reason, that a run right after a report reads none, and that the panel marks each quiet run. `pnpm verify:routines` checks "Nothing to report" in the panel and the underline in Chromium, in light and dark, at 1280 and 412 wide, and `pnpm verify:design` passed. These changes change neither the schema nor `packages/protocol`.
+
 ### Later: hide memory's details
 
 The owner decided this on 2026-11-07. Showing the details of memory and similar things is fine for now. Later, Bots should have a simple UI that hides this complexity and stays clean, as Grok Bot does. The owner will not edit memory directly, and will ask the bot to list and change memories instead. This replaces the earlier plan for individual notes to stay editable by hand. A description now follows the same plan as memories, so the owner's field in the panel goes with them. Bots still cannot edit or delete routines or notes that their owner wrote, so that later work needs those tools.
