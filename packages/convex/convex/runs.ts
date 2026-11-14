@@ -43,13 +43,14 @@ export function finishedState(args: { run: Pick<Doc<"runs">, "cancelRequested" |
   return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? DEADLINE_FAILURE : state;
 }
 
-export type RoutineEnding = { kind: "report"; text: string } | { kind: "quiet" } | { kind: "noReport" };
+export type RoutineEnding = { kind: "report"; text: string } | { kind: "quiet"; reason: string | null } | { kind: "noReport" };
 
 // newestFirst runs from a run's newest event back to its last turn. A routine says nothing only through stay_quiet, because an empty
 // reply cannot be told apart from a model that broke.
 export function routineEnding(newestFirst: readonly RunEventBody[]): RoutineEnding {
-  if (quietOf(newestFirst) !== null) {
-    return { kind: "quiet" };
+  const quiet = quietOf(newestFirst);
+  if (quiet !== null) {
+    return { kind: "quiet", reason: quiet.reason };
   }
   const turn = newestFirst.find((event) => event.kind === "assistantTurn");
   const text = turn?.kind === "assistantTurn" ? capText(turn.text.trim(), MAX_REPORT_LENGTH) : "";
@@ -298,6 +299,34 @@ export const earlierReports = query({
       }
     }
     return reports;
+  },
+});
+
+const doneRuns = (ctx: QueryCtx, scheduleId: Id<"schedules">, quiet: boolean) =>
+  ctx.db
+    .query("runs")
+    .withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId))
+    .order("desc")
+    .filter((q) => q.and(q.eq(q.field("state.kind"), "done"), quiet ? q.eq(q.field("quiet"), true) : q.neq(q.field("quiet"), true)))
+    .first();
+
+// The routine's newest check, when it stayed quiet after its newest report, so the next run knows what it last found. A report
+// supersedes it.
+export const lastQuietCheck = query({
+  args: { runId: v.id("runs") },
+  handler: async (ctx, { runId }) => {
+    await requireService(ctx);
+    const scheduleId = (await ctx.db.get(runId))?.scheduleId;
+    if (scheduleId === undefined) {
+      return null;
+    }
+    const quiet = await doneRuns(ctx, scheduleId, true);
+    const report = await doneRuns(ctx, scheduleId, false);
+    if (quiet === null || (report !== null && report._creationTime > quiet._creationTime)) {
+      return null;
+    }
+    const ending = await routineEndingOf(ctx, quiet._id);
+    return ending.kind === "quiet" && ending.reason !== null ? { date: new Date(quiet._creationTime).toISOString(), reason: ending.reason } : null;
   },
 });
 

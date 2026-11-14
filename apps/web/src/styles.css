@@ -1795,6 +1795,7 @@ button.card-row:hover {
 .reply-actions { display: flex; gap: 20px; color: var(--muted); font-size: 12px; }
 .reply-actions button:hover, .reply-actions a:hover { color: var(--fg); }
 .report-from { min-width: 0; overflow-wrap: anywhere; text-decoration: none; }
+a.report-from { text-decoration: underline; text-underline-offset: 2px; }
 .reply-actions button:disabled { opacity: .5; }
 .chat-recovery { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 16px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-card); }
 .chat-recovery h3 { font-size: 13px; font-weight: 500; }

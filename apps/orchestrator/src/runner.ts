@@ -433,7 +433,8 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
   const { service, log } = deps;
   const { leaseToken } = claim;
   const events = await loadEvents({ service, runId, claim });
-  const reports = claim.capability === "full" ? [] : await service.query(api.runs.earlierReports, { runId });
+  const [reports, lastQuiet] =
+    claim.capability === "full" ? [[], null] : await Promise.all([service.query(api.runs.earlierReports, { runId }), service.query(api.runs.lastQuietCheck, { runId })]);
   let nextSeq = claim.nextSeq;
 
   async function append(body: AppendBody): Promise<void> {
@@ -491,7 +492,7 @@ async function driveRun(args: { deps: RunnerDeps; runId: Id<"runs">; claim: Clai
       case "callModel": {
         let result: CompletionResult;
         try {
-          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: action.final, reports };
+          const run: PromptRun = claim.capability === "full" ? { capability: "full" } : { capability: "readOnly", final: action.final, reports, lastQuiet };
           result = await callModel({ deps, runId, claim, lease, events, run });
         } catch (error) {
           if (lease.lost.aborted || !lease.cancel.aborted) {
