@@ -46,6 +46,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   schedule_create: "Creating a routine",
   schedule_update: "Changing a routine",
   schedule_delete: "Deleting a routine",
+  stay_quiet: "Finishing with nothing to report",
 };
 
 export function isToolName(tool: string): tool is ToolName {
@@ -65,6 +66,11 @@ export function withoutMarkdown(message: string): string {
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^(#{1,6}|>|[-*+]|\d+[.)])\s+/, "")
     .replace(/\*\*|__|~~|`/g, "");
+}
+
+// A routine that stays quiet posts nothing, so its reason is the only sign of what it checked.
+export function quietWords(reason: string | null): string {
+  return reason === null ? "Nothing to report" : `Nothing to report. ${reason}`;
 }
 
 export type SubLine = { text: string | null; tone: "plain" | "ask" | "bad" };

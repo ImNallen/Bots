@@ -112,6 +112,12 @@ describe("runToPurge", () => {
     expect(runToPurge(failedThenDone.slice(0, 23), NOW)).toBeNull();
   });
 
+  it("does not count a quiet run toward those 3, because it has no report", () => {
+    const quietThenReported = [...runs(...many(20, FAILED)), ...many(3, DONE).map((state, index) => ({ state, index: 20 + index, endedAt: OLD, quiet: true as const })), ...runs(DONE, DONE, DONE).map((run) => ({ ...run, index: run.index + 23 }))];
+    expect(runToPurge(quietThenReported, NOW)?.index).toBe(20);
+    expect(runToPurge(quietThenReported.filter((run) => !("quiet" in run)), NOW)).toBeNull();
+  });
+
   it("counts finished runs inside the 20 toward those 3", () => {
     expect(runToPurge(runs(DONE, DONE, DONE, ...many(17, FAILED), DONE), NOW)?.index).toBe(20);
   });

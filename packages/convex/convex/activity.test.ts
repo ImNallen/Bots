@@ -174,6 +174,27 @@ describe("the Activity page's rows", () => {
       expect(row({ newestEvents: [turn(`${"a".repeat(279)}😀`)] }).lastText).toBe("a".repeat(279));
     });
 
+    it("shows a quiet routine's reason in place of its last text", () => {
+      const quietCall = { id: "q", name: "stay_quiet", arguments: JSON.stringify({ reason: "The price\nis still 120." }) };
+      const quietTurn: RunEventBody = { ...turn("Checked."), toolCalls: [quietCall] } as RunEventBody;
+      const quietResult: RunEventBody = { ...result("stay_quiet"), toolCallId: "q" } as RunEventBody;
+      const shown = row({ run: rawRun, newestEvents: [quietResult, quietTurn, turn("Older text.")] });
+      expect(shown.quiet).toEqual({ reason: "The price is still 120." });
+      expect(shown.lastText).toBeNull();
+    });
+
+    it("says a routine was quiet with no reason when its turn is past what was read", () => {
+      const quietResult: RunEventBody = { ...result("stay_quiet"), toolCallId: "q" } as RunEventBody;
+      expect(row({ run: rawRun, newestEvents: [quietResult] }).quiet).toEqual({ reason: null });
+    });
+
+    it("is not quiet when stay_quiet was refused", () => {
+      const refused: RunEventBody = { ...result("stay_quiet"), outcome: "error" } as RunEventBody;
+      const shown = row({ newestEvents: [refused, turn("Here is the news.", "stay_quiet")] });
+      expect(shown.quiet).toBeNull();
+      expect(shown.lastText).toBe("Here is the news.");
+    });
+
     it("hides a running run's lease, and keeps a failure's reason", () => {
       const running = row({ run: { ...run, state: { kind: "running", leaseToken: "secret-lease", leaseUntil: NOW } } });
       expect(running.state).toEqual({ kind: "running" });

@@ -3,7 +3,7 @@ import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { computerOfOwner, requireComputerAvailable } from "./computers.js";
-import { capText } from "./activity.js";
+import { capText, quietOf } from "./activity.js";
 import { requireIdentity, requireService } from "./identity.js";
 import { applyMemoryCall } from "./memories.js";
 import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
@@ -43,17 +43,31 @@ export function finishedState(args: { run: Pick<Doc<"runs">, "cancelRequested" |
   return state.kind === "cancelled" && !run.cancelRequested && pastDeadline(run, now) ? DEADLINE_FAILURE : state;
 }
 
-async function lastTurnTextOf(ctx: QueryCtx, runId: Id<"runs">): Promise<string | null> {
+export type RoutineEnding = { kind: "report"; text: string } | { kind: "quiet" } | { kind: "noReport" };
+
+// newestFirst runs from a run's newest event back to its last turn. A routine says nothing only through stay_quiet, because an empty
+// reply cannot be told apart from a model that broke.
+export function routineEnding(newestFirst: readonly RunEventBody[]): RoutineEnding {
+  if (quietOf(newestFirst) !== null) {
+    return { kind: "quiet" };
+  }
+  const turn = newestFirst.find((event) => event.kind === "assistantTurn");
+  const text = turn?.kind === "assistantTurn" ? capText(turn.text.trim(), MAX_REPORT_LENGTH) : "";
+  return text === "" ? { kind: "noReport" } : { kind: "report", text };
+}
+
+async function routineEndingOf(ctx: QueryCtx, runId: Id<"runs">): Promise<RoutineEnding> {
+  const newestFirst: RunEventBody[] = [];
   for await (const { body } of ctx.db
     .query("runEvents")
     .withIndex("by_run_seq", (q) => q.eq("runId", runId))
     .order("desc")) {
+    newestFirst.push(body);
     if (body.kind === "assistantTurn") {
-      const text = capText(body.text.trim(), MAX_REPORT_LENGTH);
-      return text === "" ? null : text;
+      break;
     }
   }
-  return null;
+  return routineEnding(newestFirst);
 }
 
 async function postReport(ctx: MutationCtx, run: Doc<"runs">, scheduleId: Id<"schedules">, text: string): Promise<void> {
@@ -246,12 +260,18 @@ export const finish = mutation({
       await endRun(ctx, runId, ended);
       return;
     }
-    const report = await lastTurnTextOf(ctx, runId);
-    if (report === null) {
-      await endRun(ctx, runId, { kind: "failed", reason: NO_REPORT_REASON });
-      return;
+    const ending = await routineEndingOf(ctx, runId);
+    switch (ending.kind) {
+      case "noReport":
+        await endRun(ctx, runId, { kind: "failed", reason: NO_REPORT_REASON });
+        return;
+      case "report":
+        await postReport(ctx, run, run.scheduleId, ending.text);
+        break;
+      case "quiet":
+        await ctx.db.patch(runId, { quiet: true });
+        break;
     }
-    await postReport(ctx, run, run.scheduleId, report);
     await endRun(ctx, runId, ended);
   },
 });
@@ -268,13 +288,13 @@ export const earlierReports = query({
       .query("runs")
       .withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId))
       .order("desc")
-      .filter((q) => q.eq(q.field("state.kind"), "done"))
+      .filter((q) => q.and(q.eq(q.field("state.kind"), "done"), q.neq(q.field("quiet"), true)))
       .take(EARLIER_REPORTS);
     const reports = [];
     for (const run of runs.toReversed()) {
-      const text = await lastTurnTextOf(ctx, run._id);
-      if (text !== null) {
-        reports.push({ date: new Date(run._creationTime).toISOString(), text });
+      const ending = await routineEndingOf(ctx, run._id);
+      if (ending.kind === "report") {
+        reports.push({ date: new Date(run._creationTime).toISOString(), text: ending.text });
       }
     }
     return reports;
