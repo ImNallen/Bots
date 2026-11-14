@@ -44,9 +44,15 @@ async function routineNamed(title: string): Promise<Listed> {
   assert(routine, `${title} exists`);
   return routine;
 }
-function check(name: string, args: object) {
+function check(name: string, args: object): unknown {
   const result = runConvex(["run", `scheduleChecks:${name}`, JSON.stringify(args)]);
   assert(result.kind === "ok", result.kind === "failed" ? result.output : "");
+  return JSON.parse(result.stdout || "null");
+}
+function seedDoneRun(scheduleId: Id<"schedules">): Id<"runs"> {
+  const [runId] = check("seedRunsForCheck", { scheduleId, count: 1, state: { kind: "done" }, endedAt: Date.now() }) as Id<"runs">[];
+  assert(runId);
+  return runId;
 }
 async function seed(fields: { title?: string; summary?: string; steps?: string[]; instruction: string; cadence: object; active: boolean }) {
   const { active, ...args } = fields;
@@ -94,7 +100,14 @@ await seed({ title: "Weekly discoveries", summary: "Finds new music.", steps: ["
 await seed({ title: "Stockholm watch", summary: "Watches the city news.", steps: ["Reads the city news."], instruction: "Read Stockholm city news.", cadence: { kind: "weekly", weekdays: [1], hour: 9, minute: 0 }, active: false });
 await seed({ instruction: LEGACY_INSTRUCTION, cadence: { kind: "everyHours", hours: 6 }, active: false });
 check("seedRunsForCheck", { scheduleId: watchId, count: 1, state: { kind: "failed", reason: "Valve's news page did not load." }, endedAt: Date.now() - 60_000 });
-check("seedRunsForCheck", { scheduleId: watchId, count: 1, state: { kind: "done" }, endedAt: Date.now() });
+const watchRun = seedDoneRun(watchId);
+const goneId = await seed({ title: "Old patch watch", summary: "Watched the old patch notes.", steps: ["Read the old patch notes."], instruction: "Read the old patch notes.", cadence: { kind: "everyHours", hours: 12 }, active: false });
+const GONE_REPORT = "The old patch notes have not changed since last week.";
+check("reportForCheck", { runId: seedDoneRun(goneId), text: GONE_REPORT });
+await client.mutation(api.schedules.remove, { scheduleId: goneId });
+await waitFor("The deleted routine is gone for good after its window", async () => !(await listed()).some((row) => row._id === goneId));
+const REPORT = "**Patch 1.2 is out.** Three changes matter to you:\n\n- Haze's smoke bomb lasts 1 second less.\n- Two new items, *Spirit Lens* and *Echo Shard*.\n- Ranked placement now takes 5 matches.\n\nSource: [Valve's Steam news](https://store.steampowered.com/news/app/1422450).";
+check("reportForCheck", { runId: watchRun, text: REPORT });
 
 let browser: Browser | undefined;
 try {
@@ -199,9 +212,33 @@ try {
     assert.equal(await phone.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "No horizontal page overflow on a phone.");
     await screenshot(phone, `phone-${theme}-detail`);
     await phoneContext.close();
+
+    for (const [device, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 412, height: 915 }]] as const) {
+      const context = await browser.newContext({ viewport, colorScheme: theme, ...(device === "phone" && { hasTouch: true, isMobile: true }) });
+      const chat = await context.newPage();
+      chat.on("pageerror", (error) => errors.push(error.message));
+      chat.setDefaultTimeout(15_000);
+      await chat.goto(`${base}/bots/${botId}`);
+      const report = chat.locator(".assistant-message").filter({ hasText: "Patch 1.2 is out." });
+      await report.waitFor();
+      await report.locator(".assistant-author").getByText(name).waitFor();
+      await report.locator("strong").getByText("Patch 1.2 is out.").waitFor();
+      assert.equal(await report.getByRole("button", { name: "Copy" }).count(), 1, "A report has Copy.");
+      assert.equal(await report.getByRole("button", { name: "Retry" }).count(), 0, "A report has no Retry.");
+      assert.equal(await chat.getByText("Routine report").count(), 0, "A report has no label of its own.");
+      const gone = chat.locator(".assistant-message").filter({ hasText: GONE_REPORT });
+      assert.equal(await gone.locator(".report-from").textContent(), "From a routine you deleted");
+      assert.equal(await gone.getByRole("link").count(), 0, "A deleted routine's caption opens nothing.");
+      assert.equal(await chat.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "No horizontal page overflow in the chat.");
+      await screenshot(chat, `${device}-${theme}-report`);
+      await report.getByRole("link", { name: `From your routine ${WATCH.title}` }).click();
+      await chat.locator(".routine-detail").getByRole("heading", { name: WATCH.title }).waitFor();
+      await screenshot(chat, `${device}-${theme}-report-opened`);
+      await context.close();
+    }
   }
   assert.deepEqual(errors, []);
-  console.log("verify:routines passed: titles, the details, an older routine, the context menu by mouse and keyboard, the touch swipe, undo, and the delete after its window, in light and dark.");
+  console.log("verify:routines passed: titles, the details, an older routine, the context menu by mouse and keyboard, the touch swipe, undo, the delete after its window, and a report in the chat that opens its routine, in light and dark.");
   console.log(shots.join("\n"));
 } finally {
   await browser?.close();

@@ -6,6 +6,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { requireIdentity, requireService } from "./identity.js";
 import type { RunState } from "./validators.js";
 import { MAX_ATTACHMENTS } from "./attachmentFiles.js";
+import { routineTitle } from "./routineText.js";
 
 const MAX_MESSAGE_LENGTH = 64 * 1024;
 const TIMELINE_USER_RUNS = 30;
@@ -203,6 +204,8 @@ export const timeline = query({
       .take(TIMELINE_MAX_RUNS + 1);
     const shownRuns = runsToShow(recentRuns);
     const runs = [];
+    // A report names its routine by title. A routine that is deleted, or in its undo window, is left out, and its reports name none.
+    const reportRoutines = new Map<Id<"schedules">, { _id: Id<"schedules">; title: string } | null>();
     let bytes = 0;
     let omittedOlder = recentRuns.length > shownRuns.length;
     for (const run of shownRuns) {
@@ -212,11 +215,17 @@ export const timeline = query({
         .withIndex("by_run_seq", (q) => q.eq("runId", run._id))
         .order("desc")) {
         bytes += encoder.encode(JSON.stringify(event)).length;
+        const { body } = event;
+        if (body.kind === "routineReport" && !reportRoutines.has(body.scheduleId)) {
+          const routine = await ctx.db.get(body.scheduleId);
+          bytes += routine === null ? 0 : encoder.encode(JSON.stringify(routine)).length;
+          reportRoutines.set(body.scheduleId, routine === null || routine.deleting !== undefined ? null : { _id: routine._id, title: routineTitle(routine) });
+        }
         if (bytes > TIMELINE_BYTES) {
           omittedOlder = true;
           break;
         }
-        events.push({ _id: event._id, seq: event.seq, body: event.body });
+        events.push({ _id: event._id, seq: event.seq, body });
       }
       const stream = isActive(run.state)
         ? await ctx.db
@@ -236,7 +245,7 @@ export const timeline = query({
         break;
       }
     }
-    return { runs: runs.reverse(), omittedOlder };
+    return { runs: runs.reverse(), omittedOlder, routines: [...reportRoutines.values()].filter((routine) => routine !== null) };
   },
 });
 

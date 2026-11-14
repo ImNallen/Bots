@@ -1,11 +1,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import type { Id } from "@bots/convex/dataModel";
 import type { Character } from "./character.ts";
 import { ChatItem } from "./ChatItem.tsx";
 import type { DisplayItem } from "./conversation.ts";
 
 // auth.tsx opens a real connection to Convex when it loads.
 vi.mock("./auth.tsx", () => ({ useAuthFailure: () => null }));
+// A link needs a router, so this one shows where it would go.
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ className, search, children }: { className: string; search: (previous: object) => object; children: unknown }) => (
+    <a className={className} data-search={JSON.stringify(search({ screen: true }))}>{children as string}</a>
+  ),
+}));
 
 const character: Character = { shape: "ball", color: "blue" };
 const render = (item: DisplayItem) => renderToStaticMarkup(<ChatItem item={item} character={character} />);
@@ -28,13 +35,30 @@ describe("ChatItem", () => {
     expect(render({ key: "a", kind: "assistant", text: "hi", streaming: true })).toContain('aria-live="polite"');
   });
 
-  it("labels a routine's report and gives it the same safety rules as other bot output", () => {
+  it("shows a routine's report as the bot's message, with Copy, no Retry, and the routine it came from", () => {
+    const html = renderToStaticMarkup(
+      <ChatItem item={{ key: "r", kind: "report", text: "Version 2 shipped.", routine: { id: "s1" as Id<"schedules">, title: "Morning news" } }} character={character} botName="Atlas" onRetry={async () => {}} />,
+    );
+    expect(html).toContain("Atlas");
+    expect(html).toContain(">Copy<");
+    expect(html).not.toContain("Retry");
+    expect(html).toContain("From your routine Morning news");
+    expect(html).toContain(`data-search="${JSON.stringify({ screen: true, info: true, routines: true, routine: "s1" }).replaceAll('"', "&quot;")}"`);
+  });
+
+  it("says a report's routine was deleted, with no link to it", () => {
+    const html = render({ key: "r", kind: "report", text: "Old news.", routine: null });
+    expect(html).toContain("From a routine you deleted");
+    expect(html).not.toContain("<a ");
+  });
+
+  it("gives a routine's report the same safety rules as other bot output", () => {
     const html = render({
       key: "r",
       kind: "report",
       text: '**found** <b>raw</b> ![i](https://e.example/i.png) [ok](https://e.example) [bad](javascript:alert(1))',
+      routine: null,
     });
-    expect(html).toContain("Routine report");
     expect(html).toContain("<strong>found</strong>");
     expect(html).not.toContain("<b>");
     expect(html).not.toContain("<img");
