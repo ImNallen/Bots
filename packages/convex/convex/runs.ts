@@ -269,6 +269,7 @@ export const finish = mutation({
         await postReport(ctx, run, run.scheduleId, ending.text);
         break;
       case "quiet":
+        await ctx.db.patch(runId, { quiet: true });
         break;
     }
     await endRun(ctx, runId, ended);
@@ -287,7 +288,7 @@ export const earlierReports = query({
       .query("runs")
       .withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId))
       .order("desc")
-      .filter((q) => q.eq(q.field("state.kind"), "done"))
+      .filter((q) => q.and(q.eq(q.field("state.kind"), "done"), q.neq(q.field("quiet"), true)))
       .take(EARLIER_REPORTS);
     const reports = [];
     for (const run of runs.toReversed()) {

@@ -64,12 +64,12 @@ export function decideFire(args: {
 
 // A run stays until a day after it ended, because the limit on scheduled runs a day counts these rows by when they were created,
 // and a run ends after it is created. A run with no end is still active.
-export function runToPurge<Run extends { state: RunState; endedAt?: number | undefined }>(newestFirst: readonly Run[], now: number): Run | null {
-  let done = 0;
+export function runToPurge<Run extends { state: RunState; endedAt?: number | undefined; quiet?: true | undefined }>(newestFirst: readonly Run[], now: number): Run | null {
+  let reported = 0;
   for (const [index, run] of newestFirst.entries()) {
-    const isDone = run.state.kind === "done";
-    const keptForReports = isDone && done < EARLIER_REPORTS;
-    done += isDone ? 1 : 0;
+    const reports = run.state.kind === "done" && run.quiet !== true;
+    const keptForReports = reports && reported < EARLIER_REPORTS;
+    reported += reports ? 1 : 0;
     if (index >= KEEP_RUNS && !keptForReports && run.endedAt !== undefined && now - run.endedAt > DAY_MS) {
       return run;
     }

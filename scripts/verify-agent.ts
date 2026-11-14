@@ -2866,6 +2866,18 @@ try {
         assert.deepEqual(row.quiet, { reason: quietReason });
         assert.equal(row.lastText, null);
       });
+      const sinceText = `readonly quiet since ${nonce}`;
+      const sinceReport = `price 120 on the first check ${nonce}`;
+      fake.script(sinceText, ({ attempt }) => (attempt === 1 ? { kind: "text", text: sinceReport } : tools(call("stay_quiet", { reason: "The price has not changed." }))));
+      const sinceRoutine = newRoutine(quiet.botId, sinceText);
+      for (let index = 0; index < 5; index += 1) {
+        await ended(quiet, sinceRoutine, fire(sinceRoutine));
+      }
+      await check("a routine still reads its last report after 3 quiet runs, because quiet runs do not count toward its 3 earlier reports", () => {
+        const requests = fake.requests(sinceText);
+        assert.equal(requests.length, 5);
+        assert.ok(systemOf(requests[4]).includes(sinceReport), "the last report is missing from the fifth run's prompt");
+      });
       const quietChatText = `readonly quiet chat ${nonce}`;
       const quietChatAnswer = `chat answer ${nonce}`;
       fake.script(quietChatText, ({ toolResults }) =>
