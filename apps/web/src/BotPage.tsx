@@ -379,7 +379,7 @@ function BotChat({ botId }: { botId: string }) {
     if (router.history.canGoBack()) {
       router.history.back();
     } else {
-      void navigate({ to: "/bots/$botId", params, search: ({ info: wasInfo, routines: wasRoutines }) => ({ ...(wasInfo === true && { info: true }), ...(wasRoutines === true && { routines: true }) }), replace: true });
+      void navigate({ to: "/bots/$botId", params, search: ({ screen: _screen, ...panel }) => panel, replace: true });
     }
   };
 

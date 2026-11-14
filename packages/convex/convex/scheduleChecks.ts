@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server.js";
+import { postReport } from "./runs.js";
 import { startReadOnlyRun } from "./schedules.js";
 import { cadence, runState } from "./validators.js";
 
@@ -90,6 +91,17 @@ export const seedRunsForCheck = internalMutation({
       ids.push(runId);
     }
     return ids;
+  },
+});
+
+export const reportForCheck = internalMutation({
+  args: { runId: v.id("runs"), text: v.string() },
+  handler: async (ctx, { runId, text }) => {
+    const run = await ctx.db.get(runId);
+    if (run?.scheduleId === undefined) {
+      throw new ConvexError("Routine run not found");
+    }
+    await postReport(ctx, run, run.scheduleId, text);
   },
 });
 

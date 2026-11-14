@@ -50,10 +50,12 @@ const indexRoute = createRoute({
 const botRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/bots/$botId",
-  validateSearch: (search: Record<string, unknown>): { info?: true; screen?: true; routines?: true } => ({
+  // routine is the routine whose details the routines panel shows.
+  validateSearch: (search: Record<string, unknown>): { info?: true; screen?: true; routines?: true; routine?: string } => ({
     ...(search.info === true && { info: true }),
     ...(search.screen === true && { screen: true }),
     ...(search.routines === true && { routines: true }),
+    ...(typeof search.routine === "string" && { routine: search.routine }),
   }),
   component: BotPage,
 });
