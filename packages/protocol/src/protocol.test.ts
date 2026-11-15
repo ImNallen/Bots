@@ -314,6 +314,28 @@ describe("routine tools", () => {
   });
 });
 
+describe("stay_quiet", () => {
+  const parse = (args: unknown) => parseToolCall({ name: "stay_quiet", arguments: JSON.stringify(args) });
+
+  it("parses a reason of up to 300 characters", () => {
+    expect(parse({ reason: "The price is still 120." })).toEqual({ kind: "ok", invocation: { name: "stay_quiet", args: { reason: "The price is still 120." } } });
+    expect(parse({ reason: "a".repeat(300) }).kind).toBe("ok");
+  });
+
+  it("refuses a reason that is empty, blank, or longer than 300 characters, and a call with none", () => {
+    for (const args of [{ reason: "" }, { reason: "   " }, { reason: "a".repeat(301) }, {}, { reason: "ok", extra: 1 }]) {
+      expect(parse(args).kind).toBe("invalid");
+    }
+  });
+
+  it("ends a routine, returns no untrusted text, and never reaches the link", () => {
+    expect(toolEffect("stay_quiet")).toBe("endsRoutine");
+    expect(returnsUntrustedText("stay_quiet")).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("stay_quiet");
+    expect(toolInvocation.safeParse({ name: "stay_quiet", args: { reason: "Nothing new." } }).success).toBe(false);
+  });
+});
+
 describe("parseToolCall", () => {
   it("applies the shell default timeout", () => {
     expect(parseToolCall({ name: "shell", arguments: '{"command":"ls"}' })).toEqual({
@@ -359,6 +381,7 @@ describe("parseToolCall", () => {
       "schedule_create",
       "schedule_update",
       "schedule_delete",
+      "stay_quiet",
     ]);
     for (const tool of toolDefinitions) {
       expect(JSON.stringify(tool.function.parameters)).not.toMatch(/"(anyOf|oneOf)"/);
@@ -401,6 +424,7 @@ describe("toolEffect", () => {
       schedule_create: "changesSchedule",
       schedule_update: "changesSchedule",
       schedule_delete: "changesSchedule",
+      stay_quiet: "endsRoutine",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);

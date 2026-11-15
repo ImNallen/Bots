@@ -73,6 +73,13 @@ describe("conversationItems", () => {
     expect(JSON.stringify(items)).not.toContain("I should list files.");
   });
 
+  it("names a stay_quiet that a chat run refused as a failed row with its reason", () => {
+    const quiet = { id: "q", name: "stay_quiet", arguments: JSON.stringify({ reason: "Nothing new." }) };
+    const refused: Body = { kind: "toolResult", toolCallId: "q", name: "stay_quiet", outcome: "error", output: "stay_quiet is only for routines.", truncated: false };
+    const tool = only(itemsOf([run({ bodies: [{ kind: "userMessage", text: "hi" }, turn("", [quiet]), refused, turn("Hello.")] })]), "tool");
+    expect(tool).toMatchObject({ name: "Ended with nothing to report", summary: "Nothing new.", status: "failed", note: "failed" });
+  });
+
   describe("a routine's report", () => {
     const report: Body = { kind: "routineReport", scheduleId: "s" as Id<"schedules">, runId: id<"runs">("raw"), text: "Version **2** shipped." };
 

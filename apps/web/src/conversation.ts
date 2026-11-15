@@ -67,6 +67,7 @@ const TOOL_WORDS = {
   schedule_create: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
   schedule_update: { done: "Changed a routine", ask: "Change this routine?", icon: "lines" },
   schedule_delete: { done: "Deleted a routine", ask: "Delete this routine?", icon: "close" },
+  stay_quiet: { done: "Ended with nothing to report", ask: "End with nothing to report?", icon: "check" },
 } as const satisfies Record<ToolName, { done: string; ask: string; icon: IconName }>;
 
 type ToolWords = (typeof TOOL_WORDS)[ToolName];

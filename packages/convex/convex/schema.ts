@@ -163,6 +163,8 @@ export default defineSchema({
     scheduleId: v.optional(v.id("schedules")),
     deadlineAt: v.optional(v.number()),
     endedAt: v.optional(v.number()),
+    // A routine run that ended with stay_quiet, so its earlier reports and the runs kept for them skip it.
+    quiet: v.optional(v.literal(true)),
     state: runState,
     cancelRequested: v.boolean(),
     nextSeq: v.number(),
