@@ -62,15 +62,16 @@ describe("routineEnding", () => {
     output: "",
     truncated: false,
   });
-  const quietCall = { id: "q", name: "stay_quiet", arguments: JSON.stringify({ reason: "The price did not drop." }) };
+  const QUIET_REASON = "The price did not drop.";
+  const quietCall = { id: "q", name: "stay_quiet", arguments: JSON.stringify({ reason: QUIET_REASON }) };
 
   it("posts the last turn's text as the report", () => {
     expect(routineEnding([turn("  The price dropped to 90.  ")])).toEqual({ kind: "report", text: "The price dropped to 90." });
   });
 
   it("posts nothing for a stay_quiet that ran, even when its turn also has text", () => {
-    expect(routineEnding([result("q", "stay_quiet", "ok"), turn("", quietCall)])).toEqual({ kind: "quiet" });
-    expect(routineEnding([result("q", "stay_quiet", "ok"), turn("Still 120.", quietCall)])).toEqual({ kind: "quiet" });
+    expect(routineEnding([result("q", "stay_quiet", "ok"), turn("", quietCall)])).toEqual({ kind: "quiet", reason: QUIET_REASON });
+    expect(routineEnding([result("q", "stay_quiet", "ok"), turn("Still 120.", quietCall)])).toEqual({ kind: "quiet", reason: QUIET_REASON });
   });
 
   it("fails an empty reply, because nothing tells it apart from a model that broke", () => {

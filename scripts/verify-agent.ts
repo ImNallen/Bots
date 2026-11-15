@@ -2882,6 +2882,17 @@ try {
         assert.equal(requests.length, 5);
         assert.ok(systemOf(requests[4]).includes(sinceReport), "the last report is missing from the fifth run's prompt");
       });
+      await check("a routine's next run reads the reason from its last quiet check, which a report supersedes", () => {
+        const requests = fake.requests(sinceText);
+        assert.ok(!systemOf(requests[1]).includes("[Last quiet check]"), "the run after a report read a quiet check");
+        assert.ok(systemOf(requests[4]).includes(`[Last quiet check]\n{"date":`), "the fifth run did not read its last quiet check");
+        assert.ok(systemOf(requests[4]).includes("The price has not changed."));
+      });
+      await check("the routines panel says a quiet run had nothing to report", async () => {
+        const row = (await first.query(api.schedules.listForBot, { botId: quiet.botId }))?.routines.find((entry) => entry._id === sinceRoutine.scheduleId);
+        assert.equal(row?.kind, "live");
+        assert.deepEqual(row.kind === "live" ? row.recentRuns.map((run) => run.quiet) : [], [true, true, true, true, false]);
+      });
       const quietChatText = `readonly quiet chat ${nonce}`;
       const quietChatAnswer = `chat answer ${nonce}`;
       fake.script(quietChatText, ({ toolResults }) =>

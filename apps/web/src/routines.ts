@@ -37,14 +37,14 @@ export function shownRoutines(rows: readonly RoutineRow[], now: number): Routine
   return rows.filter((row) => row.kind === "live" || row.deletingUntil > now);
 }
 
-export function runStateWords(state: RunShown["state"]): { words: string; tone: "plain" | "bad" } {
+export function runStateWords({ state, quiet }: Pick<RunShown, "state" | "quiet">): { words: string; tone: "plain" | "bad" } {
   switch (state.kind) {
     case "queued":
       return { words: "Waiting to start", tone: "plain" };
     case "running":
       return { words: "Running", tone: "plain" };
     case "done":
-      return { words: "Succeeded", tone: "plain" };
+      return { words: quiet ? "Nothing to report" : "Succeeded", tone: "plain" };
     case "failed":
       return { words: `Failed: ${state.reason}`, tone: "bad" };
     case "cancelled":

@@ -451,6 +451,7 @@ export const listForBot = query({
                   _id: run._id,
                   createdAt: run._creationTime,
                   state: publicState(run.state),
+                  quiet: run.quiet === true,
                 })),
               }
             : { kind: "deleted" as const, _id: routine._id, title: routineTitle(routine), deletingUntil: routine.deleting.until },

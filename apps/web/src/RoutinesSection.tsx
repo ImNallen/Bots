@@ -286,7 +286,7 @@ function RoutineDetail({ routine, clock, onError }: { routine: Routine; clock: C
           <h4>Recent runs</h4>
           <ul className="routine-runs">
             {routine.recentRuns.map((run) => {
-              const { words, tone } = runStateWords(run.state);
+              const { words, tone } = runStateWords(run);
               return (
                 <li key={run._id} data-tone={tone}>
                   <span className="routine-run-dot" aria-hidden="true" />
