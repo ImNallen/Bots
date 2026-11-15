@@ -14,6 +14,8 @@ CONVEX_PORT=8443
 LINK_HOST=10.78.0.2
 SERVICE_USER=bots-orchestrator
 UNIT=/etc/systemd/system/bots-orchestrator.service
+BACKUP_DIR=/root/backups
+BACKUPS_KEPT=50
 
 dns_name=$(tailscale status --json | node -e '
   let raw = "";
@@ -56,6 +58,20 @@ grep -q '^VITE_CONVEX_URL=' apps/web/.env.local 2>/dev/null \
 chmod 600 .env.local apps/web/.env.local
 
 CI=true pnpm install --frozen-lockfile --silent
+
+# Backups are not off this machine yet, so each deploy keeps a copy of the data from before its functions change.
+# bootstrap writes the admin key on the first deploy, so a key means data exists, and a backend that is down stops the deploy.
+if [ -f packages/convex/.env.local ]; then
+  for _ in $(seq 1 60); do
+    curl -sf http://127.0.0.1:3210/version >/dev/null && break
+    sleep 1
+  done
+  install -d -m 0700 "$BACKUP_DIR"
+  (cd packages/convex && pnpm exec convex export --include-file-storage \
+    --path "$BACKUP_DIR/bots-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD).zip" >/dev/null)
+  ls -1t "$BACKUP_DIR"/bots-deploy-*.zip | tail -n +"$((BACKUPS_KEPT + 1))" | xargs -r rm --
+fi
+
 pnpm bootstrap
 pnpm --filter @bots/web run build >/dev/null
 
