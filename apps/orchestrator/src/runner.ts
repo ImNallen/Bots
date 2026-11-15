@@ -355,7 +355,7 @@ async function runTool(args: {
   let reason: string | undefined;
   if (decision === "byRules") {
     const aim = prepared.kind === "computer" && isDesktopInvocation(prepared.tool) && prepared.tool.name !== "desktop_look" ? desktopAim(prepared.tool) : null;
-    const outcome = decideByRules({ invocation, aim, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
+    const outcome = decideByRules({ invocation, aim, page: null, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
     deps.log({ level: "info", event: "tool-rule", runId, toolCallId: call.id, rule: outcome.rule, run: outcome.run });
     decision = outcome.run ? "run" : "ask";
     reason = outcome.run ? undefined : outcome.reason;
