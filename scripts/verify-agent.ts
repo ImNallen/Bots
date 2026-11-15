@@ -2654,6 +2654,10 @@ try {
           { kind: "routineReport", scheduleId: manualRoutine.scheduleId, runId: directRun, text: `manual report ${nonce}` },
         ]);
       });
+      await check("the chat's timeline names the routine that posted a report by its title", async () => {
+        const { routines } = await second.query(api.threads.timeline, { threadId: manual.threadId });
+        assert.deepEqual(routines, [{ _id: manualRoutine.scheduleId, title: `readonly manual ${nonce}` }]);
+      });
       await check("a resend of finish is refused and posts nothing more", async () => {
         await assertRejected(service.mutation(api.runs.finish, { ...fenced, state: { kind: "done" } }), /Lease lost/);
         assert.equal((await reportsIn(second, manual.threadId)).length, 1);
@@ -3663,6 +3667,7 @@ try {
         assert.deepEqual(await rowsOf(first, testing.botId), []);
         assert.deepEqual(rows, { thread: false, runs: 0, events: 0 });
         assert.deepEqual((await reportsIn(first, testing.threadId)).map((report) => report.text), [testReport]);
+        assert.deepEqual((await first.query(api.threads.timeline, { threadId: testing.threadId })).routines, []);
         await assertRejected(first.mutation(api.schedules.restore, { scheduleId: testRoutine.scheduleId }), /already gone/);
       });
 

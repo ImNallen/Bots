@@ -22,7 +22,8 @@ export type DisplayItem = { key: string } & (
   | { kind: "time"; label: string }
   | { kind: "user"; text: string; attachments?: Extract<EventBody, { kind: "userMessage" }>["attachments"] }
   | { kind: "assistant"; text: string; streaming: boolean }
-  | { kind: "report"; text: string }
+  // routine is null once the routine that posted the report is deleted.
+  | { kind: "report"; text: string; routine: { id: Id<"schedules">; title: string } | null }
   | {
       kind: "tool";
       name: string;
@@ -297,8 +298,10 @@ function statusItem(args: { run: TimelineRun; waitingForAnswer: boolean }): Disp
   return { key, kind: "status", mode: tool === null ? "thinking" : "tool", text: friendlyStep(tool) };
 }
 
-function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, PendingApproval>; timeZone: string }): DisplayItem[] {
-  const { run, approvals, timeZone } = args;
+type RoutineTitles = ReadonlyMap<Id<"schedules">, string>;
+
+function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, PendingApproval>; timeZone: string; routineTitles: RoutineTitles }): DisplayItem[] {
+  const { run, approvals, timeZone, routineTitles } = args;
   const active = isActive(run);
   const results = new Map(
     run.events
@@ -313,9 +316,11 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Pendi
       case "userMessage":
         items.push({ key: _id, kind: "user", text: body.text, ...(body.attachments?.length ? { attachments: body.attachments } : {}) });
         break;
-      case "routineReport":
-        items.push({ key: _id, kind: "report", text: body.text });
+      case "routineReport": {
+        const title = routineTitles.get(body.scheduleId);
+        items.push({ key: _id, kind: "report", text: body.text, routine: title === undefined ? null : { id: body.scheduleId, title } });
         break;
+      }
       case "assistantTurn":
         if (body.text.trim() !== "") {
           items.push({ key: `${_id}:text`, kind: "assistant", text: body.text, streaming: false });
@@ -366,12 +371,13 @@ export function conversationItems(args: {
 }): DisplayItem[] {
   const { timeline, pending, now, locale, timeZone } = args;
   const approvals = new Map(pending.map((row) => [`${row.runId}:${row.toolCallId}`, row]));
+  const routineTitles: RoutineTitles = new Map(timeline.routines.map((routine) => [routine._id, routine.title]));
   return timeline.runs.flatMap((run, index) => {
     const previous = timeline.runs[index - 1];
     const showTime = previous === undefined || run.createdAt - previous.createdAt > TIME_GAP_MS;
     const time: DisplayItem[] = showTime
       ? [{ key: `${run._id}:time`, kind: "time", label: timeLabel({ at: run.createdAt, now, locale }) }]
       : [];
-    return [...time, ...runItems({ run, approvals, timeZone })];
+    return [...time, ...runItems({ run, approvals, timeZone, routineTitles })];
   });
 }
