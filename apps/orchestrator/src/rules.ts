@@ -1,4 +1,4 @@
-import type { AimedInvocation, ModelInvocation, PageTarget, WindowKind } from "@bots/protocol";
+import type { AimedInvocation, ModelInvocation, PageControl, PageTarget, WindowKind } from "@bots/protocol";
 
 // What a call becomes at the Automatic level once the rules have read it. run means the call goes with no card. Otherwise the owner
 // sees a card whose one plain sentence is reason. rule names which rule decided, so a later PR can add user rules to the same table
@@ -55,7 +55,7 @@ export function decideByRules(input: RuleInput): RuleOutcome {
 const DEFAULT_REASON = "This action needs your approval.";
 
 function allow(input: RuleInput): RuleOutcome {
-  const { invocation, aim } = input;
+  const { invocation, aim, page } = input;
   switch (invocation.name) {
     // write_file runs as it does at Outside, unless a built-in above fired.
     case "write_file":
@@ -72,14 +72,79 @@ function allow(input: RuleInput): RuleOutcome {
       return deskTypeAllowed({ submit: invocation.args.submit, text: invocation.args.text, aim });
     case "desktop_key":
       return deskKeyAllowed(invocation.args.keys, aim);
-    // The page's own targets aren't named yet, so a page action still asks. A later PR names them from the snapshot.
     case "browser_click":
     case "browser_type":
     case "browser_press":
-      return { run: false, rule: "browserTarget", reason: "This acts on a web page, whose buttons aren't named yet, so it needs your approval." };
+      return pageAllowed(invocation, page);
     default:
       return { run: false, rule: "default", reason: DEFAULT_REASON };
   }
+}
+
+// ---- Page allow rules. The control's kind comes from the DOM, and a page's words never let a call run.
+
+type PageInvocation = Extract<ModelInvocation, { name: "browser_click" | "browser_type" | "browser_press" }>;
+type PageKey = Extract<PageInvocation, { name: "browser_press" }>["args"]["key"];
+
+// A link or a GET form can commit on a logged-in site, as a like, a vote, or a change of settings, and the page's own code decides
+// what any click does. So every click asks, whatever the control is.
+const PAGE_CLICK_REASON = "What a click does is up to the page's own code, so it needs your approval.";
+
+// null means the key runs. Tab and Escape only move focus or close something. The others can act on the focused control.
+const ARROW_REASON = "An arrow key can change the focused control's choice, so it needs your approval.";
+const PAGE_KEYS: Readonly<Record<PageKey, string | null>> = {
+  Tab: null,
+  Escape: null,
+  Enter: "Enter can send a form or press the focused control, so it needs your approval.",
+  Backspace: "Backspace changes what the focused control holds, so it needs your approval.",
+  ArrowUp: ARROW_REASON,
+  ArrowDown: ARROW_REASON,
+  ArrowLeft: ARROW_REASON,
+  ArrowRight: ARROW_REASON,
+};
+
+// What typing with no Enter does to each kind of control. null means it only holds the text, which a plain line or text area does
+// until something sends it. A password field holds a secret, and a rich editor's own code handles every key.
+const NOT_A_FIELD = "This types into something that isn't a text field, so it needs your approval.";
+type FillKey = Exclude<PageControl["kind"], "field"> | Extract<PageControl, { kind: "field" }>["field"];
+const PAGE_FILLS: Readonly<Record<FillKey, string | null>> = {
+  line: null,
+  lines: null,
+  secret: "This types into a password field, so it needs your approval.",
+  rich: "This types into a rich editor, whose own code decides what typing does, so it needs your approval.",
+  link: NOT_A_FIELD,
+  submit: NOT_A_FIELD,
+  choice: NOT_A_FIELD,
+  button: NOT_A_FIELD,
+};
+
+function pageAllowed(invocation: PageInvocation, page: PageFacts | null): RuleOutcome {
+  const decide = (reason: string | null, rule: string): RuleOutcome => (reason === null ? { run: true, rule } : { run: false, rule: "pageAction", reason });
+  switch (invocation.name) {
+    case "browser_click":
+      return { run: false, rule: "pageAction", reason: PAGE_CLICK_REASON };
+    case "browser_press":
+      return decide(PAGE_KEYS[invocation.args.key], "pageKey");
+    case "browser_type":
+      return decide(fillReason(invocation.args, page?.target ?? null), "pageFill");
+  }
+}
+
+function fillReason(args: { text: string; submit: boolean }, target: PageTarget | null): string | null {
+  if (args.submit) {
+    return "This types and then presses Enter, which can send a form, so it needs your approval.";
+  }
+  if (/[\r\n]/.test(args.text)) {
+    return "This types more than one line, so it needs your approval.";
+  }
+  if (target === null) {
+    return "This page's controls aren't named yet, so it needs your approval.";
+  }
+  const { control } = target;
+  if (control.kind !== "field") {
+    return PAGE_FILLS[control.kind];
+  }
+  return control.readOnly ? "This types into a field the page made read-only, so it needs your approval." : PAGE_FILLS[control.field];
 }
 
 // ---- Desktop allow rules. The element's role and name and its window come from the run's newest look.
