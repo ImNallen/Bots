@@ -69,6 +69,22 @@ These parts do not update themselves:
 - The Convex, dashboard, and SearXNG images. `compose.yaml` pins each one by digest, so a change to them is a commit.
 - The Proxmox host. By decision, its owner updates it by hand.
 
+## Update dependencies
+
+Dependabot reads `.github/dependabot.yml` and opens pull requests once a week. It groups the minor and patch updates of npm packages into one pull request, and those of GitHub Actions into another. Each major update gets its own pull request. SearXNG runs `latest` pinned by its digest, so Dependabot proposes the newest digest each week. Nothing merges by itself. A person reviews and merges each pull request, and the merge deploys itself once CI passes on `main`.
+
+Dependabot skips the Convex images. Their tags are commit SHAs, which Dependabot cannot order, and a new backend can migrate the data. To move them, do these steps:
+
+1. On the control VM, export the data and the stored files.
+
+	```sh
+	cd /opt/bots/packages/convex
+	sudo pnpm exec convex export --include-file-storage --path /root/backups/bots-before-convex-<date>.zip
+	```
+
+2. In `compose.yaml`, give `convex-backend` and `convex-dashboard` the same new tag, each with its own digest.
+3. Merge the change. The deploy pulls the new images.
+
 ## Add a user
 
 In the Tailscale admin console, open the `bots-control` machine and select **Share**. Share only this machine. A friend's tailnet then reaches this one machine, and this machine cannot start connections to it.

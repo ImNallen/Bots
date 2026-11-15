@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directory: /infra/control-vm
+    schedule:
+      interval: weekly
+    # SearXNG pushes latest about once a day, so the default 3-day cooldown would never let its digest through.
+    cooldown:
+      exclude: [searxng/searxng]
+    # Convex tags are commit SHAs Dependabot cannot order, and a backend upgrade can migrate data.
+    # Bump them by hand, per "Update dependencies" in infra/control-vm/README.md.
+    ignore:
+      - dependency-name: convex/convex-backend
+      - dependency-name: convex/convex-dashboard
