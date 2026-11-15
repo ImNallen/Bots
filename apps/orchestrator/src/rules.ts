@@ -65,7 +65,7 @@ function allow(input: RuleInput): RuleOutcome {
     case "desktop_type":
       return deskTypeAllowed({ submit: invocation.args.submit, text: invocation.args.text, aim });
     case "desktop_key":
-      return deskKeyAllowed(invocation.args.keys);
+      return deskKeyAllowed(invocation.args.keys, aim);
     // The page's own targets aren't named yet, so a page action still asks. A later PR names them from the snapshot.
     case "browser_click":
     case "browser_type":
@@ -96,6 +96,15 @@ const TERMINAL_APPS: ReadonlySet<string> = new Set(["xfce4-terminal", "xterm", "
 const WEB_APPS: ReadonlySet<string> = new Set(["Chromium", "chromium", "chromium-browser"]);
 const WEB_REASON = "This acts on a web page, whose controls the page names itself, so it needs your approval.";
 
+// The file chooser that Chromium opens through the GTK portal. Any page click can open it, and a click, a typed path, or a key in it
+// picks a file for the page to upload, so every desktop input there asks, as in a terminal.
+const FILE_CHOOSER_APPS: ReadonlySet<string> = new Set(["xdg-desktop-portal-gtk"]);
+const FILE_CHOOSER_REASON = "This acts in a file chooser, where it can pick a file for a web page to upload, so it needs your approval.";
+
+function isFileChooser(aim: DesktopAim | null): boolean {
+  return aim !== null && aim.window !== null && FILE_CHOOSER_APPS.has(aim.window.app);
+}
+
 function isWeb(aim: DesktopAim): boolean {
   return aim.window !== null && WEB_APPS.has(aim.window.app);
 }
@@ -120,6 +129,9 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
   if (button !== "left" && button !== "right") {
     return { run: false, rule: "desktopClick", reason: "This is a double or middle click, so it needs your approval." };
   }
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopClick", reason: FILE_CHOOSER_REASON };
+  }
   const name = aim.element?.name ?? "";
   if (name.trim() === "") {
     return { run: false, rule: "desktopClick", reason: "This clicks a control with no name, so it needs your approval." };
@@ -138,6 +150,9 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
 
 function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim | null }): RuleOutcome {
   const { submit, text, aim } = args;
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopType", reason: FILE_CHOOSER_REASON };
+  }
   if (submit) {
     return { run: false, rule: "desktopType", reason: "This types and then presses Enter, so it needs your approval." };
   }
@@ -153,7 +168,10 @@ function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim 
   return { run: true, rule: "desktopType" };
 }
 
-function deskKeyAllowed(keys: string): RuleOutcome {
+function deskKeyAllowed(keys: string, aim: DesktopAim | null): RuleOutcome {
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopKey", reason: FILE_CHOOSER_REASON };
+  }
   return NAVIGATION_KEYS.has(keys)
     ? { run: true, rule: "desktopKey" }
     : { run: false, rule: "desktopKey", reason: "This presses a key that isn't plain navigation, so it needs your approval." };

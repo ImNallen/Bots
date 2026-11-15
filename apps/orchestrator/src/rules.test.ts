@@ -210,6 +210,21 @@ describe("the desktop allow rules", () => {
     expect(decideByRules(type("hello", false, "xfce4-terminal")).run).toBe(false);
   });
 
+  it("asks on a click, typing, or any key in the file chooser, where it picks a file for a page to upload", () => {
+    const chooser = aim({ role: "table cell", name: "tax-return.pdf" }, "xdg-desktop-portal-gtk", "dialog");
+    const inputs: RuleInput[] = [
+      { invocation: { name: "desktop_click", args: { mark: 1, button: "left" } }, aim: chooser, workspace: WS },
+      { invocation: { name: "desktop_type", args: { text: "~/Documents/tax-return.pdf", replace: false, submit: false } }, aim: { element: null, window: chooser.window }, workspace: WS },
+      ...["Down", "Tab", "Return"].map((keys): RuleInput => ({ invocation: { name: "desktop_key", args: { keys: keys as never, times: 1 } }, aim: { element: null, window: chooser.window }, workspace: WS })),
+    ];
+    for (const input of inputs) {
+      const outcome = decideByRules(input);
+      expect(outcome.run, input.invocation.name).toBe(false);
+      expect(outcome.run === false && outcome.reason, input.invocation.name).toMatch(/file chooser/);
+    }
+    expect(decideByRules({ invocation: { name: "desktop_scroll", args: { mark: 1, direction: "down", amount: 3 } }, aim: chooser, workspace: WS }).run).toBe(true);
+  });
+
   it("keeps a page action asking until a later PR names its target", () => {
     const outcome = decideByRules({ invocation: { name: "browser_click", args: { ref: 1 } }, aim: null, workspace: WS });
     expect(outcome.run).toBe(false);
