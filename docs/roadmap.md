@@ -19,7 +19,7 @@ Step 3 isolates bots from the LAN. Friends join through the invites in step 6, a
 
 The owner deferred step 6 on 2026-11-08, because nobody is waiting for an invite yet. Until then, work continues on [the desktop follow-ups](#follow-ups-in-this-order), starting with letting bots use the desktop. Step 6's gaps below still apply when it starts.
 
-Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Add off-server copies of Convex exports and the master key before anyone depends on this system. The owner confirmed on 2026-11-08 that nothing depends on it yet.
+Backups are deferred, and a computer is not a permanent store. A user will be able to reset a computer, which deletes its workspaces and browser logins. Each deploy exports Convex to `/root/backups` on the control VM, but that copy dies with the VM's disk. Add off-server copies of Convex exports and the master key before anyone depends on this system. The owner confirmed on 2026-11-08 that nothing depends on it yet.
 
 ## Where things run
 
@@ -27,7 +27,7 @@ Backups are deferred, and a computer is not a permanent store. A user will be ab
 - The control VM is VM 110, `bots-control`, at `192.168.1.161`. Log in as `bots` over SSH, which has passwordless `sudo`. The app is in `/opt/bots`.
 - Run `sudo tailscale serve status` on the control VM to find its `https://bots-control.<tailnet>.ts.net` address.
 - The service runs as `bots-orchestrator`, which has no `sudo`. Keep it separate from the `bots` login: a process can take over another process of its own user, and `bots` has `sudo`.
-- The control VM deploys a branch until someone deploys another. It runs `main` now. To update it, run [the deploy script](../infra/control-vm/README.md).
+- The control VM deploys each commit on `main` that passes CI by itself, through `bots-deploy.timer`, within about 2 minutes of the CI run. A merge that changes only Markdown and `docs/` restarts nothing. A deploy of another branch by hand pauses the timer, and a deploy of `main` by hand turns it back on. [The control VM README](../infra/control-vm/README.md) explains the timer, its journal, and how to pause it.
 - User VMs use the `botsvms` network, `10.77.0.0/24`, with the gateway at `10.77.0.1`. The control VM is `10.78.0.2` on `botsctl`, `10.78.0.0/30`. The link listens only on `10.78.0.2:8788`.
 - VM 9000, `bots-user-template`, is the template for user VMs. Its description names the commit of its `computerd`. A clone updates itself to the current commit, so the template can lag behind.
 - VM 201, `bots-user-201`, at `10.77.0.21`, is the owner's computer. The orchestrator's reconcile loop owns it, and it is in slot 1. Reach it with `qm guest exec` on the host, because it accepts no inbound connections and has no SSH keys.
@@ -426,12 +426,15 @@ When that work starts, these things need an answer. They are proposals, so chang
 
 ## After step 3: deploy from `main`
 
-Add a systemd timer on the control VM. The server pulls, so GitHub holds no Tailscale key and no SSH key. The timer does these things:
+Done on 2026-11-15. The server pulls, so GitHub holds no Tailscale key and no SSH key.
 
-1. Check `origin/main` every few minutes for a new commit.
-2. Continue only if CI passed on that commit.
-3. Run a Convex export.
-4. Run `deploy.sh main`.
+1. `bots-deploy.timer` checks `main` every 2 minutes and deploys the newest commit whose CI run passed. It calls the GitHub API only when `main` has moved.
+2. Each deploy runs the `deploy.sh` of the commit it deploys. That script runs `setup.sh` first, so Node, pnpm, Docker, and Tailscale follow the repository, and a test fails when the Node and pnpm versions disagree.
+3. Each deploy exports Convex to `/root/backups` before it deploys the functions, and keeps the newest 50 exports.
+4. `unattended-upgrades` installs Debian, Docker, and Tailscale updates on the control VM each day. User VMs get Debian's updates, including Chromium.
+5. Dependabot proposes npm, GitHub Actions, and SearXNG updates each week. A person merges each one, and the merge deploys itself.
+
+The control VM ran `892d556` with no hand step on 2026-11-15. The timer logged `wait` at 10:24 while CI ran, and deployed at 10:26 in 12 seconds.
 
 ## Known gaps
 
@@ -587,11 +590,15 @@ These are open on purpose. Fix each one when the work reaches it.
 - A deleted bot's files stay in the Docker volume on a Mac, where no reconcile loop runs.
 - Step 1b did not test a live update on a phone, or a bot created by a second real account. `pnpm verify:agent` covers isolation between users on a Mac.
 - `pnpm verify:agent` relies on Docker Desktop's `host.docker.internal`, so it does not run on Linux or in CI as written.
-- CI is not a required check on `main`. That is a repository setting.
+- CI is not a required check on `main`. That is a repository setting. The deploy timer still deploys only a commit whose CI run passed.
 - Any bot can reach CDP on loopback, so it can drive another bot's browser on the same computer, and read the logins in that browser. It can also reach an input stream for the 15 seconds before its viewer connects, which takes that take-over's place. A bot with `sudo` can also read the jar of moved logins, which `computerd` keeps in plain text. Those bots have one owner, so this crosses no user's boundary.
 - `browser_navigate` checks no address, so a bot can still open loopback, such as CDP, or the link's address on its screen with no card. `web_fetch` checks every address and every redirect.
 - `web_search` gets only what the engines behind SearXNG answer the home IP address. Measured on 2026-11-09 over 20 queries in a row, Google and Brave answered the first 13, then Brave stopped answering and Google answered the rest alone. DuckDuckGo answered CAPTCHA every time, and Wikidata failed on some queries. A search while every engine blocks the address is untested. It would answer `error`, name each engine that failed, and name DuckDuckGo's and Bing's results pages for `browser_navigate`. Whether a real browser can read those pages from the home IP address is also untested.
-- SearXNG is pinned to `searxng/searxng:2026.11.9-57ff753ad`. A fix that SearXNG makes for an engine reaches Bots only when someone moves the pin, and nothing does that.
+- SearXNG runs `latest`, pinned by its digest, because Dependabot cannot order SearXNG's dated tags. Dependabot proposes the newest digest each week, so its pull request shows no version.
+- Dependabot skips the Convex images. A person bumps them by hand, after an export, as the control VM README says.
+- Nothing reboots the control VM, so a kernel update waits until someone reboots it. The VM ran kernel 6.12.115 on 2026-11-15 with two newer kernels installed.
+- The Proxmox host and VM 9000, the template, update only by hand. The control VM cannot reach the host, by design.
+- A deploy that fails is retried every 2 minutes with no backoff, and each try builds the app again. A deploy that runs while `unattended-upgrades` holds the apt lock fails and is retried.
 - `web_fetch` asks for English, and `web_search` sends SearXNG no language, so SearXNG picks one by its own defaults. Neither follows the owner's language or country.
 - `web_fetch` runs no JavaScript and sends no cookies, so a page that draws its text with a script, or a consent wall, reads as almost no text. The prompt then sends the bot to its screen.
 - `web_fetch` keeps no cache, so each part fetches the page again, and a page that changed in between can shift its parts.
