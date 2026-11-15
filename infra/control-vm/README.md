@@ -36,7 +36,7 @@ The script creates the isolated networks for user VMs, loads the rules that hold
 
 ## Deploy
 
-Run the deploy script as root on the VM, with the branch to deploy. Rerun it for each update.
+Run the deploy script once by hand, as root on the VM. After that, each merge to `main` deploys itself.
 
 ```sh
 sudo bash /opt/bots/infra/control-vm/deploy.sh main
@@ -48,7 +48,13 @@ The script then gives the VM its address on the control network, builds the app,
 
 To read the orchestrator's logs, run `journalctl -u bots-orchestrator`. To open the Convex dashboard, forward ports 6791 and 3210, because the dashboard's page calls Convex directly: `ssh -L 6791:127.0.0.1:6791 -L 3210:127.0.0.1:3210 bots@<VM address>`. Then run `sudo cat /opt/bots/packages/convex/.env.local` on the VM to read the admin key.
 
-If a change edits `deploy.sh` itself, fetch and check out the branch before you run the script. Otherwise the old script keeps running after it updates the checkout, and it skips your new steps.
+The first deploy also turns on `bots-deploy.timer`. Every 2 minutes, the timer compares `main` on GitHub with the commit in `/opt/bots/.deployed-commit`, which the deploy script writes when it succeeds. If `main` has moved, the timer deploys the newest commit on `main` whose CI run passed. CI cancels a run when a newer commit lands, so the timer can pass over commits, and it never deploys a commit that has not passed. Each deploy runs the `deploy.sh` of the commit that it deploys, so a change to the script takes effect in the same deploy.
+
+If a merge changes only Markdown files and files in `docs/`, the timer records the commit as deployed and restarts nothing. If a deploy fails, the deployed commit stays the same, and the timer tries again 2 minutes later.
+
+To read each deploy and each failure, run `journalctl -u bots-deploy`. To see what the timer would do now, without doing it, run `cd /opt/bots && sudo node scripts/autodeploy.ts --dry-run`.
+
+To pause the timer, run `sudo systemctl disable --now bots-deploy.timer`. A deploy of another branch also pauses it, because the timer would replace that branch with `main`. A deploy of `main` by hand turns the timer back on.
 
 ## What updates itself
 

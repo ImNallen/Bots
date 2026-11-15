@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy the newest commit on main that passed CI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bots
+Environment=HOME=/root
+ExecStart=/usr/local/bin/node /opt/bots/scripts/autodeploy.ts
+TimeoutStartSec=30min
