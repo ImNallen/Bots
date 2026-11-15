@@ -1,4 +1,4 @@
-import type { AimedInvocation, ModelInvocation, WindowKind } from "@bots/protocol";
+import type { AimedInvocation, ModelInvocation, PageControl, PageTarget, WindowKind } from "@bots/protocol";
 
 // What a call becomes at the Automatic level once the rules have read it. run means the call goes with no card. Otherwise the owner
 // sees a card whose one plain sentence is reason. rule names which rule decided, so a later PR can add user rules to the same table
@@ -12,11 +12,17 @@ export type DesktopAim = {
   window: { app: string; kind: WindowKind } | null;
 };
 
+// What the rules know of the page a page action lands on, from the run's stored page. target is the ref's element for a click or
+// typing, and the focused element for a key, or null when there is none.
+export type PageFacts = { origin: string; target: PageTarget | null };
+
 // The one input to the rules. It is a pure function of data Convex has stored: the parsed call, the desktop aim when there is one,
-// and the bot's workspace path. A later PR adds the run's events here for bound files and user rules.
+// the page facts for a page action, and the bot's workspace path. A later PR adds the run's events here for bound files and user
+// rules.
 export type RuleInput = {
   invocation: ModelInvocation;
   aim: DesktopAim | null;
+  page: PageFacts | null;
   workspace: string;
 };
 
@@ -49,7 +55,7 @@ export function decideByRules(input: RuleInput): RuleOutcome {
 const DEFAULT_REASON = "This action needs your approval.";
 
 function allow(input: RuleInput): RuleOutcome {
-  const { invocation, aim } = input;
+  const { invocation, aim, page } = input;
   switch (invocation.name) {
     // write_file runs as it does at Outside, unless a built-in above fired.
     case "write_file":
@@ -65,15 +71,80 @@ function allow(input: RuleInput): RuleOutcome {
     case "desktop_type":
       return deskTypeAllowed({ submit: invocation.args.submit, text: invocation.args.text, aim });
     case "desktop_key":
-      return deskKeyAllowed(invocation.args.keys);
-    // The page's own targets aren't named yet, so a page action still asks. A later PR names them from the snapshot.
+      return deskKeyAllowed(invocation.args.keys, aim);
     case "browser_click":
     case "browser_type":
     case "browser_press":
-      return { run: false, rule: "browserTarget", reason: "This acts on a web page, whose buttons aren't named yet, so it needs your approval." };
+      return pageAllowed(invocation, page);
     default:
       return { run: false, rule: "default", reason: DEFAULT_REASON };
   }
+}
+
+// ---- Page allow rules. The control's kind comes from the DOM, and a page's words never let a call run.
+
+type PageInvocation = Extract<ModelInvocation, { name: "browser_click" | "browser_type" | "browser_press" }>;
+type PageKey = Extract<PageInvocation, { name: "browser_press" }>["args"]["key"];
+
+// A link or a GET form can commit on a logged-in site, as a like, a vote, or a change of settings, and the page's own code decides
+// what any click does. So every click asks, whatever the control is.
+const PAGE_CLICK_REASON = "What a click does is up to the page's own code, so it needs your approval.";
+
+// null means the key runs. Tab and Escape only move focus or close something. The others can act on the focused control.
+const ARROW_REASON = "An arrow key can change the focused control's choice, so it needs your approval.";
+const PAGE_KEYS: Readonly<Record<PageKey, string | null>> = {
+  Tab: null,
+  Escape: null,
+  Enter: "Enter can send a form or press the focused control, so it needs your approval.",
+  Backspace: "Backspace changes what the focused control holds, so it needs your approval.",
+  ArrowUp: ARROW_REASON,
+  ArrowDown: ARROW_REASON,
+  ArrowLeft: ARROW_REASON,
+  ArrowRight: ARROW_REASON,
+};
+
+// What typing with no Enter does to each kind of control. null means it only holds the text, which a plain line or text area does
+// until something sends it. A password field holds a secret, and a rich editor's own code handles every key.
+const NOT_A_FIELD = "This types into something that isn't a text field, so it needs your approval.";
+type FillKey = Exclude<PageControl["kind"], "field"> | Extract<PageControl, { kind: "field" }>["field"];
+const PAGE_FILLS: Readonly<Record<FillKey, string | null>> = {
+  line: null,
+  lines: null,
+  secret: "This types into a password field, so it needs your approval.",
+  rich: "This types into a rich editor, whose own code decides what typing does, so it needs your approval.",
+  link: NOT_A_FIELD,
+  submit: NOT_A_FIELD,
+  choice: NOT_A_FIELD,
+  button: NOT_A_FIELD,
+};
+
+function pageAllowed(invocation: PageInvocation, page: PageFacts | null): RuleOutcome {
+  const decide = (reason: string | null, rule: string): RuleOutcome => (reason === null ? { run: true, rule } : { run: false, rule: "pageAction", reason });
+  switch (invocation.name) {
+    case "browser_click":
+      return { run: false, rule: "pageAction", reason: PAGE_CLICK_REASON };
+    case "browser_press":
+      return decide(PAGE_KEYS[invocation.args.key], "pageKey");
+    case "browser_type":
+      return decide(fillReason(invocation.args, page?.target ?? null), "pageFill");
+  }
+}
+
+function fillReason(args: { text: string; submit: boolean }, target: PageTarget | null): string | null {
+  if (args.submit) {
+    return "This types and then presses Enter, which can send a form, so it needs your approval.";
+  }
+  if (/[\r\n]/.test(args.text)) {
+    return "This types more than one line, so it needs your approval.";
+  }
+  if (target === null) {
+    return "This page's controls aren't named yet, so it needs your approval.";
+  }
+  const { control } = target;
+  if (control.kind !== "field") {
+    return PAGE_FILLS[control.kind];
+  }
+  return control.readOnly ? "This types into a field the page made read-only, so it needs your approval." : PAGE_FILLS[control.field];
 }
 
 // ---- Desktop allow rules. The element's role and name and its window come from the run's newest look.
@@ -95,6 +166,15 @@ const TERMINAL_APPS: ReadonlySet<string> = new Set(["xfce4-terminal", "xterm", "
 // asks, as a browser_* action does, until a later PR tells the browser's own controls from the page's.
 const WEB_APPS: ReadonlySet<string> = new Set(["Chromium", "chromium", "chromium-browser"]);
 const WEB_REASON = "This acts on a web page, whose controls the page names itself, so it needs your approval.";
+
+// The file chooser that Chromium opens through the GTK portal. Any page click can open it, and a click, a typed path, or a key in it
+// picks a file for the page to upload, so every desktop input there asks, as in a terminal.
+const FILE_CHOOSER_APPS: ReadonlySet<string> = new Set(["xdg-desktop-portal-gtk"]);
+const FILE_CHOOSER_REASON = "This acts in a file chooser, where it can pick a file for a web page to upload, so it needs your approval.";
+
+function isFileChooser(aim: DesktopAim | null): boolean {
+  return aim !== null && aim.window !== null && FILE_CHOOSER_APPS.has(aim.window.app);
+}
 
 function isWeb(aim: DesktopAim): boolean {
   return aim.window !== null && WEB_APPS.has(aim.window.app);
@@ -120,6 +200,9 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
   if (button !== "left" && button !== "right") {
     return { run: false, rule: "desktopClick", reason: "This is a double or middle click, so it needs your approval." };
   }
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopClick", reason: FILE_CHOOSER_REASON };
+  }
   const name = aim.element?.name ?? "";
   if (name.trim() === "") {
     return { run: false, rule: "desktopClick", reason: "This clicks a control with no name, so it needs your approval." };
@@ -138,6 +221,9 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
 
 function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim | null }): RuleOutcome {
   const { submit, text, aim } = args;
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopType", reason: FILE_CHOOSER_REASON };
+  }
   if (submit) {
     return { run: false, rule: "desktopType", reason: "This types and then presses Enter, so it needs your approval." };
   }
@@ -153,7 +239,10 @@ function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim 
   return { run: true, rule: "desktopType" };
 }
 
-function deskKeyAllowed(keys: string): RuleOutcome {
+function deskKeyAllowed(keys: string, aim: DesktopAim | null): RuleOutcome {
+  if (isFileChooser(aim)) {
+    return { run: false, rule: "desktopKey", reason: FILE_CHOOSER_REASON };
+  }
   return NAVIGATION_KEYS.has(keys)
     ? { run: true, rule: "desktopKey" }
     : { run: false, rule: "desktopKey", reason: "This presses a key that isn't plain navigation, so it needs your approval." };

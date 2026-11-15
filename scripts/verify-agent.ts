@@ -4756,6 +4756,43 @@ try {
       assert.deepEqual(linesOf({ container: mainContainer.id, path: file }), []);
     });
 
+    const scriptedPage = (text: string, name: string, args: object) =>
+      fake.script(text, ({ toolResults }) =>
+        toolResults.length === 0 ? { kind: "tools", delivery: "whole", calls: [{ name, arguments: JSON.stringify(args) }] } : { kind: "text", text: "done" },
+      );
+    const toolRuleOf = (runId: Id<"runs">) =>
+      logsText()
+        .split("\n")
+        .filter((line) => line.includes(`"event":"tool-rule","runId":"${runId}"`))
+        .map((line) => JSON.parse(line) as { rule: string; run: boolean });
+
+    await check("at Automatic, Tab on a page runs with no card under pageKey, and this image has no browser to answer it", async () => {
+      const auto = await newChat({ client: first, name: "approval-auto-tab", level: "automatic" });
+      const text = `approval auto tab ${nonce}`;
+      scriptedPage(text, "browser_press", { key: "Tab" });
+      const runId = await auto.send(text);
+      const run = await auto.settled(runId);
+      assert.deepEqual(await pendingFor(auto), []);
+      assert.deepEqual(toolRuleOf(runId).map(({ rule, run: ran }) => ({ rule, run: ran })), [{ rule: "pageKey", run: true }]);
+      const [result] = resultsOf(run);
+      console.log(`info  browser_press in this image: ${result?.output.slice(0, 120)}`);
+      assert.equal(result?.outcome, "error");
+      assert.match(result?.output ?? "", /browser action failed/);
+    });
+
+    await check("at Automatic, a page click makes a card with its reason, and a denial clicks nothing", async () => {
+      const auto = await newChat({ client: first, name: "approval-auto-click", level: "automatic" });
+      const text = `approval auto click ${nonce}`;
+      scriptedPage(text, "browser_click", { ref: 1 });
+      const runId = await auto.send(text);
+      const card = await waitForPending(auto);
+      assert.ok(typeof card.reason === "string" && card.reason.length > 0, "the card carries a one-sentence reason");
+      assert.deepEqual(toolRuleOf(runId).map(({ rule, run: ran }) => ({ rule, run: ran })), [{ rule: "pageAction", run: false }]);
+      await first.mutation(api.approvals.decide, { approvalId: card._id, decision: "denied" });
+      const done = await auto.settled(runId);
+      assert.equal(resultsOf(done)[0]?.outcome, "denied");
+    });
+
     const denied = await newChat({ client: first, name: "approval-denied", level: "outside" });
     const deniedText = `approval deny ${nonce}`;
     const deniedFile = workspaceFile(denied, "approval-denied.txt");
