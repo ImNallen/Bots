@@ -1,8 +1,14 @@
 #!/bin/bash
-# Run as root on the control VM after setup.sh and tailscale up. Pass the branch to deploy. Safe to rerun.
+# Run as root on the control VM after setup.sh and tailscale up. Pass the branch to deploy, and optionally a commit on it. Safe to rerun.
 set -euo pipefail
+# bots-deploy.service takes this lock before it decides what to deploy, and sets DEPLOY_BY_TIMER.
+if [ -z "${DEPLOY_BY_TIMER:-}" ]; then
+  exec 9>/run/lock/bots-deploy.lock
+  flock 9
+fi
 
 BRANCH=${1:-main}
+COMMIT=${2:-origin/$BRANCH}
 APP_DIR=/opt/bots
 CONVEX_PORT=8443
 LINK_HOST=10.78.0.2
@@ -24,7 +30,7 @@ fi
 cd "$APP_DIR"
 git fetch --quiet origin
 git checkout --quiet "$BRANCH"
-git reset --quiet --hard "origin/$BRANCH"
+git reset --quiet --hard "$COMMIT"
 infra/control-vm/setup.sh
 
 # User VMs follow the last commit that changed computerd, so a deploy that leaves it alone restarts nothing on them.
@@ -57,11 +63,22 @@ pnpm --filter @bots/web run build >/dev/null
 id "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home-dir "$APP_DIR" --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 chown "$SERVICE_USER:$SERVICE_USER" .env.local
 install -m 0644 infra/control-vm/bots-orchestrator.service "$UNIT"
+install -m 0644 infra/control-vm/bots-deploy.service infra/control-vm/bots-deploy.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --quiet bots-orchestrator
 systemctl restart bots-orchestrator
+# A timer run leaves the timer alone, so a pause during that run holds.
+if [ -z "${DEPLOY_BY_TIMER:-}" ]; then
+  if [ "$BRANCH" = main ]; then
+    systemctl enable --quiet --now bots-deploy.timer
+  else
+    systemctl disable --quiet --now bots-deploy.timer
+  fi
+fi
 
 tailscale serve --bg --https=443 http://127.0.0.1:8787 >/dev/null
 tailscale serve --bg --https="$CONVEX_PORT" http://127.0.0.1:3210 >/dev/null
 
+git rev-parse HEAD > .deployed-commit.tmp
+mv .deployed-commit.tmp .deployed-commit
 echo "deployed $(git rev-parse --short HEAD) at https://$dns_name"
