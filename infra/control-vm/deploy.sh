@@ -60,7 +60,12 @@ chmod 600 .env.local apps/web/.env.local
 CI=true pnpm install --frozen-lockfile --silent
 
 # Backups are not off this machine yet, so each deploy keeps a copy of the data from before its functions change.
-if [ -f packages/convex/.env.local ] && curl -sf http://127.0.0.1:3210/version >/dev/null; then
+# bootstrap writes the admin key on the first deploy, so a key means data exists, and a backend that is down stops the deploy.
+if [ -f packages/convex/.env.local ]; then
+  for _ in $(seq 1 60); do
+    curl -sf http://127.0.0.1:3210/version >/dev/null && break
+    sleep 1
+  done
   install -d -m 0700 "$BACKUP_DIR"
   (cd packages/convex && pnpm exec convex export --include-file-storage \
     --path "$BACKUP_DIR/bots-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD).zip" >/dev/null)
