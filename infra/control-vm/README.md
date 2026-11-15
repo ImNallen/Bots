@@ -42,7 +42,9 @@ Run the deploy script as root on the VM, with the branch to deploy. Rerun it for
 sudo bash /opt/bots/infra/control-vm/deploy.sh main
 ```
 
-The script gives the VM its address on the control network, builds the app, starts Convex and SearXNG, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. SearXNG listens only on `127.0.0.1:8789`, and `web_search` reaches it from the orchestrator. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
+The script first runs `setup.sh` from the commit it deploys, so a new Node or pnpm version in `setup.sh` reaches the VM with that deploy. When the versions already match, `setup.sh` only refreshes the package lists. On 2026-11-15 that took about a second. `pnpm test` fails when the Node and pnpm versions in the setup scripts, `package.json`, and CI disagree, so change them together.
+
+The script then gives the VM its address on the control network, builds the app, starts Convex and SearXNG, deploys the Convex functions, restarts `bots-orchestrator`, and configures `tailscale serve`. SearXNG listens only on `127.0.0.1:8789`, and `web_search` reaches it from the orchestrator. Port 443 serves the web app, and port 8443 serves Convex. The service runs as its own user, `bots-orchestrator`, which has no `sudo` and no Docker access. To read the VM's address, run `sudo tailscale serve status`.
 
 To read the orchestrator's logs, run `journalctl -u bots-orchestrator`. To open the Convex dashboard, forward ports 6791 and 3210, because the dashboard's page calls Convex directly: `ssh -L 6791:127.0.0.1:6791 -L 3210:127.0.0.1:3210 bots@<VM address>`. Then run `sudo cat /opt/bots/packages/convex/.env.local` on the VM to read the admin key.
 
