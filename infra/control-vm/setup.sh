@@ -39,7 +39,8 @@ if [ "$(node -v 2>/dev/null || true)" != "v$NODE_VERSION" ]; then
   rm -rf "$work"
 fi
 
-if [ "$(pnpm -v 2>/dev/null || true)" != "$PNPM_VERSION" ]; then
+# Inside a checkout, pnpm reports the version its package.json names, not the installed one.
+if [ "$(cd / && pnpm -v 2>/dev/null || true)" != "$PNPM_VERSION" ]; then
   npm install --global --silent "pnpm@$PNPM_VERSION"
 fi
 

@@ -25,6 +25,7 @@ cd "$APP_DIR"
 git fetch --quiet origin
 git checkout --quiet "$BRANCH"
 git reset --quiet --hard "origin/$BRANCH"
+infra/control-vm/setup.sh
 
 # User VMs follow the last commit that changed computerd, so a deploy that leaves it alone restarts nothing on them.
 git log -1 --format=%H -- apps/computerd packages/protocol pnpm-lock.yaml pnpm-workspace.yaml package.json \

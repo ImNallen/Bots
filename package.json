@@ -13,7 +13,7 @@
     "build": "pnpm --recursive run build",
     "start": "node --env-file=.env.local apps/orchestrator/src/main.ts",
     "typecheck": "pnpm --recursive run typecheck && tsc --project tsconfig.json",
-    "test": "pnpm --recursive run test",
+    "test": "pnpm --recursive run test && node --test scripts/*.test.ts",
     "verify:reset": "node scripts/verify-reset.ts",
     "verify:reset-ui": "node scripts/verify-reset-dialog.mjs && node scripts/verify-reset-ui.ts",
     "verify:auth": "pnpm build && node scripts/verify-auth.ts",
