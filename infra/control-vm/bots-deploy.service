@@ -6,6 +6,6 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/bots
-Environment=HOME=/root
-ExecStart=/usr/local/bin/node /opt/bots/scripts/autodeploy.ts
+Environment=HOME=/root DEPLOY_BY_TIMER=1
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 0 /run/lock/bots-deploy.lock /usr/local/bin/node /opt/bots/scripts/autodeploy.ts
 TimeoutStartSec=30min

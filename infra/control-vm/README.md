@@ -54,7 +54,7 @@ If a merge changes only Markdown files and files in `docs/`, the timer records t
 
 To read each deploy and each failure, run `journalctl -u bots-deploy`. To see what the timer would do now, without doing it, run `cd /opt/bots && sudo node scripts/autodeploy.ts --dry-run`.
 
-To pause the timer, run `sudo systemctl disable --now bots-deploy.timer`. A deploy of another branch also pauses it, because the timer would replace that branch with `main`. A deploy of `main` by hand turns the timer back on.
+To pause the timer, run `sudo systemctl disable --now bots-deploy.timer`. A deploy of another branch also pauses it, because the timer would replace that branch with `main`. A deploy of `main` by hand turns the timer back on. A deploy by hand waits for a deploy that the timer started, and the timer skips its check while a deploy by hand runs.
 
 ## What updates itself
 

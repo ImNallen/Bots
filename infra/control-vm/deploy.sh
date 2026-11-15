@@ -1,8 +1,11 @@
 #!/bin/bash
 # Run as root on the control VM after setup.sh and tailscale up. Pass the branch to deploy, and optionally a commit on it. Safe to rerun.
 set -euo pipefail
-exec 9>/run/lock/bots-deploy.lock
-flock 9
+# bots-deploy.service takes this lock before it decides what to deploy, and sets DEPLOY_BY_TIMER.
+if [ -z "${DEPLOY_BY_TIMER:-}" ]; then
+  exec 9>/run/lock/bots-deploy.lock
+  flock 9
+fi
 
 BRANCH=${1:-main}
 COMMIT=${2:-origin/$BRANCH}
@@ -64,10 +67,13 @@ install -m 0644 infra/control-vm/bots-deploy.service infra/control-vm/bots-deplo
 systemctl daemon-reload
 systemctl enable --quiet bots-orchestrator
 systemctl restart bots-orchestrator
-if [ "$BRANCH" = main ]; then
-  systemctl enable --quiet --now bots-deploy.timer
-else
-  systemctl disable --quiet --now bots-deploy.timer
+# A timer run leaves the timer alone, so a pause during that run holds.
+if [ -z "${DEPLOY_BY_TIMER:-}" ]; then
+  if [ "$BRANCH" = main ]; then
+    systemctl enable --quiet --now bots-deploy.timer
+  else
+    systemctl disable --quiet --now bots-deploy.timer
+  fi
 fi
 
 tailscale serve --bg --https=443 http://127.0.0.1:8787 >/dev/null
