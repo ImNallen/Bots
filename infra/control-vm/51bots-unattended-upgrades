@@ -1,0 +1,7 @@
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+
+Unattended-Upgrade::Origins-Pattern {
+	"origin=Docker,archive=${distro_codename},label=Docker CE";
+	"origin=Tailscale,codename=${distro_codename},label=Tailscale";
+};
