@@ -52,6 +52,8 @@ The first deploy also turns on `bots-deploy.timer`. Every 2 minutes, the timer c
 
 If a merge changes only Markdown files and files in `docs/`, the timer records the commit as deployed and restarts nothing. If a deploy fails, the deployed commit stays the same, and the timer tries again 2 minutes later.
 
+Before each deploy changes the Convex functions, the deploy script exports the data and the stored files to `/root/backups/bots-deploy-<time>-<commit>.zip`. It keeps the newest 50 of these and deletes older ones. It never deletes other files in `/root/backups`, such as an export you made by hand. If the export fails, the deploy stops. These copies stay on the control VM, so they do not replace backups off the machine. To restore one, run `sudo pnpm exec convex import --replace-all <file>` from `/opt/bots/packages/convex`.
+
 To read each deploy and each failure, run `journalctl -u bots-deploy`. To see what the timer would do now, without doing it, run `cd /opt/bots && sudo node scripts/autodeploy.ts --dry-run`.
 
 To pause the timer, run `sudo systemctl disable --now bots-deploy.timer`. A deploy of another branch also pauses it, because the timer would replace that branch with `main`. A deploy of `main` by hand turns the timer back on. A deploy by hand waits for a deploy that the timer started, and the timer skips its check while a deploy by hand runs.
