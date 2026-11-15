@@ -29,6 +29,10 @@ if ! command -v tailscale >/dev/null; then
   apt-get install -y -qq tailscale >/dev/null
 fi
 
+apt-get install -y -qq unattended-upgrades >/dev/null
+install -m 0644 "$(dirname "$0")/51bots-unattended-upgrades" /etc/apt/apt.conf.d/51bots-unattended-upgrades
+systemctl enable --quiet --now apt-daily.timer apt-daily-upgrade.timer
+
 if [ "$(node -v 2>/dev/null || true)" != "v$NODE_VERSION" ]; then
   work=$(mktemp -d)
   tarball="node-v$NODE_VERSION-linux-x64.tar.xz"

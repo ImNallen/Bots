@@ -25,7 +25,7 @@ The script creates the isolated networks for user VMs, loads the rules that hold
 
 ## Set up the machine
 
-1. Copy `infra/control-vm/setup.sh` to the VM, and run it as root. It installs Docker, Node, pnpm, and Tailscale, and it clones this repository to `/opt/bots`.
+1. Copy all of `infra/control-vm` to the VM, and run `setup.sh` from it as root. It installs Docker, Node, pnpm, and Tailscale, turns on `unattended-upgrades`, and clones this repository to `/opt/bots`.
 2. Log the machine in to Tailscale.
 
 	```sh
@@ -49,6 +49,19 @@ The script then gives the VM its address on the control network, builds the app,
 To read the orchestrator's logs, run `journalctl -u bots-orchestrator`. To open the Convex dashboard, forward ports 6791 and 3210, because the dashboard's page calls Convex directly: `ssh -L 6791:127.0.0.1:6791 -L 3210:127.0.0.1:3210 bots@<VM address>`. Then run `sudo cat /opt/bots/packages/convex/.env.local` on the VM to read the admin key.
 
 If a change edits `deploy.sh` itself, fetch and check out the branch before you run the script. Otherwise the old script keeps running after it updates the checkout, and it skips your new steps.
+
+## What updates itself
+
+Each day between 06:00 and 07:00 UTC, `unattended-upgrades` installs new packages from Debian's stable and security archives and from the Docker and Tailscale repositories. Debian's own config, `50unattended-upgrades`, covers only Debian. `setup.sh` installs `51bots-unattended-upgrades`, which adds the two other repositories. To see what the next run would install, run `sudo unattended-upgrade --dry-run --debug`. The log of each run is in `/var/log/unattended-upgrades/`.
+
+A Docker upgrade restarts Docker, so Convex and SearXNG stop for a few seconds. In a test on 2026-11-15, both were healthy 7 seconds after `systemctl restart docker`. The orchestrator logged one failed poll and reconnected without a restart. A Tailscale upgrade restarts `tailscaled`, and in the same test the web app answered again 2 seconds after `systemctl restart tailscaled`. Tailscale also updates itself when the machine's auto-update setting is on, and on this VM it is on.
+
+These parts do not update themselves:
+
+- The kernel. `unattended-upgrades` installs a new kernel, but nothing reboots the VM, so the old kernel runs until someone reboots it. `/var/run/reboot-required` exists while a reboot is due.
+- Node and pnpm. Their versions are set in `setup.sh`, so a change to them is a commit.
+- The Convex, dashboard, and SearXNG images. `compose.yaml` pins each one by digest, so a change to them is a commit.
+- The Proxmox host. By decision, its owner updates it by hand.
 
 ## Add a user
 
