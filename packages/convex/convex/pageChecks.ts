@@ -24,3 +24,12 @@ export const purge = internalMutation({
   args: { runId: v.id("runs") },
   handler: async (ctx, { runId }) => await purgeRunBatch(ctx, runId),
 });
+
+export const expireLease = internalMutation({
+  args: { runId: v.id("runs") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (run?.state.kind !== "running") throw new Error("Fixture has no lease");
+    await ctx.db.patch(runId, { state: { ...run.state, leaseUntil: 0 } });
+  },
+});
