@@ -19,6 +19,16 @@ describe("COLORS", () => {
 });
 
 describe("characterOf", () => {
+  it.each([
+    ["k1742bot", "flower", "green"],
+    ["existing-bot-1", "ball", "brown"],
+    ["existing-bot-2", "hex", "brown"],
+    ["existing-bot-3", "burst", "red"],
+    ["j570ab0", "hex", "orange"],
+    ["bot-without-appearance", "flower", "purple"],
+  ])("preserves the historical appearance of %s", (_id, shape, color) => {
+    expect(characterOf({ _id })).toEqual({ shape, color });
+  });
   it("gives the same id the same look", () => {
     expect(characterOf({ _id: "k1742bot" })).toEqual(characterOf({ _id: "k1742bot" }));
   });
