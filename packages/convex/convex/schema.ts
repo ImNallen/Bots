@@ -57,6 +57,7 @@ export default defineSchema({
     // A bot with no value takes its look from its id.
     shape: v.optional(botShape),
     color: v.optional(botColor),
+    // Legacy bot titles remain valid on existing rows.
     title: v.optional(v.string()),
     description: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),

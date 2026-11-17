@@ -31,7 +31,7 @@ function turn(text: string, calls: { id: string; name: string; arguments: string
   return { kind: "assistantTurn", text, reasoning, toolCalls: calls, usage: USAGE, model: "m" };
 }
 
-function result(toolCallId: string, outcome: Extract<Body, { kind: "toolResult" }>["outcome"], output = "out"): Body {
+function result(toolCallId: string, outcome: Extract<Body, { kind: "toolResult" }>["outcome"], output = "out"): Extract<Body, { kind: "toolResult" }> {
   return { kind: "toolResult", toolCallId, name: "shell", outcome, output, truncated: false };
 }
 
@@ -78,6 +78,12 @@ describe("conversationItems", () => {
     const refused: Body = { kind: "toolResult", toolCallId: "q", name: "stay_quiet", outcome: "error", output: "stay_quiet is only for routines.", truncated: false };
     const tool = only(itemsOf([run({ bodies: [{ kind: "userMessage", text: "hi" }, turn("", [quiet]), refused, turn("Hello.")] })]), "tool");
     expect(tool).toMatchObject({ name: "Ended with nothing to report", summary: "Nothing new.", status: "failed", note: "failed" });
+  });
+
+  it("summarizes a completed rename with the chosen name", () => {
+    const call = { id: "c1", name: "name_set", arguments: JSON.stringify({ name: "Åsa" }) };
+    const tool = only(itemsOf([run({ bodies: [turn("", [call]), { ...result("c1", "ok"), name: "name_set" }] })]), "tool");
+    expect(tool).toMatchObject({ name: "Changed its name", summary: "Åsa", status: "finished" });
   });
 
   describe("a routine's report", () => {
@@ -308,6 +314,10 @@ describe("conversationItems", () => {
         title: "Forget this note?",
         arguments: [{ label: null, value: "note1" }],
       });
+      expect(askOf("name_set", { name: 'Åsa "Scout"' })).toMatchObject({
+        title: "Change its name?",
+        arguments: [{ label: null, value: 'Åsa "Scout"' }],
+      });
       expect(askOf("description_set", { text: "A scout.\nIt reads notes." })).toMatchObject({
         title: "Update this description?",
         arguments: [{ label: null, value: "A scout.\nIt reads notes." }],
@@ -376,6 +386,7 @@ describe("conversationItems", () => {
         only(itemsOf([run({ state: { kind: "running" }, bodies: [turn("", [{ id: "c1", name, arguments: "{}" }])] })]), "status").text;
       expect(running("memory_save")).toBe("Saving a note");
       expect(running("memory_forget")).toBe("Forgetting a note");
+      expect(running("name_set")).toBe("Changing its name");
       expect(running("description_set")).toBe("Updating its description");
     });
 

@@ -27,6 +27,7 @@ const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
   memory_save: { everything: true, outside: false, shell: false, nothing: false },
   memory_forget: { everything: true, outside: false, shell: false, nothing: false },
   description_set: { everything: true, outside: false, shell: false, nothing: false },
+  name_set: { everything: true, outside: false, shell: false, nothing: false },
   schedule_create: { everything: true, outside: false, shell: false, nothing: false },
   schedule_update: { everything: true, outside: false, shell: false, nothing: false },
   schedule_delete: { everything: true, outside: false, shell: false, nothing: false },
@@ -35,7 +36,7 @@ const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
 const TOOLS = Object.keys(ANSWERS) as ToolName[];
 const SCHEDULE_TOOLS: ToolName[] = ["schedule_create", "schedule_update", "schedule_delete"];
 // A memory or routine write asks once the run has read text that anyone could have written.
-const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS];
+const MEMORY_TOOLS: ToolName[] = ["memory_save", "memory_forget", "description_set", "name_set", ...SCHEDULE_TOOLS];
 
 const READS: ToolName[] = ["read_file", "web_fetch", "web_search", "browser_navigate", "browser_snapshot"];
 const RUNS_READ_ONLY: ToolName[] = [...READS, "stay_quiet"];
@@ -50,7 +51,7 @@ describe("decideTool for a read-only run", () => {
 
   it("forbids exactly the tools that change something, and every desktop tool, because the desktop shows the owner's logins", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, readUntrustedText: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS]);
+    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "name_set", ...SCHEDULE_TOOLS]);
   });
 });
 
@@ -120,7 +121,7 @@ describe("decideTool for a full run", () => {
   });
 
   it("also asks for the memory tools at outside after the run reads untrusted text", () => {
-    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", ...SCHEDULE_TOOLS]);
+    expect(asked("outside", true)).toEqual(["shell", "browser_click", "browser_type", "browser_press", ...DESKTOP_INPUT, "memory_save", "memory_forget", "description_set", "name_set", ...SCHEDULE_TOOLS]);
   });
 
   it("asks for anything that can run a program at shell, because a terminal is one click away, and for a routine after untrusted text", () => {

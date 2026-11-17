@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { hasChanges, savedProfile, shownProfile, withEdit } from "./profileEdits.ts";
 
-const saved = savedProfile({ name: "Ada", title: "Scout" });
+const saved = savedProfile({ name: "Ada" });
 
 describe("savedProfile", () => {
-  it("shows an absent title as an empty field", () => {
-    expect(savedProfile({ name: "Ada" })).toEqual({ name: "Ada", title: "" });
+  it("includes only the name", () => {
+    const stored = { name: "Ada", title: "Legacy title", description: "Hidden description" };
+    expect(savedProfile(stored)).toEqual({ name: "Ada" });
   });
 });
 
@@ -16,28 +17,26 @@ describe("edits against a live profile", () => {
   });
 
   it("keeps what the person typed when a live update changes the same field", () => {
-    const edits = withEdit({ saved, edits: {}, field: "title", value: "Mine, unsaved." });
-    const live = { ...saved, title: "Written in another tab." };
-    expect(shownProfile(live, edits).title).toBe("Mine, unsaved.");
+    const edits = withEdit({ saved, edits: {}, field: "name", value: "Mine, unsaved." });
+    const live = { ...saved, name: "Written in another tab." };
+    expect(shownProfile(live, edits).name).toBe("Mine, unsaved.");
   });
 
-  it("lets a live update reach a field the person did not touch", () => {
-    const edits = withEdit({ saved, edits: {}, field: "title", value: "Mine, unsaved." });
-    const live = { ...saved, name: "Atlas" };
-    expect(shownProfile(live, edits)).toEqual({ name: "Atlas", title: "Mine, unsaved." });
+  it("follows a live rename until the person edits the name", () => {
+    expect(shownProfile({ name: "Atlas" }, {})).toEqual({ name: "Atlas" });
   });
 
   it("has no changes once the person types the saved value back, so that field follows live updates again", () => {
-    const edited = withEdit({ saved, edits: {}, field: "title", value: "Lead" });
+    const edited = withEdit({ saved, edits: {}, field: "name", value: "Lead" });
     expect(hasChanges(edited)).toBe(true);
-    const restored = withEdit({ saved, edits: edited, field: "title", value: "Scout" });
+    const restored = withEdit({ saved, edits: edited, field: "name", value: "Ada" });
     expect(hasChanges(restored)).toBe(false);
-    expect(shownProfile({ ...saved, title: "Lead" }, restored).title).toBe("Lead");
+    expect(shownProfile({ ...saved, name: "Lead" }, restored).name).toBe("Lead");
   });
 
   it("treats clearing a field as a change", () => {
-    const edits = withEdit({ saved, edits: {}, field: "title", value: "" });
+    const edits = withEdit({ saved, edits: {}, field: "name", value: "" });
     expect(hasChanges(edits)).toBe(true);
-    expect(shownProfile(saved, edits).title).toBe("");
+    expect(shownProfile(saved, edits).name).toBe("");
   });
 });

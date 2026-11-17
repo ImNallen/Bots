@@ -1,9 +1,9 @@
-export type Profile = { name: string; title: string };
+export type Profile = { name: string };
 
 export type ProfileEdits = Partial<Profile>;
 
-export function savedProfile(bot: { name: string; title?: string }): Profile {
-  return { name: bot.name, title: bot.title ?? "" };
+export function savedProfile(bot: { name: string }): Profile {
+  return { name: bot.name };
 }
 
 export function shownProfile(saved: Profile, edits: ProfileEdits): Profile {

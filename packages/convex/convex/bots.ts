@@ -79,7 +79,6 @@ export const overview = query({
         row: {
           _id: bot._id,
           name: bot.name,
-          title: bot.title,
           shape: bot.shape,
           color: bot.color,
           // The end time and not a comparison, because Convex does not rerun a query as time passes. The page decides when it ends.
@@ -193,7 +192,7 @@ export const setCharacter = mutation({
 });
 
 export const setProfile = mutation({
-  args: { botId: v.id("bots"), name: v.string(), title: v.string(), description: v.string() },
+  args: { botId: v.id("bots"), name: v.string(), description: v.string() },
   handler: async (ctx, { botId, ...fields }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, parseBotProfile(fields));
@@ -201,7 +200,7 @@ export const setProfile = mutation({
 });
 
 export const setIdentity = mutation({
-  args: { botId: v.id("bots"), name: v.string(), title: v.string() },
+  args: { botId: v.id("bots"), name: v.string() },
   handler: async (ctx, { botId, ...fields }) => {
     await requireOwnedBot(ctx, botId);
     await ctx.db.patch(botId, parseBotIdentity(fields));
@@ -216,7 +215,6 @@ export const promptFor = query({
     const owner = bot === null ? null : await ctx.db.get(bot.ownerId);
     return {
       name: bot?.name ?? "Bot",
-      title: bot?.title,
       description: bot?.description,
       about: owner?.about,
       notes: promptNotes(await notesOf(ctx, botId)),

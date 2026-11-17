@@ -24,7 +24,7 @@ const collisionDetection: CollisionDetection = (args) => {
 function BotLink({ row, highlighted, phone, compact, disabled }: { row: BotRow; highlighted: boolean; phone: boolean; compact: boolean; disabled: boolean }) {
   const activity = useShownActivity(row);
   const line = subLineOf({ activity, lastMessage: row.lastMessage });
-  const text = line.text ?? row.title ?? null;
+  const text = line.text;
   const drag = useDraggable({ id: row._id, disabled, attributes: { role: "link", roleDescription: "draggable bot" } });
   const drop = useDroppable({ id: `highlight:${row._id}`, disabled: !highlighted });
   return (

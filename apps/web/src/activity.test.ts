@@ -50,6 +50,7 @@ describe("subLineOf", () => {
 
   it("turns a tool into a friendly step and never shows a raw tool name", () => {
     const step = (tool: string | null) => subLineOf({ activity: { kind: "running", tool }, lastMessage }).text;
+    expect(step("name_set")).toBe("Changing its name");
     expect(step("shell")).toBe("Running a command");
     expect(step(null)).toBe("Thinking");
     expect(step("a_tool_from_later")).toBe("Working");

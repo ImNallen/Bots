@@ -19,6 +19,7 @@ import type * as credentials from "../credentials.js";
 import type * as crons from "../crons.js";
 import type * as identity from "../identity.js";
 import type * as memories from "../memories.js";
+import type * as names from "../names.js";
 import type * as profile from "../profile.js";
 import type * as resetChecks from "../resetChecks.js";
 import type * as routineText from "../routineText.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   identity: typeof identity;
   memories: typeof memories;
+  names: typeof names;
   profile: typeof profile;
   resetChecks: typeof resetChecks;
   routineText: typeof routineText;

@@ -378,6 +378,7 @@ describe("parseToolCall", () => {
       "memory_save",
       "memory_forget",
       "description_set",
+      "name_set",
       "schedule_create",
       "schedule_update",
       "schedule_delete",
@@ -421,6 +422,7 @@ describe("toolEffect", () => {
       memory_save: "changesMemory",
       memory_forget: "changesMemory",
       description_set: "changesMemory",
+      name_set: "changesMemory",
       schedule_create: "changesSchedule",
       schedule_update: "changesSchedule",
       schedule_delete: "changesSchedule",
@@ -466,6 +468,21 @@ describe("memory tools", () => {
     expect(parseToolCall({ name: "description_set", arguments: "{}" }).kind).toBe("invalid");
     expect(parseToolCall({ name: "description_set", arguments: '{"text":"a","id":"b"}' }).kind).toBe("invalid");
     expect(isMemoryInvocation({ name: "description_set", args: { text: "a" } })).toBe(true);
+  });
+
+  it("parses name_set only for the model, with one required string argument", () => {
+    expect(parseToolCall({ name: "name_set", arguments: '{"name":"Åsa"}' })).toEqual({
+      kind: "ok", invocation: { name: "name_set", args: { name: "Åsa" } },
+    });
+    for (const raw of ['{}', '{"name":42}', '{"name":"Ada","text":"x"}']) {
+      expect(parseToolCall({ name: "name_set", arguments: raw }).kind).toBe("invalid");
+    }
+    expect(parseToolCall({ name: "name_set", arguments: '{"name":""}' }).kind).toBe("ok");
+    expect(isMemoryInvocation({ name: "name_set", args: { name: "Ada" } })).toBe(true);
+    expectTypeOf<Extract<ToolInvocation, { name: "name_set" }>>().toBeNever();
+    expect(toolInvocation.safeParse({ name: "name_set", args: { name: "Ada" } }).success).toBe(false);
+    expect(COMPUTER_TOOL_NAMES).not.toContain("name_set");
+    expect(toolDefinitions.find((tool) => tool.function.name === "name_set")?.function.description).toContain("without needing your owner to ask");
   });
 
   it("keeps a description call off the link, in the wire type and in the static type", () => {

@@ -65,6 +65,7 @@ const TOOL_WORDS = {
   memory_save: { done: "Saved a note", ask: "Save this note?", icon: "text" },
   memory_forget: { done: "Forgot a note", ask: "Forget this note?", icon: "close" },
   description_set: { done: "Updated its description", ask: "Update this description?", icon: "text" },
+  name_set: { done: "Changed its name", ask: "Change its name?", icon: "text" },
   schedule_create: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
   schedule_update: { done: "Changed a routine", ask: "Change this routine?", icon: "lines" },
   schedule_delete: { done: "Deleted a routine", ask: "Delete this routine?", icon: "close" },
