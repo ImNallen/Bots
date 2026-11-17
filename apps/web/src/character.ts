@@ -4,82 +4,50 @@ import type { CSSProperties } from "react";
 export type BotShape = NonNullable<Doc<"bots">["shape"]>;
 export type BotColor = NonNullable<Doc<"bots">["color"]>;
 export type Character = { shape: BotShape; color: BotColor };
+export type CharacterPatch = { shape: BotShape; color?: BotColor } | { color: BotColor; shape?: BotShape };
 
-// Each path is in a 64 by 64 box. The eyes are the point between them, and their scale.
-export const SHAPES: Record<BotShape, { d: string; eyes: readonly [x: number, y: number, scale: number] }> = {
-  ball: {
-    d: "M32 6a26 26 0 1 1 0 52a26 26 0 0 1 0-52Z",
-    eyes: [39, 22, 0.95],
-  },
-  bun: {
-    d: "M23 13C26.5 12 31.2 10.7 35 11C38.8 11.3 42.5 13 46 15C49.5 17 53.7 19.8 56 23C58.3 26.2 60.3 30.3 60 34C59.7 37.7 57.2 42.3 54 45C50.8 47.7 45.5 48.8 41 50C36.5 51.2 31.7 52.2 27 52C22.3 51.8 16.7 51.2 13 49C9.3 46.8 5.8 42.8 5 39C4.2 35.2 6.5 29.7 8 26C9.5 22.3 11.5 19.2 14 17C16.5 14.8 19.5 14 23 13Z",
-    eyes: [38, 26, 0.95],
-  },
-  tile: {
-    d: "M50.1 47Q47.5 57.7 36.8 55.1L17 50.1Q6.3 47.5 8.9 36.8L13.9 17Q16.5 6.3 27.2 8.9L47 13.9Q57.7 16.5 55.1 27.2Z",
-    eyes: [35, 28, 1],
-  },
-  sparkle: {
-    d: "M61.5 37.2C61.3 38.7 60.5 40.3 59.5 41.5C58.5 42.7 56.9 43.7 55.4 44.5C53.9 45.2 52.1 45.6 50.5 45.9C48.9 46.3 47.3 46.2 45.9 46.4C44.6 46.6 43.5 46.6 42.6 47.2C41.8 47.8 41.4 48.9 40.8 50C40.2 51.2 39.6 52.8 38.8 54.1C37.9 55.5 36.9 57.1 35.7 58.3C34.5 59.4 33 60.5 31.5 61.1C30 61.6 28.3 61.8 26.8 61.5C25.3 61.3 23.7 60.5 22.5 59.5C21.3 58.5 20.3 56.9 19.5 55.4C18.8 53.9 18.4 52.1 18.1 50.5C17.7 48.9 17.8 47.3 17.6 45.9C17.4 44.6 17.4 43.5 16.8 42.6C16.2 41.8 15.1 41.4 14 40.8C12.8 40.2 11.2 39.6 9.9 38.8C8.5 37.9 6.9 36.9 5.7 35.7C4.6 34.5 3.5 33 2.9 31.5C2.4 30 2.2 28.3 2.5 26.8C2.7 25.3 3.5 23.7 4.5 22.5C5.5 21.3 7.1 20.3 8.6 19.5C10.1 18.8 11.9 18.4 13.5 18.1C15.1 17.7 16.7 17.8 18.1 17.6C19.4 17.4 20.5 17.4 21.4 16.8C22.2 16.2 22.6 15.1 23.2 14C23.8 12.8 24.4 11.2 25.2 9.9C26.1 8.5 27.1 6.9 28.3 5.7C29.5 4.6 31 3.5 32.5 2.9C34 2.4 35.7 2.2 37.2 2.5C38.7 2.7 40.3 3.5 41.5 4.5C42.7 5.5 43.7 7.1 44.5 8.6C45.2 10.1 45.6 11.9 45.9 13.5C46.3 15.1 46.2 16.7 46.4 18.1C46.6 19.4 46.6 20.5 47.2 21.4C47.8 22.2 48.9 22.6 50 23.2C51.2 23.8 52.8 24.4 54.1 25.2C55.5 26.1 57.1 27.1 58.3 28.3C59.4 29.5 60.5 31 61.1 32.5C61.6 34 61.8 35.7 61.5 37.2Z",
-    eyes: [34, 27, 0.9],
-  },
-  clover: {
-    d: "M46.7 56.4C45.5 57.2 43.8 57.5 42.2 57.4C40.7 57.2 38.9 56.5 37.5 55.7C36 54.9 34.6 53.6 33.4 52.6C32.3 51.6 31.4 50.3 30.5 49.6C29.6 48.8 28.9 48.2 28 48C27.1 47.8 26.3 48 25.1 48.2C23.9 48.5 22.6 49.2 21.1 49.5C19.5 49.9 17.7 50.4 16 50.4C14.4 50.4 12.5 50.2 11 49.6C9.6 49 8.3 47.9 7.6 46.7C6.8 45.5 6.5 43.8 6.6 42.2C6.8 40.7 7.5 38.9 8.3 37.5C9.1 36 10.4 34.6 11.4 33.4C12.4 32.3 13.7 31.4 14.4 30.5C15.2 29.6 15.8 28.9 16 28C16.2 27.1 16 26.3 15.8 25.1C15.5 23.9 14.8 22.6 14.5 21.1C14.1 19.5 13.6 17.7 13.6 16C13.6 14.4 13.8 12.5 14.4 11C15 9.6 16.1 8.3 17.3 7.6C18.5 6.8 20.2 6.5 21.8 6.6C23.3 6.8 25.1 7.5 26.5 8.3C28 9.1 29.4 10.4 30.6 11.4C31.7 12.4 32.6 13.7 33.5 14.4C34.4 15.2 35.1 15.8 36 16C36.9 16.2 37.7 16 38.9 15.8C40.1 15.5 41.4 14.8 42.9 14.5C44.5 14.1 46.3 13.6 48 13.6C49.6 13.6 51.5 13.8 53 14.4C54.4 15 55.7 16.1 56.4 17.3C57.2 18.5 57.5 20.2 57.4 21.8C57.2 23.3 56.5 25.1 55.7 26.5C54.9 28 53.6 29.4 52.6 30.6C51.6 31.7 50.3 32.6 49.6 33.5C48.8 34.4 48.2 35.1 48 36C47.8 36.9 48 37.7 48.2 38.9C48.5 40.1 49.2 41.4 49.5 42.9C49.9 44.5 50.4 46.3 50.4 48C50.4 49.6 50.2 51.5 49.6 53C49 54.4 47.9 55.7 46.7 56.4Z",
-    eyes: [35, 27, 0.95],
-  },
-  heart: {
-    d: "M11 20C13.5 17.3 16.5 13.5 20 13C23.5 12.5 28 17.2 32 17C36 16.8 40.2 11.8 44 12C47.8 12.2 52.7 14.8 55 18C57.3 21.2 59 26.7 58 31C57 35.3 52.7 40 49 44C45.3 48 40 54.5 36 55C32 55.5 29.3 49.8 25 47C20.7 44.2 13.3 41 10 38C6.7 35 4.8 32 5 29C5.2 26 8.5 22.7 11 20Z",
-    eyes: [38, 27, 0.95],
-  },
-  flower: {
-    d: "M59.2 35.8C59.1 37 58.2 38.1 57.2 39C56.2 39.9 54.5 40.5 53.2 41C51.8 41.5 50.2 41.7 49.1 42.1C48 42.5 47.1 42.7 46.6 43.4C46 44.1 46 45 45.9 46.1C45.8 47.3 46 48.9 45.8 50.4C45.7 51.8 45.5 53.6 44.9 54.8C44.3 56 43.4 57.1 42.3 57.5C41.2 57.9 39.8 57.8 38.6 57.3C37.3 56.9 35.9 55.8 34.8 54.8C33.7 53.9 32.7 52.6 31.8 51.8C30.9 51.1 30.3 50.4 29.4 50.3C28.6 50.2 27.8 50.6 26.7 51.1C25.6 51.6 24.3 52.6 23 53.2C21.7 53.7 20 54.5 18.7 54.6C17.4 54.6 16 54.4 15.1 53.7C14.2 53 13.6 51.7 13.3 50.4C13.1 49 13.4 47.3 13.6 45.8C13.9 44.4 14.5 42.9 14.8 41.8C15 40.6 15.2 39.7 14.8 38.9C14.5 38.1 13.8 37.6 12.8 37C11.9 36.3 10.3 35.7 9.2 34.8C8 33.9 6.6 32.9 5.8 31.8C5.1 30.7 4.6 29.3 4.8 28.2C4.9 27 5.8 25.9 6.8 25C7.8 24.1 9.5 23.5 10.8 23C12.2 22.5 13.8 22.3 14.9 21.9C16 21.5 16.9 21.3 17.4 20.6C18 19.9 18 19 18.1 17.9C18.2 16.7 18 15.1 18.2 13.6C18.3 12.2 18.5 10.4 19.1 9.2C19.7 8 20.6 6.9 21.7 6.5C22.8 6.1 24.2 6.2 25.4 6.7C26.7 7.1 28.1 8.2 29.2 9.2C30.3 10.1 31.3 11.4 32.2 12.2C33.1 12.9 33.7 13.6 34.6 13.7C35.4 13.8 36.2 13.4 37.3 12.9C38.4 12.4 39.7 11.4 41 10.8C42.3 10.3 44 9.5 45.3 9.4C46.6 9.4 48 9.6 48.9 10.3C49.8 11 50.4 12.3 50.7 13.6C50.9 15 50.6 16.7 50.4 18.2C50.1 19.6 49.5 21.1 49.2 22.2C49 23.4 48.8 24.3 49.2 25.1C49.5 25.9 50.2 26.4 51.2 27C52.1 27.7 53.7 28.3 54.8 29.2C56 30.1 57.4 31.1 58.2 32.2C58.9 33.3 59.4 34.7 59.2 35.8Z",
-    eyes: [35, 27, 0.95],
-  },
-  egg: {
-    d: "M23 7C26.2 6.7 30 8.2 34 10C38 11.8 43.3 14.2 47 18C50.7 21.8 55.3 27.8 56 33C56.7 38.2 54.3 44.8 51 49C47.7 53.2 41.3 57 36 58C30.7 59 23.5 57.7 19 55C14.5 52.3 10.3 46.8 9 42C7.7 37.2 10 31 11 26C12 21 13 15.2 15 12C17 8.8 19.8 7.3 23 7Z",
-    eyes: [37, 25, 0.95],
-  },
-  bean: {
-    d: "M18 16C22.7 14 28.3 15.7 33 15C37.7 14.3 41.8 11.3 46 12C50.2 12.7 55.7 15.7 58 19C60.3 22.3 61.2 27.8 60 32C58.8 36.2 55.3 41.2 51 44C46.7 46.8 39.3 47.8 34 49C28.7 50.2 23.5 52 19 51C14.5 50 9.3 47 7 43C4.7 39 3.2 31.5 5 27C6.8 22.5 13.3 18 18 16Z",
-    eyes: [38, 26, 0.95],
-  },
-  peak: {
-    d: "M14.4 20Q15 5 28.1 12.4L47.9 23.6Q61 31 47.9 38.4L26.1 50.6Q13 58 13.6 43Z",
-    eyes: [31, 25, 0.95],
-  },
-  gem: {
-    d: "M33.5 6.6Q43.2 4.2 48.5 12.7L56.6 25.6Q61.9 34.1 55.5 41.8L45.7 53.4Q39.3 61.1 30 57.4L15.8 51.6Q6.6 47.9 7.3 37.9L8.3 22.7Q9 12.7 18.7 10.3Z",
-    eyes: [35, 27, 1],
-  },
-  burst: {
-    d: "M59.1 24.2C59.4 25.2 59 26.5 58.3 27.6C57.6 28.6 56.1 29.8 55 30.7C53.8 31.7 52.2 32.4 51.3 33.1C50.4 33.8 49.7 34.3 49.5 35C49.4 35.7 49.9 36.4 50.6 37.4C51.2 38.3 52.4 39.6 53.2 40.8C54 42.1 55 43.7 55.3 44.9C55.6 46.2 55.6 47.5 55 48.3C54.4 49.2 53.1 49.7 51.9 49.8C50.6 49.9 48.8 49.5 47.3 49.2C45.9 48.8 44.3 48 43.2 47.8C42 47.5 41.2 47.2 40.6 47.6C40 47.9 39.7 48.8 39.4 49.9C39 50.9 38.8 52.7 38.3 54.1C37.9 55.5 37.2 57.3 36.4 58.3C35.6 59.3 34.5 60.1 33.5 60.2C32.6 60.2 31.4 59.5 30.5 58.6C29.6 57.7 28.8 56 28.1 54.7C27.5 53.3 27.1 51.6 26.6 50.6C26.1 49.5 25.8 48.7 25.2 48.4C24.5 48.2 23.7 48.5 22.6 48.9C21.5 49.3 20.1 50.2 18.7 50.7C17.3 51.2 15.5 51.9 14.2 51.9C12.9 51.9 11.6 51.5 10.9 50.8C10.3 50 10.1 48.7 10.2 47.4C10.4 46.1 11.2 44.4 11.9 43.1C12.5 41.8 13.6 40.4 14.1 39.4C14.6 38.3 15.1 37.6 14.9 36.9C14.7 36.2 13.9 35.8 12.9 35.2C12 34.6 10.3 34.1 9 33.3C7.8 32.5 6.2 31.5 5.4 30.5C4.6 29.5 4 28.2 4.2 27.2C4.4 26.3 5.3 25.3 6.4 24.6C7.5 23.9 9.3 23.5 10.8 23.2C12.2 22.8 14 22.9 15.1 22.6C16.2 22.4 17.1 22.3 17.5 21.7C17.9 21.1 17.7 20.2 17.6 19.1C17.5 18 16.9 16.3 16.7 14.8C16.5 13.4 16.3 11.5 16.6 10.2C16.9 9 17.5 7.8 18.4 7.3C19.3 6.8 20.6 6.9 21.8 7.3C23 7.8 24.5 9 25.7 9.9C26.8 10.8 27.9 12.2 28.8 12.9C29.7 13.7 30.3 14.3 31 14.2C31.7 14.2 32.3 13.5 33.1 12.7C33.9 11.9 34.8 10.4 35.9 9.3C36.9 8.3 38.3 6.9 39.4 6.4C40.6 5.8 41.9 5.6 42.8 6C43.7 6.3 44.5 7.5 44.9 8.7C45.4 9.9 45.3 11.8 45.3 13.3C45.3 14.7 44.9 16.5 44.9 17.6C44.9 18.8 44.8 19.6 45.3 20.2C45.8 20.7 46.6 20.7 47.8 20.8C48.9 21 50.7 20.7 52.1 20.9C53.6 21.1 55.5 21.3 56.7 21.8C57.8 22.4 58.8 23.3 59.1 24.2Z",
-    eyes: [35, 27, 0.95],
-  },
-  hex: {
-    d: "M58.6 30.6Q61.1 39.3 54.9 45.7L46.5 54.4Q40.3 60.8 31.5 58.7L19.9 55.8Q11.2 53.6 8.7 44.9L5.4 33.4Q2.9 24.7 9.1 18.3L17.5 9.6Q23.7 3.2 32.5 5.3L44.1 8.2Q52.8 10.4 55.3 19.1Z",
-    eyes: [33, 30, 1.25],
-  },
-};
+export const DEFAULT_CHARACTER = { shape: "ball", color: "green" } satisfies Character;
 
-export const COLORS: Record<BotColor, { fill: string; darkFill: string; eyes: string; bubble: string }> = {
-  black: { fill: "#b8b8b8", darkFill: "#a8a8a8", eyes: "#303030", bubble: "#222222" },
-  brown: { fill: "#cbb9a5", darkFill: "#b7a38c", eyes: "#514233", bubble: "#8a5b2e" },
-  red: { fill: "#dbb1af", darkFill: "#c99e9b", eyes: "#653e3b", bubble: "#d82433" },
-  orange: { fill: "#e88b50", darkFill: "#e88b50", eyes: "#ffffff", bubble: "#c55415" },
-  amber: { fill: "#d9ca9c", darkFill: "#c5b688", eyes: "#5a4c2b", bubble: "#ac6609" },
-  green: { fill: "#43a96e", darkFill: "#43a96e", eyes: "#ffffff", bubble: "#0d884e" },
-  teal: { fill: "#a8c6bf", darkFill: "#94b4ad", eyes: "#304d46", bubble: "#118575" },
-  blue: { fill: "#5687da", darkFill: "#5687da", eyes: "#ffffff", bubble: "#1b6fd6" },
-  purple: { fill: "#c3b4d4", darkFill: "#b2a1c6", eyes: "#493957", bubble: "#7a47e6" },
-  pink: { fill: "#d8b5c8", darkFill: "#c6a2b6", eyes: "#5e3c4d", bubble: "#da2a83" },
-  grey: { fill: "#c5c5c5", darkFill: "#afafaf", eyes: "#424242", bubble: "#767676" },
-};
+export const SHAPES = {
+  ball: { label: "Round", d: "M30 0H34C50.6 0 64 13.4 64 30V34C64 50.6 50.6 64 34 64H30C13.4 64 0 50.6 0 34V30C0 13.4 13.4 0 30 0Z" },
+  tile: { label: "Square", d: "M18 0H46Q64 0 64 18V46Q64 64 46 64H18Q0 64 0 46V18Q0 0 18 0Z" },
+  egg: { label: "Oval", d: "M28 4H36A28 28 0 0 1 36 60H28A28 28 0 0 1 28 4Z" },
+  flower: { label: "Squircle", d: "M32 0C56 0 64 8 64 32C64 56 56 64 32 64C8 64 0 56 0 32C0 8 8 0 32 0Z" },
+  hex: { label: "Hexagon", d: "M24 2H40Q45 2 48 7L61 25Q65 32 61 39L48 57Q45 62 40 62H24Q19 62 16 57L3 39Q-1 32 3 25L16 7Q19 2 24 2Z" },
+  bean: { label: "Capsule", d: "M24 8H40A24 24 0 0 1 40 56H24A24 24 0 0 1 24 8Z" },
+} satisfies Partial<Record<BotShape, { label: string; d: string }>>;
 
-export const SHAPE_NAMES = Object.keys(SHAPES) as BotShape[];
-export const COLOR_NAMES = Object.keys(COLORS) as BotColor[];
+export const SHAPE_NAMES = ["ball", "tile", "egg", "flower", "hex", "bean"] as const satisfies readonly BotShape[];
 
-// Keep bot identities stable while updating the palette.
-const DERIVED_COLORS = COLOR_NAMES.filter((color) => color !== "black" && color !== "grey");
+const DISPLAY_SHAPES = {
+  ball: "ball", bun: "ball", tile: "tile", sparkle: "ball", clover: "ball", heart: "ball",
+  flower: "flower", egg: "egg", bean: "bean", peak: "ball", gem: "ball", burst: "ball", hex: "hex",
+} as const satisfies Record<BotShape, keyof typeof SHAPES>;
+
+export function displayShape(shape: BotShape) {
+  return DISPLAY_SHAPES[shape];
+}
+
+export const COLORS = {
+  green: { label: "Sage", fill: "#43a96e", darkFill: "#50b87e", eyes: "#ffffff", bubble: "#0d884e" },
+  blue: { label: "Blue", fill: "#5687da", darkFill: "#6999ed", eyes: "#ffffff", bubble: "#1b6fd6" },
+  orange: { label: "Peach", fill: "#e88b50", darkFill: "#f09a64", eyes: "#ffffff", bubble: "#c55415" },
+  purple: { label: "Lilac", fill: "#9278b8", darkFill: "#a18ac6", eyes: "#ffffff", bubble: "#7a47e6" },
+  pink: { label: "Rose", fill: "#bf789b", darkFill: "#cb8daa", eyes: "#ffffff", bubble: "#da2a83" },
+  teal: { label: "Teal", fill: "#449c94", darkFill: "#5bada5", eyes: "#ffffff", bubble: "#118575" },
+  amber: { label: "Honey", fill: "#b9964c", darkFill: "#c6a65d", eyes: "#ffffff", bubble: "#ac6609" },
+  brown: { label: "Clay", fill: "#a98167", darkFill: "#ba947a", eyes: "#ffffff", bubble: "#8a5b2e" },
+  red: { label: "Coral", fill: "#c8766d", darkFill: "#d18b82", eyes: "#ffffff", bubble: "#d82433" },
+  grey: { label: "Mist", fill: "#87949e", darkFill: "#9aa6b0", eyes: "#ffffff", bubble: "#767676" },
+  black: { label: "Graphite", fill: "#60676b", darkFill: "#788187", eyes: "#ffffff", bubble: "#222222" },
+  lemon: { label: "Lemon", fill: "#a9a047", darkFill: "#bcb35d", eyes: "#ffffff", bubble: "#716b24" },
+} satisfies Record<BotColor, { label: string; fill: string; darkFill: string; eyes: string; bubble: string }>;
+
+export const COLOR_NAMES = ["green", "blue", "orange", "purple", "pink", "teal", "amber", "brown", "red", "grey", "black", "lemon"] as const satisfies readonly BotColor[];
+
+// These tuples are the historical hash vocabulary. Picker changes must never reassign existing bots.
+const DERIVED_SHAPES = ["ball", "bun", "tile", "sparkle", "clover", "heart", "flower", "egg", "bean", "peak", "gem", "burst", "hex"] as const;
+const DERIVED_COLORS = ["brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink"] as const;
 
 function hashOf(text: string): number {
   let hash = 0x811c9dc5;
@@ -92,12 +60,11 @@ function hashOf(text: string): number {
 export function characterOf(bot: { _id: string; shape?: BotShape; color?: BotColor }): Character {
   const hash = hashOf(bot._id);
   return {
-    shape: bot.shape ?? (SHAPE_NAMES[hash % SHAPE_NAMES.length] as BotShape),
-    color: bot.color ?? (DERIVED_COLORS[(hash >>> 8) % DERIVED_COLORS.length] as BotColor),
+    shape: bot.shape ?? (DERIVED_SHAPES[hash % DERIVED_SHAPES.length] ?? "ball"),
+    color: bot.color ?? (DERIVED_COLORS[(hash >>> 8) % DERIVED_COLORS.length] ?? "green"),
   };
 }
 
-// The stylesheet turns these into --bot and the colours that go with it, so dark mode can replace black.
 export function tintOf(color: BotColor): { "data-color": BotColor; style: CSSProperties } {
   const { fill, darkFill, eyes, bubble } = COLORS[color];
   return { "data-color": color, style: { "--bot-fill": fill, "--bot-dark-fill": darkFill, "--bot-eye": eyes, "--bot-bubble": bubble } as CSSProperties };
