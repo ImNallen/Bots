@@ -2,10 +2,11 @@ import { api } from "@bots/convex";
 import type { Doc, Id } from "@bots/convex/dataModel";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { BotFace, type FaceState } from "./BotFace.tsx";
-import { characterOf, type Character } from "./character.ts";
-import { CharacterPicker } from "./CharacterPicker.tsx";
+import { characterOf, DEFAULT_CHARACTER, type CharacterPatch } from "./character.ts";
+import { CharacterPicker, CharacterPreview } from "./CharacterPicker.tsx";
+import type { useCharacterMutation } from "./useCharacterMutation.ts";
 import { Icon } from "./Icon.tsx";
 import { RoutinesSection } from "./RoutinesSection.tsx";
 import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
@@ -110,31 +111,6 @@ function ApprovalSetting({ botId, level }: { botId: Id<"bots">; level: (typeof A
   );
 }
 
-function CharacterCard({ botId, character }: { botId: Id<"bots">; character: Character }) {
-  const setCharacter = useMutation(api.bots.setCharacter);
-  const [problem, setProblem] = useState<string | null>(null);
-  return (
-    <>
-      <div className="card card-padded">
-        <CharacterPicker
-          character={character}
-          onChange={(next) => {
-            setProblem(null);
-            setCharacter({ botId, ...next }).catch((error: unknown) => setProblem(errorMessage(error)));
-          }}
-        />
-      </div>
-      {problem !== null ? (
-        <p className="error panel-note" role="alert">
-          {problem}
-        </p>
-      ) : (
-        <p className="panel-note">How this bot looks everywhere</p>
-      )}
-    </>
-  );
-}
-
 // The confirmation can open below the fold of a short panel, and its buttons must not stay out of sight.
 function revealOnMount(element: HTMLElement | null): void {
   element?.scrollIntoView({ block: "nearest" });
@@ -189,6 +165,7 @@ function DeleteBot({ botId, name }: { botId: Id<"bots">; name: string }) {
 
 export function InfoPanel(props: {
   bot: Doc<"bots">;
+  characterSave: ReturnType<typeof useCharacterMutation>;
   faceState: FaceState;
   showRoutines: boolean;
   profileEdits: ProfileEdits;
@@ -199,8 +176,37 @@ export function InfoPanel(props: {
   onShowRoutines: () => void;
   onComposeRoutine: () => void;
 }) {
-  const { bot, faceState, showRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen, onShowChat, onShowRoutines, onComposeRoutine } = props;
+  const { bot, characterSave, faceState, showRoutines, profileEdits, onProfileEditsChange, onClose, onOpenScreen, onShowChat, onShowRoutines, onComposeRoutine } = props;
   const character = characterOf(bot);
+  const { failure } = characterSave;
+  const save = (patch: CharacterPatch) => characterSave.save({ botId: bot._id, ...patch });
+  const [appearance, setAppearance] = useState(false);
+  const appearanceEntry = useRef<HTMLButtonElement>(null);
+  const back = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  useEffect(() => {
+    if (appearance) back.current?.focus();
+    else if (restoreFocus.current) {
+      appearanceEntry.current?.focus();
+      restoreFocus.current = false;
+    }
+  }, [appearance]);
+  if (appearance && !showRoutines) {
+    return (
+      <aside className="info appearance-panel" aria-label={`Appearance for ${bot.name}`}>
+        <div className="appearance-head">
+          <button type="button" ref={back} className="appearance-back" onClick={() => { restoreFocus.current = true; setAppearance(false); }}><Icon name="back" />Bot details</button>
+          <button type="button" className="round" aria-label="Close appearance" onClick={onClose}><Icon name="close" /></button>
+        </div>
+        <div className="appearance-intro"><h2>Appearance</h2><p>A familiar face. A little more you.</p></div>
+        <CharacterPreview character={character} name={bot.name} />
+        <CharacterPicker character={character} onChange={save} />
+        <p className="appearance-note">Your bot's look, everywhere.</p>
+        <div className="appearance-footer"><p>Changes save automatically.</p><button type="button" onClick={() => save(DEFAULT_CHARACTER)}>Reset</button></div>
+        {failure && <div className="appearance-error" role="alert"><p>Couldn't save appearance. {failure.message}</p><button type="button" className="btn" onClick={() => characterSave.save(failure.patch)}>Retry</button></div>}
+      </aside>
+    );
+  }
   return (
     <aside className="info" data-routines={showRoutines} aria-label={`About ${bot.name}`}>
       <div className="info-head">
@@ -222,10 +228,10 @@ export function InfoPanel(props: {
       </nav>
       {showRoutines ? <RoutinesSection botId={bot._id} botName={bot.name} onNewRoutine={onComposeRoutine} /> : <>
         <ProfileCard bot={bot} edits={profileEdits} onEditsChange={onProfileEditsChange} />
-        <section className="info-card">
-          <h3>Appearance</h3>
-          <CharacterCard botId={bot._id} character={character} />
-        </section>
+        <button type="button" ref={appearanceEntry} className="appearance-entry info-card" onClick={() => setAppearance(true)}>
+          <BotFace character={character} size={40} /><span><strong>Appearance</strong><small>Choose a color and shape</small></span><Icon name="chevron" />
+        </button>
+        {failure && <div className="appearance-error" role="alert"><p>Couldn't save appearance. {failure.message}</p><button type="button" className="btn" onClick={() => characterSave.save(failure.patch)}>Retry</button></div>}
         <section className="info-card">
           <h3>Approvals</h3>
           <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "automatic"} />

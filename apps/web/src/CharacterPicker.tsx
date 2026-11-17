@@ -1,22 +1,45 @@
+import { useId, type ReactNode } from "react";
 import { BotFace } from "./BotFace.tsx";
-import { type BotColor, type Character } from "./character.ts";
+import { COLOR_NAMES, COLORS, SHAPE_NAMES, SHAPES, displayShape, type Character, type CharacterPatch } from "./character.ts";
 
-const COLORS: readonly { color: BotColor; label: string }[] = [
-  { color: "green", label: "Sage" },
-  { color: "blue", label: "Blue" },
-  { color: "orange", label: "Peach" },
-];
-
-export function CharacterPicker({ character, onChange }: { character: Character; onChange: (next: Character) => void }) {
-  const choices = COLORS.some((choice) => choice.color === character.color)
-    ? COLORS : [...COLORS, { color: character.color, label: character.color }];
+export function CharacterPreview({ character, name, children }: { character: Character; name: string; children?: ReactNode }) {
   return (
-    <div className="picker pick-colors" role="group" aria-label="Bot color">
-      {choices.map(({ color, label }) => (
-        <button key={color} type="button" aria-label={label} aria-pressed={color === character.color} onClick={() => onChange({ ...character, color })}>
-          <BotFace character={{ ...character, color }} size={34} />
-        </button>
-      ))}
+    <div className="character-preview" aria-label="Live preview">
+      <BotFace character={character} size={80} />
+      <div>{children ?? <p>{name || "Your bot"}</p>}<small>{COLORS[character.color].label} · {SHAPES[displayShape(character.shape)].label}</small></div>
+    </div>
+  );
+}
+
+export function CharacterPicker({ character, onChange, disabled = false }: { character: Character; onChange: (patch: CharacterPatch) => void; disabled?: boolean }) {
+  const id = useId();
+  const shape = displayShape(character.shape);
+  return (
+    <div className="character-picker">
+      <fieldset aria-label="Color" disabled={disabled}>
+        <legend><span>Color</span><small>{COLORS[character.color].label}</small></legend>
+        <div className="character-colors">
+          {COLOR_NAMES.map((color) => (
+            <label className="character-color" key={color}>
+              <input type="radio" name={`${id}-color`} value={color} aria-label={COLORS[color].label} checked={color === character.color} onChange={() => onChange({ color })} />
+              <span className="character-color-ring"><BotFace character={{ ...character, color }} size={36} /></span>
+              <span>{COLORS[color].label}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset aria-label="Shape" disabled={disabled}>
+        <legend><span>Shape</span><small>{SHAPES[shape].label}</small></legend>
+        <div className="character-shapes">
+          {SHAPE_NAMES.map((value) => (
+            <label className="character-shape" key={value}>
+              <input type="radio" name={`${id}-shape`} value={value} aria-label={SHAPES[value].label} checked={value === shape} onChange={() => onChange({ shape: value })} />
+              <BotFace character={{ ...character, shape: value }} size={32} />
+              <span>{SHAPES[value].label}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
     </div>
   );
 }

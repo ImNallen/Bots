@@ -2,10 +2,9 @@ import { api } from "@bots/convex";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { useState, type FormEvent } from "react";
-import { BotFace } from "./BotFace.tsx";
-import type { Character } from "./character.ts";
-import { CharacterPicker } from "./CharacterPicker.tsx";
-import { Dialog } from "./Dialog.tsx";
+import { DEFAULT_CHARACTER, type Character } from "./character.ts";
+import { CharacterPicker, CharacterPreview } from "./CharacterPicker.tsx";
+import { DialogFrame } from "./Dialog.tsx";
 import { errorMessage } from "./session.tsx";
 import { useIsPhone } from "./useIsPhone.ts";
 
@@ -16,7 +15,7 @@ export function NewBotDialog({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const isPhone = useIsPhone();
   const [name, setName] = useState("");
-  const [character, setCharacter] = useState<Character>({ shape: "ball", color: "green" });
+  const [character, setCharacter] = useState<Character>(DEFAULT_CHARACTER);
   const [submission, setSubmission] = useState<
     { kind: "idle" } | { kind: "pending" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
@@ -37,47 +36,40 @@ export function NewBotDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Dialog
-      title="New bot"
-      onClose={onClose}
-      footer={
-        <>
-          <button type="button" className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" form={FORM_ID} className="btn btn-go" disabled={name.trim() === "" || submission.kind === "pending"}>
-            {submission.kind === "pending" ? "Creating" : "Create"}
-          </button>
-        </>
-      }
-    >
+    <DialogFrame title="Create a bot" className="dialog appearance-create" onClose={onClose} dismissible={submission.kind !== "pending"}>
       <form id={FORM_ID} className="new-bot" onSubmit={(event) => void handleSubmit(event)}>
-        <div className="new-bot-face">
-          <BotFace character={character} size={76} />
-        </div>
-        <input
-          className="field new-bot-name"
-          aria-label="Name"
-          placeholder="Name your bot"
-          maxLength={64}
-          autoComplete="off"
-          // On a phone the keyboard would cover the choices below.
-          data-autofocus={isPhone ? undefined : true}
-          aria-invalid={submission.kind === "failed"}
-          value={name}
-          onChange={(event) => {
-            setName(event.target.value);
-            // Only a failure clears. Clearing a pending create would let a second click make a second bot.
-            setSubmission((current) => (current.kind === "failed" ? { kind: "idle" } : current));
-          }}
-        />
-        <CharacterPicker character={character} onChange={setCharacter} />
+        <div className="appearance-intro"><h2>Create a bot</h2><p>Give your bot a name and a look.</p></div>
+        <CharacterPreview character={character} name={name}>
+          <input
+            className="field new-bot-name"
+            aria-label="Name"
+            placeholder="Name your bot"
+            maxLength={64}
+            autoComplete="off"
+            // On a phone the keyboard would cover the choices below.
+            data-autofocus={isPhone ? undefined : true}
+            aria-invalid={submission.kind === "failed"}
+            disabled={submission.kind === "pending"}
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              // Only a failure clears. Clearing a pending create would let a second click make a second bot.
+              setSubmission((current) => (current.kind === "failed" ? { kind: "idle" } : current));
+            }}
+          />
+        </CharacterPreview>
+        <CharacterPicker character={character} disabled={submission.kind === "pending"} onChange={(patch) => setCharacter((current) => ({ ...current, ...patch }))} />
         {submission.kind === "failed" && (
           <p className="error" role="alert">
             {submission.message}
           </p>
         )}
+        <div className="appearance-create-actions">
+          <button type="button" disabled={submission.kind === "pending"} onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-go" disabled={name.trim() === "" || submission.kind === "pending"}>{submission.kind === "pending" ? "Creating" : "Create bot"}</button>
+        </div>
+        <p className="appearance-create-note">Your choices are saved when you create the bot.</p>
       </form>
-    </Dialog>
+    </DialogFrame>
   );
 }
