@@ -229,7 +229,8 @@ export function toAppendBody(base: ToolResultBase, result: LinkOutcome): AppendB
   if (result.outcome === "unavailable") {
     return { ...base, ...result };
   }
-  const { screen, ...rest } = result;
+  const { screen, page, ...fields } = result;
+  const rest = { ...fields, ...(page === undefined ? {} : { page: JSON.stringify(page) }) };
   if (screen === undefined) {
     return { ...base, ...rest };
   }

@@ -9,8 +9,9 @@ import { applyMemoryCall } from "./memories.js";
 import { DEADLINE_FAILURE, closeUnansweredCalls, deleteStream, endPastDeadline, endRun, noRunnerHolds, pastDeadline } from "./runEnd.js";
 import { EARLIER_REPORTS, applyScheduleCall } from "./schedules.js";
 import { ensureChatThread } from "./threads.js";
+import { keepPage } from "./pages.js";
 import { keepScreen } from "./screens.js";
-import { memoryCall, runEventBody, scheduleCall, terminalRunState, toolResultWithScreen, type RunEventBody, type TerminalRunState } from "./validators.js";
+import { memoryCall, runEventBody, scheduleCall, terminalRunState, toolResultWithViews, type RunEventBody, type TerminalRunState } from "./validators.js";
 
 const LEASE_MS = 15_000;
 const CLAIMABLE_PAGE = 64;
@@ -24,7 +25,7 @@ export function noProgressReason(run: Pick<Doc<"runs">, "scheduleId">): string {
 }
 
 const fence = { runId: v.id("runs"), leaseToken: v.string() };
-const appendBody = v.union(runEventBody, memoryCall, scheduleCall, toolResultWithScreen);
+const appendBody = v.union(runEventBody, memoryCall, scheduleCall, toolResultWithViews);
 
 async function requireLease(
   ctx: MutationCtx,
@@ -98,7 +99,7 @@ function endedByThisClaim(run: Doc<"runs">) {
 
 type AppendBody = Infer<typeof appendBody>;
 
-async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody): Promise<RunEventBody> {
+async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody, seq: number): Promise<RunEventBody> {
   switch (body.kind) {
     case "memorySave":
     case "memoryForget":
@@ -110,11 +111,11 @@ async function storedBodyOf(ctx: MutationCtx, run: Doc<"runs">, body: AppendBody
     case "scheduleDelete":
       return await applyScheduleCall(ctx, run, body);
     case "toolResult": {
-      if (!("screen" in body)) {
-        return body;
+      const { screen, page, ...stored }: Infer<typeof toolResultWithViews> = body;
+      if (screen !== undefined) await keepScreen(ctx, run, body.toolCallId, screen);
+      if (body.name.startsWith("browser_")) {
+        await keepPage(ctx, run, { toolCallId: body.toolCallId, seq, view: page ?? null });
       }
-      const { screen, ...stored } = body;
-      await keepScreen(ctx, run, body.toolCallId, screen);
       return stored;
     }
     default:
@@ -227,7 +228,7 @@ export const append = mutation({
     if (run.nextSeq !== expectedSeq) {
       throw new ConvexError(`Expected seq ${run.nextSeq}, got ${expectedSeq}`);
     }
-    const stored = await storedBodyOf(ctx, run, body);
+    const stored = await storedBodyOf(ctx, run, body, expectedSeq);
     await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body: stored });
     await ctx.db.patch(runId, { nextSeq: expectedSeq + 1 });
     await deleteStream(ctx, runId);

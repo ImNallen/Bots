@@ -54,8 +54,7 @@ export const screenImageBytes = v.object({ mediaType: v.union(v.literal("image/p
 // view is a @bots/protocol screenView without its image, as JSON. Only the orchestrator reads it, through that schema.
 export const keptScreen = v.object({ view: v.string(), image: v.optional(screenImageBytes) });
 export type KeptScreen = Infer<typeof keptScreen>;
-// Only append takes this. A stored toolResult never holds a screen, because the screens row does.
-export const toolResultWithScreen = v.object({ ...toolResultFields, screen: keptScreen });
+export const toolResultWithViews = v.object({ ...toolResultFields, screen: v.optional(keptScreen), page: v.optional(v.string()) });
 
 export const terminalRunState = v.union(
   v.object({ kind: v.literal("done") }),

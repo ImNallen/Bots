@@ -1,5 +1,6 @@
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
+import { deletePage } from "./pages.js";
 import { deleteScreen } from "./screens.js";
 import type { TerminalRunState } from "./validators.js";
 
@@ -27,6 +28,7 @@ export async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: Termina
   await ctx.db.patch(runId, { state, endedAt: Date.now() });
   await deleteStream(ctx, runId);
   await deleteScreen(ctx, runId);
+  await deletePage(ctx, runId);
 }
 
 // Every later model request replays this history, and a tool call with no result would make it malformed.

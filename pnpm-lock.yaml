@@ -194,6 +194,9 @@ importers:
 
   packages/convex:
     dependencies:
+      '@bots/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       convex:
         specifier: 'catalog:'
         version: 1.49.0(react@19.3.1)

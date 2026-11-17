@@ -78,6 +78,10 @@ export async function purgeRunBatch(ctx: MutationCtx, runId: Id<"runs">): Promis
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .take(PURGE_BATCH)),
     ...(await ctx.db
+      .query("pages")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .take(PURGE_BATCH)),
+    ...(await ctx.db
       .query("screens")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .take(PURGE_BATCH)),

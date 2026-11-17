@@ -200,6 +200,14 @@ export default defineSchema({
     reasoning: v.optional(v.string()),
   }).index("by_run", ["runId"]),
 
+  pages: defineTable({
+    runId: v.id("runs"),
+    ownerId: v.id("users"),
+    toolCallId: v.string(),
+    seq: v.number(),
+    view: v.string(),
+  }).index("by_run", ["runId"]),
+
   // The newest look of a run. A run has at most one, and endRun deletes it, so no picture of the owner's pages outlives its run.
   screens: defineTable({
     runId: v.id("runs"),

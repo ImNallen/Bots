@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { PAGE_LIMITS, pageView } from "./page.ts";
+import { capText } from "./output.ts";
 import { screenView } from "./desktop.ts";
 import { toolInvocation } from "./tools.ts";
 
@@ -37,6 +39,7 @@ export const toolResult = z.strictObject({
   exitCode: z.number().int().optional(),
   truncated: z.boolean(),
   screen: screenView.optional(),
+  page: pageView.optional(),
 });
 
 export type ToolResult = z.infer<typeof toolResult>;
@@ -51,14 +54,27 @@ function messageBytes(result: ToolResult): number {
 // computerd calls this before it journals a result. A frame over the limit would close the link, and the call sent again would
 // get the same answer from the journal at every reconnect.
 export function fitToLink(result: ToolResult): ToolResult {
-  if (result.screen === undefined || messageBytes(result) <= MAX_COMPUTER_MESSAGE_BYTES) {
-    return result;
+  let fitted = result;
+  if (fitted.page !== undefined && Buffer.byteLength(JSON.stringify(fitted.page)) > PAGE_LIMITS.jsonBytes) {
+    const { page: _page, ...rest } = fitted;
+    fitted = { ...rest, truncated: true };
   }
-  const { image: _image, ...view } = result.screen;
-  let fitted: ToolResult = { ...result, output: `${result.output}\n${PICTURE_DROPPED}`, screen: view };
-  while (fitted.screen !== undefined && fitted.screen.marks.length > 0 && messageBytes(fitted) > MAX_COMPUTER_MESSAGE_BYTES) {
-    const marks = fitted.screen.marks.slice(0, Math.floor(fitted.screen.marks.length / 2));
-    fitted = { ...fitted, screen: { ...fitted.screen, marks, unlisted: fitted.screen.unlisted + fitted.screen.marks.length - marks.length } };
+  if (messageBytes(fitted) <= MAX_COMPUTER_MESSAGE_BYTES) return fitted;
+  if (fitted.screen !== undefined) {
+    const { image: _image, ...view } = fitted.screen;
+    fitted = { ...fitted, output: `${fitted.output}\n${PICTURE_DROPPED}`, screen: view, truncated: true };
+    while (fitted.screen !== undefined && fitted.screen.marks.length > 0 && messageBytes(fitted) > MAX_COMPUTER_MESSAGE_BYTES) {
+      const marks = fitted.screen.marks.slice(0, Math.floor(fitted.screen.marks.length / 2));
+      fitted = { ...fitted, screen: { ...fitted.screen, marks, unlisted: fitted.screen.unlisted + fitted.screen.marks.length - marks.length } };
+    }
+  }
+  if (messageBytes(fitted) > MAX_COMPUTER_MESSAGE_BYTES) {
+    const { page: _page, ...rest } = fitted;
+    fitted = { ...rest, ...capText(rest.output), truncated: true };
+  }
+  if (messageBytes(fitted) > MAX_COMPUTER_MESSAGE_BYTES) {
+    const { screen: _screen, ...rest } = fitted;
+    fitted = { ...rest, truncated: true };
   }
   return fitted;
 }
