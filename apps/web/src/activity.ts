@@ -43,6 +43,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   memory_save: "Saving a note",
   memory_forget: "Forgetting a note",
   description_set: "Updating its description",
+  name_set: "Changing its name",
   schedule_create: "Creating a routine",
   schedule_update: "Changing a routine",
   schedule_delete: "Deleting a routine",

@@ -42,7 +42,7 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
     }
     setSave({ kind: "pending" });
     try {
-      await setProfile({ botId: bot._id, name: shown.name, title: shown.title });
+      await setProfile({ botId: bot._id, name: shown.name });
       onEditsChange({});
       setSave({ kind: "saved" });
     } catch (error) {
@@ -57,17 +57,6 @@ function ProfileCard(props: { bot: Doc<"bots">; edits: ProfileEdits; onEditsChan
         <label className="profile-field">
           <span>Name</span>
           <input className="field" autoComplete="off" readOnly={saving} value={shown.name} onChange={(event) => edit("name", event.target.value)} />
-        </label>
-        <label className="profile-field">
-          <span>Title</span>
-          <input
-            className="field"
-            autoComplete="off"
-            placeholder="What it does, in a few words"
-            readOnly={saving}
-            value={shown.title}
-            onChange={(event) => edit("title", event.target.value)}
-          />
         </label>
         <div className="confirm-actions profile-save">
           <small role="status">{save.kind === "saved" ? "Saved." : "Shown in your bot list."}</small>
@@ -224,7 +213,6 @@ export function InfoPanel(props: {
         <BotFace character={character} size={showRoutines ? 48 : 64} state={faceState} />
         <div>
           <h2>{bot.name}</h2>
-          {bot.title && <p className="info-title">{bot.title}</p>}
         </div>
       </div>
       <nav className="bot-destinations" aria-label="Bot views">

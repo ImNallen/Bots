@@ -82,6 +82,7 @@ export const memoryCall = v.union(
   v.object({ kind: v.literal("memorySave"), toolCallId: v.string(), text: v.string() }),
   v.object({ kind: v.literal("memoryForget"), toolCallId: v.string(), noteId: v.string() }),
   v.object({ kind: v.literal("descriptionSet"), toolCallId: v.string(), text: v.string() }),
+  v.object({ kind: v.literal("nameSet"), toolCallId: v.string(), name: v.string() }),
 );
 
 export type MemoryCall = Infer<typeof memoryCall>;

@@ -19,7 +19,7 @@ await client.mutation(api.users.ensureCurrent, { browserTimeZone: "Europe/Stockh
 await client.mutation(api.users.setTimeZone, { timeZone: "Europe/Stockholm" });
 const name = `Routines review ${Date.now()}`;
 const botId = await client.mutation(api.bots.create, { name, shape: "ball", color: "green" });
-await client.mutation(api.bots.setProfile, { botId, name, title: "Your everyday assistant", description: "" });
+await client.mutation(api.bots.setProfile, { botId, name, description: "" });
 await mkdir(destination, { recursive: true });
 
 const WATCH = {

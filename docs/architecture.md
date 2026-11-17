@@ -563,7 +563,7 @@ Each tool in `packages/protocol/src/tools.ts` names one effect, and a tool witho
 | `changesVm` | `write_file` | by rules | ask | run | run | run | reject |
 | `changesOutside` | `browser_click`, `browser_type`, `browser_press` | by rules | ask | ask | run | run | reject |
 | `controlsComputer` | `shell`, `desktop_click`, `desktop_type`, `desktop_key`, `desktop_scroll` | by rules | ask | ask | ask | run | reject |
-| `changesMemory` | `memory_save`, `memory_forget`, `description_set` | after untrusted text | ask | after untrusted text | run | run | reject |
+| `changesMemory` | `memory_save`, `memory_forget`, `description_set`, `name_set` | after untrusted text | ask | after untrusted text | run | run | reject |
 | `changesSchedule` | `schedule_create`, `schedule_update`, `schedule_delete` | after untrusted text | ask | after untrusted text | after untrusted text | after untrusted text | reject |
 
 `controlsComputer` means that the call can make the VM do anything its user can. A click can press a launcher on the panel, and typing into a terminal runs a command, so desktop input asks at the Shell level, as `shell` does. The Shell level used to name the `shell` tool, and it now names this effect. A look is a read, but the desktop shows the owner's logged-in pages, so it has an effect of its own that a routine never gets. A memory tool's answer depends on the run, as [How memory works](#how-memory-works) explains. A routine tool asks after untrusted text even at Shell and Nothing, as [How a routine fires](#how-a-routine-fires) explains.
@@ -586,9 +586,21 @@ A page action reads the page facts, which are the page's origin and the control 
 
 At Automatic, every page click and every Enter asks on purpose, because a link or a GET form can commit on a logged-in site. A review on 2026-11-15 proved it with runs. A GET form's hidden token never reaches a check of its address, common token names such as `_wpnonce`, `sesskey`, and `at` pass a list of known ones, a like, a follow, a vote, a star, or an add can be a plain GET, and the Navigation API lets a page's own code take over a navigation started from outside it, which sent a POST in the test. So no rule lets a click run, whatever the control is or what its words say. A desktop click or typing in Chromium asks too, including on Chromium's own menu. Until the runner passes page facts, typing into a page asks as well. A commit word is a list, so a control that commits under another name, such as Book or Done, runs. Outside Chromium, an app names its own controls, so this matters only for apps that show other people's text as controls. The rules read the call and its aim, not the state the call lands in, so a click's real effect can still depend on what the app shows at that moment. git reads a repository's own config when it runs an allowed command, and that config could carry a setting the rules never saw. The rules replace no earlier level. An owner who picked Everything, Outside, Shell, or Nothing keeps it.
 
+## Who can change a bot's name
+
+The owner sets the initial name and can edit it through `bots.setIdentity` or `bots.setProfile`. A bot can choose its own name with `name_set({name})` in a full run, without an owner request. The prompt permits conversation-inspired, preferred, and random names, discourages needless repeat renames, and rejects rename instructions from pages, files, and tool results. No generator runs at creation.
+
+Both writers use the pure `names.ts` parser. It trims whitespace, requires a nonempty name, and allows at most 64 characters, including ordinary Unicode. An invalid bot name returns an ordinary tool error and changes nothing. The owner wrapper translates a refusal to `ConvexError`.
+
+`name_set` has the effect `changesMemory` and the same approval policy as `description_set`. The runner maps it to `nameSet`, and `runs.append` applies it through `applyMemoryCall`. The name update and tool result with the previous and new names commit atomically under the existing lease, sequence, and cancellation checks. It works without a computer. Read-only runs omit the tool and reject direct appends. It has no separate endpoint or cache.
+
+Each model call reloads the name. A fixed introduction precedes the instructions, and the name follows them as one JSON string explicitly labeled as data that cannot override those instructions. Chat and Activity show the rename, and approval shows the proposed name. The owner editor follows clean live updates and preserves dirty name edits. Saving it leaves the hidden description alone.
+
+Bot title has no active reader or writer. Only the optional legacy schema field remains so existing rows still validate.
+
 ## Who can write a description, and what limits it
 
-A bot's description is one general text about the bot. It says who the bot is, what it does, and its purpose, and it can hold a job. The model reads it on every call, in every conversation. The owner decided on 2026-11-07 that it works like notes and routines, as something the bot keeps current, so the owner and the bot both write it. The owner's field in the panel stays until the simpler UI that the roadmap plans.
+A bot's description is one general text about the bot. It says who the bot is, what it does, and its purpose, and it can hold a job. The model reads it on every call, in every conversation. The owner decided on 2026-11-07 that it works like notes and routines, as something the bot keeps current, so the owner and the bot both write it. The panel hides the description. Its name-only editor uses `bots.setIdentity`, which cannot overwrite a description.
 
 Each writer has one path, and nobody else has a path:
 
@@ -625,7 +637,7 @@ Notes live in Convex and not on the VM. A bot has root on its VM, so anything th
 
 ### One mutation writes a note and its result
 
-`runs.append` takes a memory call as well as an event body. A `descriptionSet` body is one more memory call, and the tool's rules are in [Who can write a description, and what limits it](#who-can-write-a-description-and-what-limits-it). It checks the lease and the sequence number, then `applyMemoryCall` makes the change and returns a `toolResult` body, and that body goes in as the event. All of this is one Convex mutation, and `applyMemoryCall` has no endpoint of its own. So a memory call happens exactly once, where a call through `computerd`'s journal happens at most once, and it needs no new table or idempotency key.
+`runs.append` takes a memory call as well as an event body. A `descriptionSet` or `nameSet` body is one more memory call, and the tool's rules are in [Who can write a description, and what limits it](#who-can-write-a-description-and-what-limits-it). It checks the lease and the sequence number, then `applyMemoryCall` makes the change and returns a `toolResult` body, and that body goes in as the event. All of this is one Convex mutation, and `applyMemoryCall` has no endpoint of its own. So a memory call happens exactly once, where a call through `computerd`'s journal happens at most once, and it needs no new table or idempotency key.
 
 | Kill or failure | What the next runner finds | Result |
 |---|---|---|
@@ -701,7 +713,7 @@ A routine starts a read-only run, through `startReadOnlyRun`. Its callers are `f
 
 | Runs | Rejected |
 |---|---|
-| `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot`, `stay_quiet` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `schedule_create`, `schedule_update`, `schedule_delete` |
+| `read_file`, `web_fetch`, `web_search`, `browser_navigate`, `browser_snapshot`, `stay_quiet` | `shell`, `write_file`, `browser_click`, `browser_type`, `browser_press`, every `desktop_*` tool, `memory_save`, `memory_forget`, `description_set`, `name_set`, `schedule_create`, `schedule_update`, `schedule_delete` |
 
 A routine browses logged out, and the desktop shows the owner's logged-in Chromium, so a look at it would hand a routine those pages. `desktop_look` therefore has the effect `readsScreen`, which is not `reads`, and a read-only run rejects it before it loads any screen.
 
@@ -712,7 +724,7 @@ A chat run that calls `stay_quiet` stores `error`, with an output that says the 
 The rule holds in three places, so a bug in one does not open it:
 
 - `runTool` decides before approvals, the take-over wait, and the link. A rejected call never reaches `computerd`, so its journal has no entry for it.
-- `applyMemoryCall` and `applyScheduleCreate` store `rejected` unless the run is `full`, in the same mutation that would write the note, the description, or the routine.
+- `applyMemoryCall` and `applyScheduleCreate` store `rejected` unless the run is `full`, in the same mutation that would write the note, the name, the description, or the routine.
 - `approvals.request` throws for a read-only run, so no card can exist.
 
 `computerd` is not one of these places, because a bot has root on its VM. Offering the model only the tools that read saves wasted turns, and it is not a boundary either. A model can still ask for a tool it was not offered.

@@ -195,6 +195,8 @@ async function prepareCall(invocation: ModelInvocation, toolCallId: string, scre
         return { kind: "stored", body: { kind: "memorySave", toolCallId, text: invocation.args.text } };
       case "memory_forget":
         return { kind: "stored", body: { kind: "memoryForget", toolCallId, noteId: invocation.args.id } };
+      case "name_set":
+        return { kind: "stored", body: { kind: "nameSet", toolCallId, name: invocation.args.name } };
       case "description_set":
         return { kind: "stored", body: { kind: "descriptionSet", toolCallId, text: invocation.args.text } };
     }
@@ -295,7 +297,6 @@ async function callModel(args: {
         run,
         botName: profile.name,
         botId: claim.botId,
-        title: profile.title,
         description: profile.description,
         about: profile.about,
         notes: profile.notes,

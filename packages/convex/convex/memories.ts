@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import { requireIdentity, requireOwnedBot } from "./identity.js";
+import { NAME_PROBLEMS, parseName } from "./names.js";
 import type { MemoryCall, RunEventBody } from "./validators.js";
 
 const MAX_NOTES = 40;
@@ -248,6 +249,7 @@ const WHAT_A_CALL_CHANGES: Record<MemoryCall["kind"], { tool: string; subject: s
   memorySave: { tool: "memory_save", subject: "your notes" },
   memoryForget: { tool: "memory_forget", subject: "your notes" },
   descriptionSet: { tool: "description_set", subject: "your description" },
+  nameSet: { tool: "name_set", subject: "your name" },
 };
 
 export async function applyMemoryCall(
@@ -295,6 +297,15 @@ export async function applyMemoryCall(
       }
       await ctx.db.delete(note._id);
       return result("ok", `Forgot note ${note._id}. Its text was: ${note.text}`);
+    }
+    case "nameSet": {
+      const parsed = parseName(call.name);
+      if (parsed.kind === "refused") {
+        return result("error", `${NAME_PROBLEMS[parsed.problem]}, so your name was not changed.`);
+      }
+      const previous = (await ctx.db.get(run.botId))?.name;
+      await ctx.db.patch(run.botId, { name: parsed.name });
+      return result("ok", `Changed your name from ${JSON.stringify(previous)} to ${JSON.stringify(parsed.name)}.`);
     }
     case "descriptionSet": {
       const parsed = parseDescription(call.text);
