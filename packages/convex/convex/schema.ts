@@ -85,6 +85,7 @@ export default defineSchema({
     requestedAt: v.number(),
     // A desktop input's card: what it does in words, and the box that the card outlines on the run's newest look.
     subject: v.optional(v.string()),
+    pageAim: v.optional(v.string()),
     box: v.optional(screenBox),
     // One plain sentence from the Automatic rules saying why this call needs a card. Absent at the other levels.
     reason: v.optional(v.string()),

@@ -1,5 +1,6 @@
 import {
   COMPUTER_TOOL_NAMES,
+  PAGE_AIM_TOOL_CAPABILITY,
   LINK_CLOSE,
   MAX_ORCHESTRATOR_MESSAGE_BYTES,
   orchestratorMessage,
@@ -30,15 +31,21 @@ export function connectLink(args: {
   calls: Calls;
   openScreen: (streamId: string, botId: string, mode: StreamMode) => void;
   endBrowsing: (botId: string, key: string) => void;
-}): void {
+}): () => void {
   const { url, token, calls, openScreen, endBrowsing } = args;
   let retryMs = FIRST_RETRY_MS;
+  let stopped = false;
+  let retry: NodeJS.Timeout | undefined;
+  let disconnect = () => {};
 
   function connect(): void {
+    if (stopped) return;
     const socket = new WebSocket(url, { maxPayload: MAX_ORCHESTRATOR_MESSAGE_BYTES, handshakeTimeout: 10_000 });
     let silence: NodeJS.Timeout | undefined;
+    disconnect = () => { clearTimeout(silence); socket.terminate(); };
 
     function resetSilence(): void {
+      if (stopped) return;
       clearTimeout(silence);
       silence = setTimeout(() => socket.terminate(), SILENCE_LIMIT_MS);
     }
@@ -60,11 +67,13 @@ export function connectLink(args: {
     }
 
     socket.on("open", () => {
+      if (stopped) return;
       resetSilence();
-      send({ kind: "hello", token, tools: [...COMPUTER_TOOL_NAMES] });
+      send({ kind: "hello", token, tools: [...COMPUTER_TOOL_NAMES, PAGE_AIM_TOOL_CAPABILITY] });
     });
     socket.on("ping", resetSilence);
     socket.on("message", (raw: Buffer) => {
+      if (stopped) return;
       resetSilence();
       const message = parseJsonMessage({ raw: raw.toString("utf8"), schema: orchestratorMessage });
       if (message === null) {
@@ -100,12 +109,19 @@ export function connectLink(args: {
     });
     socket.on("close", (code) => {
       clearTimeout(silence);
+      if (stopped) return;
       const delay = code === LINK_CLOSE.replaced ? RETRY_AFTER_REPLACED_MS : retryMs;
       retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
       log({ level: "info", event: "link-closed", code, retryInMs: delay });
-      setTimeout(connect, delay);
+      retry = setTimeout(connect, delay);
     });
   }
 
   connect();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(retry);
+    disconnect();
+  };
 }

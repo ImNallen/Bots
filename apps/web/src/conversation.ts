@@ -148,7 +148,7 @@ function callArguments(raw: string): CallArgument[] {
 }
 
 // A mark number means nothing to a person, so a desktop card says what the orchestrator aimed at, and shows typed text in full.
-function desktopCard(subject: string, raw: string): CallArgument[] {
+function subjectCard(subject: string, raw: string): CallArgument[] {
   const text = (parseObject(raw) as { text?: unknown } | null)?.text;
   return [{ label: null, value: subject }, ...(typeof text === "string" ? [{ label: "text", value: text }] : [])];
 }
@@ -244,14 +244,14 @@ function callItem(args: {
   if (result === undefined) {
     if (approval !== undefined) {
       const routine = isRoutine ? routineCard(known, call.arguments, timeZone) : null;
-      const desktop = approval.subject === null ? null : desktopCard(approval.subject, call.arguments);
+      const subject = approval.subject === null ? null : subjectCard(approval.subject, call.arguments);
       return {
         key,
         kind: "approval",
         approvalId: approval._id,
         title: routine?.title ?? words?.ask ?? `Run ${call.name}?`,
-        arguments: routine?.arguments ?? desktop ?? callArguments(call.arguments),
-        picture: desktop !== null,
+        arguments: routine?.arguments ?? subject ?? callArguments(call.arguments),
+        picture: subject !== null && call.name.startsWith("desktop_"),
         reason: approval.reason,
       };
     }

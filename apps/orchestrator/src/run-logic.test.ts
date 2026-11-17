@@ -1189,6 +1189,8 @@ const WINDOW = { app: "Chromium", pid: 7, kind: "frame" as const, path: "/org/a1
 const ELEMENT = { role: "button", name: "Go", states: [], box: { x: 0, y: 0, w: 1, h: 1 } };
 
 describe("how a call browses", () => {
+  const aim = { kind: "element" as const, snapshotId: "00000000-0000-4000-8000-000000000001", origin: null, target: { ref: 1, words: "Field", control: { kind: "button" as const } } };
+  const focus = { kind: "focus" as const, snapshotId: aim.snapshotId, origin: null, focus: { kind: "none" as const }, target: null };
   const INVOCATIONS: Record<ToolInvocation["name"], ToolInvocation> = {
     shell: { name: "shell", args: { command: "ls", timeoutSeconds: 1 } },
     read_file: { name: "read_file", args: { path: "a" } },
@@ -1196,9 +1198,9 @@ describe("how a call browses", () => {
     web_fetch: { name: "web_fetch", args: { url: "https://example.com/", start: 0 } },
     browser_navigate: { name: "browser_navigate", args: { url: "https://example.com/" } },
     browser_snapshot: { name: "browser_snapshot", args: {} },
-    browser_click: { name: "browser_click", args: { ref: 1 } },
-    browser_type: { name: "browser_type", args: { ref: 1, text: "", submit: false } },
-    browser_press: { name: "browser_press", args: { key: "Enter" } },
+    browser_click: { name: "browser_click", aim, args: { ref: 1 } },
+    browser_type: { name: "browser_type", aim, args: { ref: 1, text: "", submit: false } },
+    browser_press: { name: "browser_press", aim: focus, args: { key: "Enter" } },
     desktop_look: { name: "desktop_look", args: {} },
     desktop_click: { name: "desktop_click", args: { mark: 1, button: "left" }, aim: { window: WINDOW, element: ELEMENT } },
     desktop_type: { name: "desktop_type", args: { text: "a", replace: false, submit: false }, aim: { window: WINDOW, element: null } },

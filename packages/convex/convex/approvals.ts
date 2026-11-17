@@ -10,8 +10,8 @@ const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 // A restarted runner asks again with the same call, and it must find the same row and the same answer.
 export const request = mutation({
-  args: { runId: v.id("runs"), toolCallId: v.string(), toolName: v.string(), subject: v.optional(v.string()), box: v.optional(screenBox), reason: v.optional(v.string()) },
-  handler: async (ctx, { runId, toolCallId, toolName, subject, box, reason }) => {
+  args: { runId: v.id("runs"), toolCallId: v.string(), toolName: v.string(), leaseToken: v.optional(v.string()), pageAim: v.optional(v.string()), subject: v.optional(v.string()), box: v.optional(screenBox), reason: v.optional(v.string()) },
+  handler: async (ctx, { runId, toolCallId, toolName, leaseToken, pageAim, subject, box, reason }) => {
     await requireService(ctx);
     const run = await ctx.db.get(runId);
     if (run === null || (run.state.kind !== "queued" && run.state.kind !== "running")) {
@@ -26,7 +26,10 @@ export const request = mutation({
       .withIndex("by_run_call", (q) => q.eq("runId", runId).eq("toolCallId", toolCallId))
       .unique();
     if (existing !== null) {
-      return { approvalId: existing._id, state: existing.state, expiresAt: existing.requestedAt + APPROVAL_TTL_MS };
+      return { approvalId: existing._id, state: existing.state, expiresAt: existing.requestedAt + APPROVAL_TTL_MS, pageAim: existing.pageAim ?? null };
+    }
+    if (pageAim !== undefined && (pageAim.length > 8192 || run.state.kind !== "running" || run.state.leaseToken !== leaseToken || run.state.leaseUntil < Date.now())) {
+      throw new ConvexError("A page approval needs the current run lease and a bounded aim");
     }
     const requestedAt = Date.now();
     const approvalId = await ctx.db.insert("approvals", {
@@ -38,11 +41,23 @@ export const request = mutation({
       toolName,
       state: "pending",
       requestedAt,
+      ...(pageAim === undefined ? {} : { pageAim }),
       ...(subject === undefined ? {} : { subject }),
       ...(box === undefined ? {} : { box }),
       ...(reason === undefined ? {} : { reason }),
     });
-    return { approvalId, state: "pending" as const, expiresAt: requestedAt + APPROVAL_TTL_MS };
+    return { approvalId, state: "pending" as const, expiresAt: requestedAt + APPROVAL_TTL_MS, pageAim: pageAim ?? null };
+  },
+});
+
+export const forCall = query({
+  args: { runId: v.id("runs"), toolCallId: v.string() },
+  handler: async (ctx, { runId, toolCallId }) => {
+    await requireService(ctx);
+    const row = await ctx.db.query("approvals").withIndex("by_run_call", (q) => q.eq("runId", runId).eq("toolCallId", toolCallId)).unique();
+    if (row === null) return null;
+    const reset = (await computerOfOwner(ctx, row.ownerId))?.reset !== undefined;
+    return { approvalId: row._id, state: reset ? "expired" as const : row.state, expiresAt: row.requestedAt + APPROVAL_TTL_MS, pageAim: row.pageAim ?? null };
   },
 });
 

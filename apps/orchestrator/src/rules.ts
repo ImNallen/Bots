@@ -14,7 +14,7 @@ export type DesktopAim = {
 
 // What the rules know of the page a page action lands on, from the run's stored page. target is the ref's element for a click or
 // typing, and the focused element for a key, or null when there is none.
-export type PageFacts = { origin: string; target: PageTarget | null };
+export type PageFacts = { origin: string | null; target: PageTarget | null };
 
 // The one input to the rules. It is a pure function of data Convex has stored: the parsed call, the desktop aim when there is one,
 // the page facts for a page action, and the bot's workspace path. A later PR adds the run's events here for bound files and user

@@ -1,12 +1,15 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BrowserInvocation, Browsing } from "@bots/protocol";
+import { toolInvocation, type BrowserInvocation, type Browsing } from "@bots/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBrowser, nextPages, type CdpConnector, type CdpEvent } from "./browser.ts";
 import { createCalls } from "./calls.ts";
 import { createDesktops, desktopOf, IDLE_STOP_MS, type Desktops, type Slot } from "./desktops.ts";
 import { openJournal } from "./journal.ts";
+
+const elementAim = (ref: number) => ({ kind: "element" as const, snapshotId: "00000000-0000-4000-8000-000000000001", origin: null, target: { ref, words: "field", control: { kind: "field" as const, field: "line" as const, readOnly: false } } });
+const focusAim = { kind: "focus" as const, snapshotId: "00000000-0000-4000-8000-000000000001", origin: null, focus: { kind: "none" as const }, target: null };
 
 type Sent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
@@ -31,7 +34,7 @@ function fakeChromium() {
   const closeListeners: Array<() => void> = [];
   const eventListeners: Array<(event: CdpEvent) => void> = [];
   let nextTarget = 1;
-  let locateResult: { x: number; y: number } | null = { x: 10, y: 20 };
+  let actionRefused = false;
   let sendHook: ((method: string) => void) | undefined;
   const frozen = new Set<string>();
   const stalled = new Set<string>();
@@ -63,8 +66,8 @@ function fakeChromium() {
     onSend: (hook: (method: string) => void) => {
       sendHook = hook;
     },
-    setLocate: (value: { x: number; y: number } | null) => {
-      locateResult = value;
+    refuseAction: () => {
+      actionRefused = true;
     },
     freezePage: (targetId = "target-0") => {
       frozen.add(`session-${targetId}`);
@@ -151,11 +154,11 @@ function fakeChromium() {
             if (expression.endsWith("document.readyState")) {
               return { result: { value: "complete" } };
             }
-            if (/\.locate\(\d+\)$/.test(expression)) {
-              return { result: { value: locateResult } };
-            }
-            if (/\.clear\(\d+\)$/.test(expression)) {
-              return { result: { value: true } };
+            const action = expression.match(/\.act\((.*)\)$/);
+            if (action) {
+              const tool = toolInvocation.parse(JSON.parse(action[1]!));
+              const refused = tool.name === "browser_press" || tool.name === "browser_type" && tool.args.submit || actionRefused;
+              return { result: { value: refused ? { kind: "refused", reason: "the action did not run; take a new snapshot" } : { kind: "acted" } } };
             }
             return { result: { value: {
               output: `Title: page of ${String(sessionId)}`,
@@ -286,8 +289,8 @@ describe("browser", () => {
     const browser = browserOf();
     await look(browser, "a");
     expect(machine.openLeases()).toBe(0);
-    chromium.setLocate(null);
-    await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    chromium.refuseAction();
+    await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", aim: elementAim(9), args: { ref: 9 } }, signal });
     expect(machine.openLeases()).toBe(0);
   });
 
@@ -328,17 +331,21 @@ describe("browser", () => {
   it("sends a bot's typing only to that bot's page", async () => {
     const browser = browserOf();
     await Promise.all([
-      browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "for a", submit: false } }, signal }),
-      browser.execute({ browsing: undefined, botId: "b", tool: { name: "browser_type", args: { ref: 1, text: "for b", submit: false } }, signal }),
+      browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "for a", submit: false } }, signal }),
+      browser.execute({ browsing: undefined, botId: "b", tool: { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "for b", submit: false } }, signal }),
     ]);
-    const typed = (target: FakeChromium) => target.sent.filter((entry) => entry.method === "Input.insertText").map((entry) => entry.params.text);
+    const typed = (target: FakeChromium) => target.sent.filter((entry) => entry.method === "Runtime.evaluate" && String(entry.params.expression).match(/\.act\(/)).map((entry) => {
+      const match = String(entry.params.expression).match(/\.act\((.*)\)$/)!;
+      const tool = toolInvocation.parse(JSON.parse(match[1]!));
+      return tool.name === "browser_type" ? tool.args.text : null;
+    });
     expect(typed(machine.chromiumOfBot("a"))).toEqual(["for a"]);
     expect(typed(machine.chromiumOfBot("b"))).toEqual(["for b"]);
   });
 
   it("reports a stale ref as an error that tells the bot what to do", async () => {
-    chromium.setLocate(null);
-    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 9 } }, signal });
+    chromium.refuseAction();
+    const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", aim: elementAim(9), args: { ref: 9 } }, signal });
     expect(result.outcome).toBe("error");
     expect(result.output).toContain("take a new snapshot");
   });
@@ -349,8 +356,8 @@ describe("browser", () => {
     chromium.closeSocket();
     chromium.pages.clear();
     chromium.pages.set("target-new", {});
-    chromium.setLocate(null);
-    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 3 } }, signal });
+    chromium.refuseAction();
+    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", aim: elementAim(3), args: { ref: 3 } }, signal });
     expect(result.outcome).toBe("error");
     expect(result.output).toContain("take a new snapshot");
     expect(chromium.sent.some((entry) => entry.method === "Input.dispatchMouseEvent")).toBe(false);
@@ -403,9 +410,9 @@ describe("browser", () => {
     const inputSent = () => chromium.sent.filter((entry) => entry.method.startsWith("Input."));
 
     it.each<BrowserInvocation>([
-      { name: "browser_click", args: { ref: 1 } },
-      { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
-      { name: "browser_press", args: { key: "Enter" } },
+      { name: "browser_click", aim: elementAim(1), args: { ref: 1 } },
+      { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "x", submit: true } },
+      { name: "browser_press", aim: focusAim, args: { key: "Enter" } },
       { name: "browser_navigate", args: { url: "https://example.com/" } },
     ])("sends nothing to the page for $name", async (tool) => {
       const result = await browserOf().execute({ browsing: undefined, botId: "a", tool, signal: cancelled() });
@@ -427,7 +434,7 @@ describe("browser", () => {
           },
         },
       });
-      const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal: abort.signal });
+      const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", aim: elementAim(1), args: { ref: 1 } }, signal: abort.signal });
       expect(result.outcome).toBe("cancelled");
       expect(inputSent()).toEqual([]);
       expect(machine.openLeases()).toBe(0);
@@ -468,7 +475,7 @@ describe("browser", () => {
       const queued = browser.execute({
         browsing: undefined,
         botId: "a",
-        tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
+        tool: { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "x", submit: true } },
         signal: abort.signal,
       });
       abort.abort(new Error("stopped"));
@@ -477,23 +484,10 @@ describe("browser", () => {
       expect(inputSent()).toEqual([]);
     });
 
-    it("does not press Enter when the cancel arrives after the text", async () => {
-      const browser = browserOf();
-      await look(browser, "a");
-      const abort = new AbortController();
-      chromium.onSend((method) => {
-        if (method === "Input.insertText") {
-          abort.abort(new Error("stopped"));
-        }
-      });
-      const result = await browser.execute({
-        browsing: undefined,
-        botId: "a",
-        tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } },
-        signal: abort.signal,
-      });
-      expect(result.outcome).toBe("cancelled");
-      expect(inputSent().some((entry) => entry.method === "Input.dispatchKeyEvent")).toBe(false);
+    it("refuses submit before typing while the native key decision is pending", async () => {
+      const result = await browserOf().execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "x", submit: true } }, signal });
+      expect(result.outcome).toBe("error");
+      expect(inputSent()).toEqual([]);
     });
   });
 
@@ -734,7 +728,7 @@ describe("browser", () => {
       const browser = quick();
       await look(browser, "a");
       chromium.freezePage();
-      await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", args: { ref: 1, text: "x", submit: true } }, signal });
+      await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_type", aim: elementAim(1), args: { ref: 1, text: "x", submit: true } }, signal });
       chromium.thaw();
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(chromium.sent.some((entry) => entry.method === "Input.insertText")).toBe(false);
@@ -1061,14 +1055,14 @@ describe("browser", () => {
     await look(browser, "a");
     let popup = "";
     chromium.onSend((method) => {
-      if (method === "Input.dispatchMouseEvent" && popup === "") {
+      if (method === "Runtime.evaluate" && popup === "") {
         popup = "pending";
         setTimeout(() => {
           popup = chromium.openPopup("target-0");
         }, 50);
       }
     });
-    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", args: { ref: 1 } }, signal });
+    const result = await browser.execute({ browsing: undefined, botId: "a", tool: { name: "browser_click", aim: elementAim(1), args: { ref: 1 } }, signal });
     expect(result.outcome).toBe("ok");
     expect(popup).toMatch(/^target-/);
     expect(result.output).toContain(`session-${popup}`);

@@ -11,6 +11,8 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { WebSocket } from "ws";
+import { fixtureAim } from "./page-fixture.ts";
+import type { PageView, PageAim } from "../packages/protocol/src/index.ts";
 import { webSocketConnector } from "../apps/computerd/src/browser.ts";
 import { parseLiveSlots, type Slot } from "../apps/computerd/src/desktops.ts";
 import type { Cookie } from "../apps/computerd/src/logins.ts";
@@ -249,7 +251,7 @@ function viewerOn(socket: WebSocket): { handshake: () => Promise<Viewer> } {
 
 let computer: WebSocket | null = null;
 let hellos = 0;
-const results = new Map<string, (output: { outcome: string; output: string }) => void>();
+const results = new Map<string, (output: { outcome: string; output: string; page?: PageView }) => void>();
 const dials = new Map<string, (viewer: ReturnType<typeof viewerOn>) => void>();
 const link = new WebSocketServer({ host: "127.0.0.1", port: 0 });
 await new Promise((resolve) => link.once("listening", resolve));
@@ -267,7 +269,7 @@ link.on("connection", (socket) => {
     hellos += 1;
     socket.send(JSON.stringify({ kind: "welcome" }));
     socket.on("message", (data: Buffer) => {
-      const message = JSON.parse(data.toString("utf8")) as { kind: string; callId: string; result: { outcome: string; output: string } };
+      const message = JSON.parse(data.toString("utf8")) as { kind: string; callId: string; result: { outcome: string; output: string; page?: PageView } };
       if (message.kind === "toolResult") {
         results.get(message.callId)?.(message.result);
       }
@@ -278,10 +280,10 @@ link.on("connection", (socket) => {
 setInterval(() => computer?.ping(), 10_000).unref();
 
 let calls = 0;
-async function browse(botId: string, tool: { name: string; args: Record<string, unknown> }): Promise<{ outcome: string; output: string }> {
+async function browse(botId: string, tool: { name: string; args: Record<string, unknown>; aim?: PageAim }): Promise<{ outcome: string; output: string; page?: PageView }> {
   calls += 1;
   const callId = `verifylogins:${randomBytes(4).toString("hex")}${calls}`;
-  const answer = new Promise<{ outcome: string; output: string }>((resolve) => results.set(callId, resolve));
+  const answer = new Promise<{ outcome: string; output: string; page?: PageView }>((resolve) => results.set(callId, resolve));
   computer?.send(JSON.stringify({ kind: "toolCall", callId, botId, tool }));
   return Promise.race([
     answer,
@@ -425,7 +427,7 @@ async function runChecks(): Promise<void> {
   check(await until(async () => (await baselines()).length === 0, 10_000), "the baseline is gone after the push");
 
   const refOf = (output: string, label: string) => Number(new RegExp(`\\[(\\d+)\\] [^\\n]*${label}`).exec(output)?.[1]);
-  const afterPush = await browse(BOTS.b, { name: "browser_click", args: { ref: refOf(firstB?.output ?? "", "check") } });
+  const afterPush = await browse(BOTS.b, { name: "browser_click", aim: fixtureAim(firstB?.page, refOf(firstB?.output ?? "", "check")), args: { ref: refOf(firstB?.output ?? "", "check") } });
   check(titleOf(afterPush.output) === loadedB, "the running bot's page did not reload");
   check(afterPush.output.includes(signedInAs(firstUser)), "the running bot's own page is signed in with no reload");
 

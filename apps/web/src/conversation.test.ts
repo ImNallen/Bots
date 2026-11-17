@@ -324,6 +324,14 @@ describe("conversationItems", () => {
       });
     });
 
+    it("shows a browser subject without requesting a desktop picture", () => {
+      const call = { id: "c1", name: "browser_click", arguments: JSON.stringify({ ref: 1 }) };
+      const subject = "Click “Commit” on https://example.com";
+      const item = only(itemsOf([pendingRun(call)], [{ ...approval(), subject }]), "approval");
+      expect(item.arguments).toEqual([{ label: null, value: subject }]);
+      expect(item.picture).toBe(false);
+    });
+
     it("keeps each argument apart and keeps a string's line breaks", () => {
       const call = { id: "c1", name: "write_file", arguments: JSON.stringify({ path: "a.md", content: "one\ntwo", mode: { x: 1 } }) };
       expect(only(itemsOf([pendingRun(call)], [approval()]), "approval").arguments).toEqual([

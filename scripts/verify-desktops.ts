@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { MAX_MARKS, MAX_SCREEN_IMAGE_BYTES, type DesktopInputRequest, type ToolResult } from "../packages/protocol/src/index.ts";
+import { fixtureAim } from "./page-fixture.ts";
 import { createBrowser } from "../apps/computerd/src/browser.ts";
 import { createDesktop } from "../apps/computerd/src/desktop.ts";
 import { aimDesktopInput } from "../apps/orchestrator/src/desktop.ts";
@@ -59,7 +60,12 @@ const desktops = createDesktops({ systemd: counted, runtimeDir: RUNTIME_DIR, now
 const browser = createBrowser({ desktops });
 const desktop = createDesktop({ desktops });
 
-const browse = (botId: string, tool: Parameters<typeof browser.execute>[0]["tool"]) => browser.execute({ botId, tool, browsing: undefined, signal });
+const pages = new Map<string, NonNullable<ToolResult["page"]>>();
+const browse = async (botId: string, tool: Parameters<typeof browser.execute>[0]["tool"]) => {
+  const result = await browser.execute({ botId, tool, browsing: undefined, signal });
+  if (result.page) pages.set(botId, result.page);
+  return result;
+};
 const refOf = (output: string, label: string): number => Number(new RegExp(`\\[(\\d+)\\] [^\\n]*${label}`).exec(output)?.[1]);
 
 let startedAt = performance.now();
@@ -74,7 +80,7 @@ check(firstB?.outcome === "ok" && firstB.output.includes(`Title: page of ${BOTS[
 const screenOf = (output: string | undefined): string | undefined => /^Screen (\d)/.exec(output ?? "")?.[1];
 check(screenOf(firstA?.output) !== screenOf(firstB?.output), "they are on different screens", `${screenOf(firstA?.output)} ${screenOf(firstB?.output)}`);
 
-const clicked = await browse(BOTS[0], { name: "browser_click", args: { ref: refOf(firstA?.output ?? "", "go to example") } });
+const clicked = await browse(BOTS[0], { name: "browser_click", aim: fixtureAim(firstA?.page, refOf(firstA?.output ?? "", "go to example")), args: { ref: refOf(firstA?.output ?? "", "go to example") } });
 check(clicked.output.includes("Example Domain"), "the first bot clicks a link and lands on a real website", clicked.output);
 const wikipedia = await browse(BOTS[1], { name: "browser_navigate", args: { url: "https://en.wikipedia.org/wiki/Linux" } });
 check(wikipedia.output.includes("Linux - Wikipedia"), "the second bot opens another real website", wikipedia.output);
@@ -105,7 +111,7 @@ for (const botId of BOTS) {
 
 const popupPage = pageWith("the opener", `<button onclick="const w = window.open('about:blank', '_blank', 'width=600,height=400'); w.document.title = 'the popup'">open a popup</button>`);
 const opener = await browse(BOTS[0], { name: "browser_navigate", args: { url: popupPage } });
-const popup = await browse(BOTS[0], { name: "browser_click", args: { ref: refOf(opener.output, "open a popup") } });
+const popup = await browse(BOTS[0], { name: "browser_click", aim: fixtureAim(opener.page, refOf(opener.output, "open a popup")), args: { ref: refOf(opener.output, "open a popup") } });
 check(popup.output.includes("Title: the popup"), "a popup becomes the page the bot acts on", popup.output);
 const afterRestart = await createBrowser({ desktops }).execute({ botId: BOTS[0], tool: { name: "browser_snapshot", args: {} }, browsing: undefined, signal });
 check(afterRestart.output.includes("Title: the popup"), "a popup stays current across a computerd restart, because Chromium says who opened it", afterRestart.output);
@@ -115,7 +121,7 @@ await new Promise((done) => setTimeout(done, 800));
 const backOnOpener = await browse(BOTS[0], { name: "browser_snapshot", args: {} });
 check(backOnOpener.output.includes("Title: the opener"), "when the popup closes, the bot is back on the page that opened it", backOnOpener.output);
 
-const stale = await browse(BOTS[0], { name: "browser_click", args: { ref: 999 } });
+const stale = await browse(BOTS[0], { name: "browser_click", aim: fixtureAim(opener.page, refOf(opener.output, "open a popup")), args: { ref: 999 } });
 check(stale.outcome === "error" && stale.output.includes("take a new snapshot"), "a ref that is not on the page answers with the stale ref error", stale.output);
 
 const personSlot = (leases.get(BOTS[1]) as DesktopLease).slot;
@@ -290,7 +296,7 @@ const [slotA, slotB] = slots as [Slot, Slot];
 await desktops.sweep();
 check(await portAnswers(cdpOf(slotA)), "a sweep keeps a desktop with an open lease");
 check(!(await portAnswers(cdpOf(slotB))), "a sweep stops an idle desktop, and its port is closed when the sweep returns");
-const returned = await browse(BOTS[1], { name: "browser_click", args: { ref: 1 } });
+const returned = await browse(BOTS[1], { name: "browser_click", aim: fixtureAim(pages.get(BOTS[1]), 1), args: { ref: 1 } });
 check(returned.outcome === "error" && returned.output.includes("take a new snapshot"), "a bot back after an idle stop gets the stale ref error, and clicks nothing", returned.output);
 const blank = await browse(BOTS[1], { name: "browser_snapshot", args: {} });
 check(blank.output.includes("URL: about:blank"), "its next snapshot says about:blank", blank.output);

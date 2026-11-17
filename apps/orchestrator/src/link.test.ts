@@ -150,6 +150,17 @@ describe("link", () => {
       expect(await computer.closed).toBe(1005);
     });
 
+    it("refuses aimed browser input when a peer announces only the old names", async () => {
+      const computer = await connectComputer(["browser_type"]);
+      const tool: ToolInvocation = { name: "browser_type", args: { ref: 1, text: "x", submit: false }, aim: {
+        kind: "element", snapshotId: "00000000-0000-4000-8000-000000000001", origin: null,
+        target: { ref: 1, words: "field", control: { kind: "field", field: "line", readOnly: false } },
+      } };
+      const result = await link.call({ ...callArgs("run:page-old"), tool });
+      expect(result.output).toBe(OLDER_COMPUTERD_OUTPUT);
+      expect(computer.received.some(message => message.kind === "toolCall")).toBe(false);
+    });
+
     it("never sends a desktop tool to a computerd from before the announcement", async () => {
       const computer = await connectComputer();
       expect(await link.call({ ...callArgs("a:look"), tool: { name: "desktop_look", args: {} } })).toEqual({ outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false });

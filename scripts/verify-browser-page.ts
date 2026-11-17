@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
-import { OUTPUT_CAP_BYTES, PAGE_LIMITS, pageView, type BrowserInvocation, type Browsing, type ToolResult } from "@bots/protocol";
+import { OUTPUT_CAP_BYTES, PAGE_LIMITS, pageView, isPageInputRequest, type BrowserInvocation, type PageInputRequest, type PageView, type Browsing, type ToolResult } from "@bots/protocol";
+import { aimPageInput } from "../apps/orchestrator/src/page.ts";
 import { createBrowser, webSocketConnector, type Cdp } from "../apps/computerd/src/browser.ts";
+import { NORMAL_VALUE_READS, PASSWORD_VALUE_GUARD } from "./page-fixture.ts";
 
 const requestCookies: (string | undefined)[] = [];
 const server = createServer((req, res) => {
@@ -35,6 +37,7 @@ assert.ok(address && typeof address !== "string");
 const site = `http://127.0.0.1:${address.port}`;
 let inspector: Cdp | undefined;
 let transport: Cdp | undefined;
+let ownerWorld: { client: Cdp; contextId: number; sessionId: string } | undefined;
 const portReservation = createServer();
 await new Promise<void>((resolve) => portReservation.listen(0, "127.0.0.1", resolve));
 const reserved = portReservation.address();
@@ -46,13 +49,32 @@ try {
   inspector = await webSocketConnector(port);
   const browser = createBrowser({
     desktops: { acquire: async () => ({ slot: 1, cdpPort: port, release() {} }) },
-    connector: async (cdpPort) => { transport = await webSocketConnector(cdpPort); return transport; },
+    connector: async (cdpPort) => {
+      const client = await webSocketConnector(cdpPort); transport = client;
+      return { ...client, send: async (method, params, sessionId) => {
+        const result = await client.send(method, params, sessionId);
+        if (method === "Page.createIsolatedWorld" && typeof params?.worldName === "string" && params.worldName.startsWith("bots.page.") && typeof result.executionContextId === "number" && sessionId !== undefined) {
+          ownerWorld = { client, contextId: result.executionContextId, sessionId };
+          const guarded = await client.send("Runtime.evaluate", { contextId: result.executionContextId, expression: PASSWORD_VALUE_GUARD }, sessionId);
+          assert.equal(guarded.exceptionDetails, undefined);
+        }
+        return result;
+      } };
+    },
   });
-  const execute = async (tool: BrowserInvocation, browsing?: Browsing) => {
+  let lastPage: PageView | null = null;
+  const execute = async (request: Exclude<BrowserInvocation, { aim: unknown }> | PageInputRequest, browsing?: Browsing) => {
+    let tool: BrowserInvocation;
+    if (isPageInputRequest(request)) {
+      const prepared = aimPageInput(request, lastPage);
+      assert.equal(prepared.kind, "computer");
+      tool = prepared.tool;
+    } else tool = request;
     const result = await browser.execute({ botId: "proof", tool, browsing, signal: AbortSignal.timeout(15000) });
     assert.equal(result.outcome, "ok", result.output);
     assert.ok(result.page, result.output);
     pageView.parse(result.page);
+    lastPage = result.page;
     assert.ok(Buffer.byteLength(result.output) <= OUTPUT_CAP_BYTES);
     assert.ok(Buffer.byteLength(JSON.stringify(result.page)) <= PAGE_LIMITS.jsonBytes);
     const refs = [...result.output.matchAll(/^\[(\d+)\]/gm)].map((m) => Number(m[1]));
@@ -122,23 +144,14 @@ try {
   assert.ok(controls?.some((t) => t.control.kind === "field" && t.control.field === "secret"));
   assert.ok(!JSON.stringify(result).includes("never-retain-this"));
   assert.ok(!result.output.includes("poisoned"));
-  const targets = await inspector.send("Target.getTargets");
-  assert.ok(Array.isArray(targets.targetInfos));
-  const target = targets.targetInfos.find((t: { url: string }) => t.url === `${site}/`);
-  assert.ok(target);
-  const session = await inspector.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
-  assert.equal(typeof session.sessionId, "string");
-  const sessionId = String(session.sessionId);
-  const tree = await inspector.send("Page.getFrameTree", {}, sessionId);
-  const frame = tree.frameTree as { frame: { id: string } };
-  const world = await inspector.send("Page.createIsolatedWorld", { frameId: frame.frame.id, worldName: "bots.page" }, sessionId);
-  const instrumented = await inspector.send("Runtime.evaluate", { contextId: world.executionContextId, expression: `(() => { const get = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').get; Object.defineProperty(HTMLInputElement.prototype,'value',{get(){if(this.type==='password')throw new Error('password read');return get.call(this)}}); })()` }, sessionId);
-  assert.equal(instrumented.exceptionDetails, undefined);
   result = await execute({ name: "browser_click", args: { ref: ref(result, "Click me") } });
   assert.ok(result.page?.targets.some((t) => t.words === "Clicked"));
   assert.notEqual(result.page?.snapshotId, first);
   result = await execute({ name: "browser_type", args: { ref: ref(result, "Ordinary"), text: "typed normally", submit: false } });
   assert.match(result.output, /typed normally/);
+  assert.ok(ownerWorld);
+  const reads = await ownerWorld.client.send("Runtime.evaluate", { contextId: ownerWorld.contextId, expression: NORMAL_VALUE_READS, returnByValue: true }, ownerWorld.sessionId);
+  assert.ok(reads.result && typeof reads.result === "object" && "value" in reads.result && typeof reads.result.value === "number" && reads.result.value > 0, "The value getter must be instrumented in the real owner world");
   console.log("ok isolated native facts, forged refs, click/type, fresh identity, password nonaccess");
   result = await execute({ name: "browser_click", args: { ref: ref(result, "Open popup") } });
   assert.match(result.output, /Title: popup/);

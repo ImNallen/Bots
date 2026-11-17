@@ -2,6 +2,7 @@ import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import {
   isDesktopInputRequest,
+  isPageInputRequest,
   isDesktopInvocation,
   isMemoryInvocation,
   isQuietInvocation,
@@ -13,6 +14,7 @@ import {
   WORKSPACE_ROOT,
   type Box,
   type ModelInvocation,
+  type PageInputRequest,
   type ToolInvocation,
 } from "@bots/protocol";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
@@ -30,7 +32,8 @@ import {
   decideTool,
   waitForApproval,
 } from "./approvals.ts";
-import { decideByRules, desktopAim } from "./rules.ts";
+import { aimPageInput, loadPage, retainedPageInput } from "./page.ts";
+import { decideByRules, desktopAim, type PageFacts } from "./rules.ts";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { historyOf, threadEventOf, type ThreadEvent } from "./history.ts";
 import { PROVIDER_LABEL, completeWithRetry, type CompletionResult, type MistralUserChunk, type ModelProvider } from "./mistral.ts";
@@ -186,9 +189,9 @@ type Prepared =
   | { kind: "invalid"; reason: string }
   | { kind: "stored"; body: AppendBody }
   | { kind: "search"; query: string }
-  | { kind: "computer"; tool: ToolInvocation; detail: { subject?: string; box?: Box } };
+  | { kind: "computer"; tool: ToolInvocation; detail: { subject?: string; box?: Box; pageAim?: string }; facts?: PageFacts };
 
-async function prepareCall(invocation: ModelInvocation, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
+async function prepareCall(invocation: Exclude<ModelInvocation, PageInputRequest>, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
   if (isMemoryInvocation(invocation)) {
     switch (invocation.name) {
       case "memory_save":
@@ -321,7 +324,7 @@ async function callModel(args: {
   return result;
 }
 
-async function runTool(args: {
+export async function runTool(args: {
   deps: RunnerDeps;
   runId: Id<"runs">;
   claim: Claim;
@@ -337,8 +340,12 @@ async function runTool(args: {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
-  const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   const { invocation } = parsed;
+  let retained = await deps.service.query(api.approvals.forCall, { runId, toolCallId: call.id });
+  if (retained?.state === "denied" || retained?.state === "expired") {
+    return { ...base, outcome: "denied", output: retained.state === "denied" ? DENIED_OUTPUT : EXPIRED_OUTPUT, truncated: false };
+  }
+  const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   let decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
@@ -348,7 +355,13 @@ async function runTool(args: {
     deps.log({ level: "info", event: "tool-refused", runId, toolCallId: call.id });
     return { ...base, outcome: "error", output: ROUTINE_ONLY_OUTPUT, truncated: false };
   }
-  const prepared = await prepareCall(invocation, call.id, () => loadScreen(deps.service, runId));
+  if (retained !== null) decision = "ask";
+  let prepared: Prepared;
+  if (isPageInputRequest(invocation)) {
+    prepared = retained === null
+      ? aimPageInput(invocation, await loadPage(deps.service, runId))
+      : retainedPageInput(invocation, retained.pageAim);
+  } else prepared = await prepareCall(invocation, call.id, () => loadScreen(deps.service, runId));
   if (prepared.kind === "invalid") {
     deps.log({ level: "info", event: "tool-invalid", runId, toolCallId: call.id });
     return { ...base, outcome: "invalid", output: prepared.reason, truncated: false };
@@ -357,7 +370,7 @@ async function runTool(args: {
   let reason: string | undefined;
   if (decision === "byRules") {
     const aim = prepared.kind === "computer" && isDesktopInvocation(prepared.tool) && prepared.tool.name !== "desktop_look" ? desktopAim(prepared.tool) : null;
-    const outcome = decideByRules({ invocation, aim, page: null, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
+    const outcome = decideByRules({ invocation, aim, page: prepared.kind === "computer" ? prepared.facts ?? null : null, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
     deps.log({ level: "info", event: "tool-rule", runId, toolCallId: call.id, rule: outcome.rule, run: outcome.run });
     decision = outcome.run ? "run" : "ask";
     reason = outcome.run ? undefined : outcome.reason;
@@ -365,8 +378,10 @@ async function runTool(args: {
   if (decision === "ask") {
     const detail = prepared.kind === "computer" ? prepared.detail : {};
     const answer = await waitForApproval({
-      request: () =>
-        deps.service.mutation(api.approvals.request, { runId, toolCallId: call.id, toolName: invocation.name, ...detail, ...(reason === undefined ? {} : { reason }) }),
+      request: async () => {
+        retained ??= await deps.service.mutation(api.approvals.request, { runId, leaseToken: claim.leaseToken, toolCallId: call.id, toolName: invocation.name, ...detail, ...(reason === undefined ? {} : { reason }) });
+        return retained;
+      },
       read: (approvalId) => deps.service.query(api.approvals.stateOf, { approvalId }),
       expire: (approvalId) => deps.service.mutation(api.approvals.expire, { approvalId }),
       now: Date.now,
@@ -389,6 +404,10 @@ async function runTool(args: {
       case "expired":
         return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
     }
+  }
+  if (isPageInputRequest(invocation) && retained !== null) {
+    prepared = retainedPageInput(invocation, retained.pageAim);
+    if (prepared.kind === "invalid") return { ...base, outcome: "invalid", output: prepared.reason, truncated: false };
   }
   if (prepared.kind === "stored") {
     return prepared.body;
