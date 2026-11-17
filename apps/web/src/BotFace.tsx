@@ -1,8 +1,6 @@
 import { useEffect, useRef } from "react";
-import { tintOf, type Character } from "./character.ts";
+import { SHAPES, displayShape, tintOf, type Character } from "./character.ts";
 import happySage from "./assets/mascot/happy-sage.svg";
-import happyBlue from "./assets/mascot/happy-blue.svg";
-import happyPeach from "./assets/mascot/happy-peach.svg";
 
 export type FaceState = "idle" | "thinking" | "working" | "needsApproval" | "held" | "success" | "error";
 
@@ -58,12 +56,11 @@ export function BotFace({ character, size, state = "idle", badge = false }: { ch
     };
   }, [state]);
 
-  const happy = character.color === "blue" ? happyBlue : character.color === "orange" ? happyPeach : happySage;
   const eyes = EYES[state === "success" ? "idle" : state];
   const drawing = (
-    <svg ref={face} className="tint face" {...tintOf(character.color)} data-state={state} width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect className="face-body" width="64" height="64" rx="30" />
-      {state === "success" ? <image href={happy} width="64" height="64" /> : (
+    <svg ref={face} className="tint face" {...tintOf(character.color)} data-state={state} data-shape={displayShape(character.shape)} width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+      <path className="face-body" d={SHAPES[displayShape(character.shape)].d} />
+      {state === "success" ? <image href={happySage} width="64" height="64" /> : (
         <g className="face-gaze"><g className="face-eyes">
           {eyes.map(([x, y, width, height], index) => <rect key={index} className="face-eye" x={x} y={y} width={width} height={height} rx={4} />)}
         </g></g>

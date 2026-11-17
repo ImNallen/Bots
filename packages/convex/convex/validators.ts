@@ -175,4 +175,5 @@ export const botColor = v.union(
   v.literal("purple"),
   v.literal("pink"),
   v.literal("grey"),
+  v.literal("lemon"),
 );

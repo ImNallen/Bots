@@ -184,10 +184,11 @@ export const setApprovalLevel = mutation({
 });
 
 export const setCharacter = mutation({
-  args: { botId: v.id("bots"), shape: botShape, color: botColor },
+  args: { botId: v.id("bots"), shape: v.optional(botShape), color: v.optional(botColor) },
   handler: async (ctx, { botId, shape, color }) => {
     await requireOwnedBot(ctx, botId);
-    await ctx.db.patch(botId, { shape, color });
+    if (shape === undefined && color === undefined) throw new ConvexError("Choose a color or shape");
+    await ctx.db.patch(botId, { ...(shape === undefined ? {} : { shape }), ...(color === undefined ? {} : { color }) });
   },
 });
 

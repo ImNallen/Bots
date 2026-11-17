@@ -11,6 +11,7 @@ import { characterOf, tintOf, type Character } from "./character.ts";
 import { composerView, heldRunEnded, type HeldSend } from "./composerState.ts";
 import { conversationItems, isActive } from "./conversation.ts";
 import { Icon } from "./Icon.tsx";
+import { useCharacterMutation } from "./useCharacterMutation.ts";
 import { InfoPanel } from "./InfoPanel.tsx";
 import type { ProfileEdits } from "./profileEdits.ts";
 import { browserTimeZone } from "./routines.ts";
@@ -345,6 +346,7 @@ function BotChat({ botId }: { botId: string }) {
   const [screenCoversChat, setScreenCoversChat] = useState(false);
   const [screenRequest, setScreenRequest] = useState(0);
   const [profileEdits, setProfileEdits] = useState<ProfileEdits>({});
+  const characterSave = useCharacterMutation();
   const activity = useShownActivity(rows?.find((row) => row._id === botId) ?? NO_ROW);
   if (bot === undefined) {
     return (
@@ -414,6 +416,7 @@ function BotChat({ botId }: { botId: string }) {
         {(info === true || routines === true) && (
           <InfoPanel
             bot={bot}
+            characterSave={characterSave}
             faceState={faceState}
             showRoutines={routines === true}
             profileEdits={profileEdits}
