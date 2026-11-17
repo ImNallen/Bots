@@ -45,9 +45,8 @@ export const COLORS = {
 
 export const COLOR_NAMES = ["green", "blue", "orange", "purple", "pink", "teal", "amber", "brown", "red", "grey", "black", "lemon"] as const satisfies readonly BotColor[];
 
-// These tuples are the historical hash vocabulary. Picker changes must never reassign existing bots.
-const DERIVED_SHAPES = ["ball", "bun", "tile", "sparkle", "clover", "heart", "flower", "egg", "bean", "peak", "gem", "burst", "hex"] as const;
-const DERIVED_COLORS = ["brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink"] as const;
+const HISTORICAL_HASH_SHAPES = ["ball", "bun", "tile", "sparkle", "clover", "heart", "flower", "egg", "bean", "peak", "gem", "burst", "hex"] as const;
+const HISTORICAL_HASH_COLORS = ["brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink"] as const;
 
 function hashOf(text: string): number {
   let hash = 0x811c9dc5;
@@ -60,8 +59,8 @@ function hashOf(text: string): number {
 export function characterOf(bot: { _id: string; shape?: BotShape; color?: BotColor }): Character {
   const hash = hashOf(bot._id);
   return {
-    shape: bot.shape ?? (DERIVED_SHAPES[hash % DERIVED_SHAPES.length] ?? "ball"),
-    color: bot.color ?? (DERIVED_COLORS[(hash >>> 8) % DERIVED_COLORS.length] ?? "green"),
+    shape: bot.shape ?? (HISTORICAL_HASH_SHAPES[hash % HISTORICAL_HASH_SHAPES.length] ?? "ball"),
+    color: bot.color ?? (HISTORICAL_HASH_COLORS[(hash >>> 8) % HISTORICAL_HASH_COLORS.length] ?? "green"),
   };
 }
 

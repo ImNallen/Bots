@@ -4,7 +4,7 @@ import type { FunctionArgs } from "convex/server";
 import type { OptimisticLocalStore } from "convex/browser";
 import { useMutation } from "convex/react";
 import { useRef, useState } from "react";
-import type { CharacterPatch } from "./character.ts";
+import type { BotColor, BotShape, CharacterPatch } from "./character.ts";
 import { errorMessage } from "./session.tsx";
 
 function optimisticCharacter(store: OptimisticLocalStore, { botId, ...patch }: FunctionArgs<typeof api.bots.setCharacter>) {
@@ -18,19 +18,40 @@ function optimisticCharacter(store: OptimisticLocalStore, { botId, ...patch }: F
 
 type AppearanceIntent = CharacterPatch & { botId: Id<"bots"> };
 type Failure = { patch: AppearanceIntent; message: string };
+type FieldFailures = {
+  shape?: { botId: Id<"bots">; value: BotShape; message: string };
+  color?: { botId: Id<"bots">; value: BotColor; message: string };
+};
 
 export function useCharacterMutation() {
   const mutate = useMutation(api.bots.setCharacter).withOptimisticUpdate(optimisticCharacter);
-  const latest = useRef(0);
-  const [failure, setFailure] = useState<Failure | null>(null);
+  const latest = useRef({ shape: 0, color: 0 });
+  const [failures, setFailures] = useState<FieldFailures>({});
 
   function save(patch: AppearanceIntent) {
-    const token = ++latest.current;
-    setFailure(null);
+    const shapeToken = patch.shape === undefined ? undefined : ++latest.current.shape;
+    const colorToken = patch.color === undefined ? undefined : ++latest.current.color;
+    setFailures((current) => ({
+      ...current,
+      ...(patch.shape === undefined ? {} : { shape: undefined }),
+      ...(patch.color === undefined ? {} : { color: undefined }),
+    }));
     void mutate(patch).catch((error: unknown) => {
-      if (token === latest.current) setFailure({ patch, message: errorMessage(error) });
+      const message = errorMessage(error);
+      setFailures((current) => ({
+        ...current,
+        ...(patch.shape !== undefined && shapeToken === latest.current.shape
+          ? { shape: { botId: patch.botId, value: patch.shape, message } } : {}),
+        ...(patch.color !== undefined && colorToken === latest.current.color
+          ? { color: { botId: patch.botId, value: patch.color, message } } : {}),
+      }));
     });
   }
 
+  const failure: Failure | null = failures.shape
+    ? { patch: { botId: failures.shape.botId, shape: failures.shape.value, ...(failures.color ? { color: failures.color.value } : {}) }, message: failures.shape.message }
+    : failures.color
+      ? { patch: { botId: failures.color.botId, color: failures.color.value }, message: failures.color.message }
+      : null;
   return { save, failure };
 }
