@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
-import { capText, type BrowserInvocation, type Browsing, type ToolResult } from "@bots/protocol";
+import { capText, OUTPUT_CAP_BYTES, PAGE_LIMITS, pageView, type BrowserInvocation, type Browsing, type ToolResult } from "@bots/protocol";
 import { WebSocket } from "ws";
-import type { Desktops } from "./desktops.ts";
+import { SLOTS, type Desktops } from "./desktops.ts";
 import { log } from "./log.ts";
 
 const CDP_CONNECT_TIMEOUT_MS = 5000;
@@ -50,73 +52,185 @@ export type Cdp = {
 
 export type CdpConnector = (cdpPort: number) => Promise<Cdp>;
 
-// This runs in the page. It numbers what a bot can act on, and it never reads the value of a password field.
-const SNAPSHOT_SCRIPT = (showLinkAddresses: boolean) => `(() => {
-  const MAX_TEXT = 120;
-  const MAX_URL = 300;
-  const MAX_LINK = 200;
-  const INTERACTIVE = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=menuitem],[role=tab],[contenteditable=true],[onclick]';
-  const visible = (e) => {
-    const r = e.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) return false;
-    const s = getComputedStyle(e);
-    return s.visibility !== 'hidden' && s.display !== 'none';
+const PAGE_WORLD = "bots.page";
+const PAGE_ACCESS = 'globalThis[Symbol.for("bots.page.owner")]';
+const SCREEN_PREFIX_BYTES = Math.max(...SLOTS.map((slot) => Buffer.byteLength(`Screen ${slot}\n`)));
+const PAGE_OWNER = `(() => {
+  if (${PAGE_ACCESS}) return;
+  let refs = new Map();
+  const element = (ref) => {
+    const e = refs.get(ref);
+    return e && e.isConnected && e.ownerDocument === document ? e : null;
   };
-  const clean = (t) => (t ?? '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT);
-  const address = (e) => {
-    if (!${showLinkAddresses} || !e.matches('a[href]')) return '';
-    const href = String(e.href);
-    if (!/^https?:/i.test(href)) return '';
-    return ' to: ' + (href.length > MAX_LINK ? href.slice(0, MAX_LINK) + '...' : href);
-  };
-  const label = (e) => clean(e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt') || e.innerText || e.getAttribute('name') || '');
-  document.querySelectorAll('[data-bots-ref]').forEach((e) => e.removeAttribute('data-bots-ref'));
-  let next = 1;
-  const lines = [];
-  const walk = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const t = clean(node.textContent);
-      if (t !== '' && node.parentElement && visible(node.parentElement)) lines.push(t);
-      return;
+  ${PAGE_ACCESS} = {
+    locate(ref) {
+      const e = element(ref);
+      if (!e) return null;
+      e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const r = e.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    },
+    clear(ref) {
+      const e = element(ref);
+      if (!e) return false;
+      e.focus();
+      if (typeof e.select === 'function') e.select();
+      else document.execCommand('selectAll');
+      return true;
+    },
+    capture(snapshotId, showLinkAddresses) {
+      refs = new Map();
+      const limits = ${JSON.stringify(PAGE_LIMITS)};
+      let visits = 0;
+      let truncated = false;
+      const encoder = new TextEncoder();
+      const bytes = (s) => encoder.encode(s).length;
+      const clean = (s) => {
+        if (s && s.length > limits.words) truncated = true;
+        return (s ?? '').slice(0, 512).replace(/\\s+/g, ' ').trim().slice(0, limits.words).toWellFormed();
+      };
+      const interactive = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=switch],[role=menuitem],[role=tab],[role=option],[contenteditable],[onclick]';
+      const visit = () => {
+        if (++visits <= 10000) return true;
+        truncated = true;
+        return false;
+      };
+      const visible = (e) => {
+        const r = e.getBoundingClientRect();
+        if (!r.width || !r.height) return false;
+        const s = getComputedStyle(e);
+        return s.visibility !== 'hidden' && s.display !== 'none';
+      };
+      const skip = (e) => ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'].includes(e.tagName.toUpperCase());
+      const rendered = (e) => {
+        const style = getComputedStyle(e);
+        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
+      };
+      const breaksLine = (e) => e.tagName === 'BR' || /^(block|flex|grid|table|list-item|flow-root)/.test(getComputedStyle(e).display);
+      // substringData returns at most the requested number of characters.
+      const text = (root, renderedOnly = true) => {
+        if (renderedOnly && getComputedStyle(root).display === 'none') return '';
+        let value = '';
+        let n = root.firstChild;
+        let count = 0;
+        while (n && value.length < 512 && count++ < 64) {
+          if (!visit()) break;
+          if (n.nodeType === Node.TEXT_NODE && (!renderedOnly || rendered(n.parentElement))) value += n.substringData(0, 512 - value.length);
+          if (n.nodeType === Node.ELEMENT_NODE) {
+            if (!skip(n) && (!renderedOnly || getComputedStyle(n).display !== 'none')) {
+              if (renderedOnly && breaksLine(n)) value += ' ';
+              if (n.firstChild) { n = n.firstChild; continue; }
+            }
+          }
+          while (n !== root && !n.nextSibling) {
+            if (renderedOnly && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
+            n = n.parentNode;
+          }
+          if (renderedOnly && n !== root && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
+          n = n === root ? null : n.nextSibling;
+        }
+        if (n) truncated = true;
+        return clean(value);
+      };
+      const label = (e) => clean(e.getAttribute('aria-label')) || (e.labels?.[0] ? text(e.labels[0]) : '') ||
+        clean(e.getAttribute('placeholder')) || clean(e.getAttribute('title')) || clean(e.getAttribute('alt')) ||
+        text(e) || clean(e.getAttribute('name'));
+      const classify = (e) => {
+        if (e instanceof HTMLInputElement) {
+          if (e.type === 'password') return { kind: 'field', field: 'secret', readOnly: e.readOnly };
+          if (['text', 'search', 'email', 'url', 'tel'].includes(e.type))
+            return { kind: 'field', field: 'line', readOnly: e.readOnly };
+          if (['submit', 'image'].includes(e.type)) return { kind: 'submit' };
+          if (['checkbox', 'radio'].includes(e.type)) return { kind: 'choice' };
+          return { kind: 'button' };
+        }
+        if (e instanceof HTMLTextAreaElement) return { kind: 'field', field: 'lines', readOnly: e.readOnly };
+        if (e instanceof HTMLButtonElement) return { kind: e.type === 'submit' ? 'submit' : 'button' };
+        if (e instanceof HTMLAnchorElement && e.hasAttribute('href')) return { kind: 'link' };
+        if (e instanceof HTMLSelectElement) return { kind: 'choice' };
+        if (e.isContentEditable) return { kind: 'field', field: 'rich', readOnly: false };
+        if (['checkbox', 'switch', 'tab', 'option'].includes(e.getAttribute('role'))) return { kind: 'choice' };
+        return { kind: 'button' };
+      };
+      const origin = /^https?:$/.test(location.protocol) && location.origin.length <= limits.origin ? location.origin : null;
+      const page = { snapshotId, origin, targets: [], truncated: false };
+      const title = document.querySelector('title');
+      let output = 'Title: ' + (title ? text(title, false) : '') + '\\nURL: ' + location.href.slice(0, 300) + '\\n';
+      let outputBytes = bytes(output);
+      let pageBytes = bytes(JSON.stringify(page));
+      let last = '';
+      const admit = (line, target, e) => {
+        if (!target && line === last) return true;
+        const size = bytes('\\n' + line);
+        const targetBytes = target ? bytes(JSON.stringify(target)) + 1 : 0;
+        if (outputBytes + size > ${OUTPUT_CAP_BYTES - SCREEN_PREFIX_BYTES} || pageBytes + targetBytes > limits.jsonBytes) {
+          truncated = true;
+          return false;
+        }
+        output += '\\n' + line;
+        outputBytes += size;
+        pageBytes += targetBytes;
+        last = line;
+        if (target) {
+          page.targets.push(target);
+          refs.set(target.ref, e);
+        }
+        return true;
+      };
+      const root = document.body ?? document.documentElement;
+      let n = root;
+      while (n) {
+        if (!visit()) break;
+        let descend = true;
+        if (n.nodeType === Node.TEXT_NODE) {
+          const value = clean(n.substringData(0, 512));
+          if (value && n.parentElement && visible(n.parentElement) && !admit(value)) break;
+        } else if (n.nodeType === Node.ELEMENT_NODE) {
+          const e = n;
+          if (skip(e)) descend = false;
+          else if (e.matches(interactive) && !(e instanceof HTMLInputElement && e.type === 'hidden') && visible(e)) {
+            if (page.targets.length === limits.targets) { truncated = true; break; }
+            const ref = page.targets.length + 1;
+            const words = label(e);
+            const control = classify(e);
+            const kind = clean(e.getAttribute('role')) || (e instanceof HTMLInputElement ? e.type : e.tagName.toLowerCase());
+            let value = '';
+            if (e instanceof HTMLInputElement && e.type === 'password') value = ' value: hidden';
+            else if (e instanceof HTMLSelectElement) value = ' selected: ' + (e.selectedIndex < 0 ? '' : text(e.options[e.selectedIndex]));
+            else if (e instanceof HTMLTextAreaElement || (e instanceof HTMLInputElement && !['checkbox', 'radio', 'submit', 'image', 'button', 'file'].includes(e.type))) {
+              const content = clean(e.value);
+              value = content ? ' value: ' + content : '';
+            } else if (e instanceof HTMLInputElement && ['checkbox', 'radio'].includes(e.type)) value = e.checked ? ' checked' : ' not checked';
+            let address = '';
+            if (showLinkAddresses && e instanceof HTMLAnchorElement && /^https?:/i.test(e.href)) {
+              const href = e.href;
+              address = ' to: ' + href.slice(0, 200) + (href.length > 200 ? '...' : '');
+            }
+            if (!admit('[' + ref + '] ' + kind + ' "' + words + '"' + value + address, { ref, words, control }, e)) break;
+            if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName) || e.matches('a[href]')) descend = false;
+          }
+        }
+        if (descend && n.firstChild) { n = n.firstChild; continue; }
+        while (n !== root && !n.nextSibling) n = n.parentNode;
+        n = n === root ? null : n.nextSibling;
+      }
+      page.truncated = truncated;
+      return { output, truncated, page };
     }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const e = node;
-    if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'].includes(e.tagName.toUpperCase())) return;
-    if (e.matches(INTERACTIVE) && visible(e)) {
-      const ref = next++;
-      e.setAttribute('data-bots-ref', String(ref));
-      const kind = e.getAttribute('role') || (e.tagName === 'INPUT' ? (e.getAttribute('type') || 'text') : e.tagName.toLowerCase());
-      let value = '';
-      if (e.tagName === 'SELECT') value = ' selected: ' + clean(e.options[e.selectedIndex]?.text);
-      else if (e.tagName === 'TEXTAREA' || (e.tagName === 'INPUT' && !['password', 'checkbox', 'radio', 'submit', 'button', 'file'].includes((e.getAttribute('type') || 'text').toLowerCase()))) value = e.value ? ' value: ' + clean(e.value) : '';
-      else if (e.tagName === 'INPUT' && (e.getAttribute('type') || '').toLowerCase() === 'password' && e.value) value = ' value: hidden';
-      else if (e.checked !== undefined && ['checkbox', 'radio'].includes((e.getAttribute('type') || '').toLowerCase())) value = e.checked ? ' checked' : ' not checked';
-      lines.push('[' + ref + '] ' + kind + ' "' + label(e) + '"' + value + address(e));
-      if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName)) return;
-      if (e.matches('a[href]')) return;
-    }
-    for (const child of e.childNodes) walk(child);
   };
-  walk(document.body ?? document.documentElement);
-  const deduped = lines.filter((l, i) => l !== lines[i - 1]);
-  return 'Title: ' + document.title + '\\nURL: ' + location.href.slice(0, MAX_URL) + '\\n\\n' + deduped.join('\\n');
 })()`;
 
-const LOCATE_SCRIPT = (ref: number) => `(() => {
-  const e = document.querySelector('[data-bots-ref="${ref}"]');
-  if (e === null) return null;
-  e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-  const r = e.getBoundingClientRect();
-  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-})()`;
+const observation = z.strictObject({ output: z.string().max(OUTPUT_CAP_BYTES), truncated: z.boolean(), page: pageView });
+const point = z.object({ x: z.number().finite(), y: z.number().finite() }).nullable();
+const evaluated = z.object({ result: z.object({ value: z.unknown() }) });
 
-const CLEAR_SCRIPT = (ref: number) => `(() => {
-  const e = document.querySelector('[data-bots-ref="${ref}"]');
-  if (e === null) return;
-  e.focus();
-  if (e.select) e.select();
-  else document.execCommand('selectAll');
-})()`;
+async function isolated(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
+  const { frameTree } = z.object({ frameTree: z.object({ frame: z.object({ id: z.string() }) }) }).parse(await client.send("Page.getFrameTree", {}, sessionId));
+  const { executionContextId } = z.object({ executionContextId: z.number().int() }).parse(await client.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: PAGE_WORLD }, sessionId));
+  const reply = await client.send("Runtime.evaluate", { expression: `${PAGE_OWNER};${expression}`, contextId: executionContextId, returnByValue: true }, sessionId);
+  if (reply.exceptionDetails !== undefined) throw new Error("the isolated page reader failed");
+  return evaluated.parse(reply).result.value;
+}
 
 type ContextPages = {
   contextId: string;
@@ -363,19 +477,11 @@ export function createBrowser(args: {
     }
   }
 
-  async function evaluate(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
-    const reply = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
-    if (reply.exceptionDetails !== undefined) {
-      throw new Error("the page rejected the script");
-    }
-    return (reply.result as { value?: unknown }).value;
-  }
-
   async function settle(client: Cdp, sessionId: string, signal: AbortSignal): Promise<void> {
     await delay(SETTLE_MS, undefined, { signal });
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const state = await evaluate(client, sessionId, "document.readyState").catch(() => "loading");
+      const state = await isolated(client, sessionId, "document.readyState").catch(() => "loading");
       if (state === "complete") {
         return;
       }
@@ -404,14 +510,14 @@ export function createBrowser(args: {
   }
 
   async function locate(client: Cdp, sessionId: string, ref: number): Promise<{ x: number; y: number }> {
-    const point = (await evaluate(client, sessionId, LOCATE_SCRIPT(ref))) as { x: number; y: number } | null;
-    if (point === null) {
+    const found = point.parse(await isolated(client, sessionId, `${PAGE_ACCESS}.locate(${ref})`));
+    if (found === null) {
       throw new StaleRefError(ref);
     }
-    return point;
+    return found;
   }
 
-  async function act(connection: Connection, call: PageCall, context: ContextPages, tool: BrowserInvocation): Promise<string> {
+  async function act(connection: Connection, call: PageCall, context: ContextPages, tool: BrowserInvocation): Promise<z.infer<typeof observation>> {
     const { client, ends } = call;
     const { sessionId } = await currentPage(connection, client, context);
     switch (tool.name) {
@@ -429,7 +535,7 @@ export function createBrowser(args: {
         break;
       case "browser_type":
         await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
-        await evaluate(client, sessionId, CLEAR_SCRIPT(tool.args.ref));
+        if (await isolated(client, sessionId, `${PAGE_ACCESS}.clear(${tool.args.ref})`) !== true) throw new StaleRefError(tool.args.ref);
         await client.send("Input.insertText", { text: tool.args.text }, sessionId);
         if (tool.args.submit) {
           await press(client, sessionId, "Enter");
@@ -450,7 +556,7 @@ export function createBrowser(args: {
       }
       after = latest;
     }
-    return String(await evaluate(client, after.sessionId, SNAPSHOT_SCRIPT(context === connection.loggedOut)));
+    return observation.parse(await isolated(client, after.sessionId, `${PAGE_ACCESS}.capture(${JSON.stringify(randomUUID())}, ${context === connection.loggedOut})`));
   }
 
   async function closeIfFrozen(botId: string, connection: Connection, context: ContextPages | null): Promise<PageFate> {
@@ -507,8 +613,10 @@ export function createBrowser(args: {
       try {
         await endWindowOfAnotherRun(botId, connection, browsing);
         const context = await contextFor(connection, call.client, browsing);
-        const { output, truncated } = capText(`Screen ${lease.slot}\n${await act(connection, call, context, tool)}`);
-        return { outcome: "ok", output, truncated };
+        const captured = await act(connection, call, context, tool);
+        const { output, truncated } = capText(`Screen ${lease.slot}\n${captured.output}`);
+        if (truncated) return { outcome: "ok", output, truncated };
+        return { outcome: "ok", output, truncated: captured.truncated, page: captured.page };
       } catch (error) {
         if (!call.ends.aborted) {
           throw error;

@@ -142,15 +142,26 @@ function fakeChromium() {
             return { success: true };
           case "Target.attachToTarget":
             return { sessionId: `session-${String(params.targetId)}` };
+          case "Page.getFrameTree":
+            return { frameTree: { frame: { id: "root" } } };
+          case "Page.createIsolatedWorld":
+            return { executionContextId: 42 };
           case "Runtime.evaluate": {
             const expression = String(params.expression);
-            if (expression === "document.readyState") {
+            if (expression.endsWith("document.readyState")) {
               return { result: { value: "complete" } };
             }
-            if (expression.includes("scrollIntoView")) {
+            if (/\.locate\(\d+\)$/.test(expression)) {
               return { result: { value: locateResult } };
             }
-            return { result: { value: `Title: page of ${String(sessionId)}` } };
+            if (/\.clear\(\d+\)$/.test(expression)) {
+              return { result: { value: true } };
+            }
+            return { result: { value: {
+              output: `Title: page of ${String(sessionId)}`,
+              truncated: false,
+              page: { snapshotId: "00000000-0000-4000-8000-000000000001", origin: null, targets: [], truncated: false },
+            } } };
           }
           default:
             return {};

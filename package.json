@@ -31,7 +31,8 @@
     "verify:desktop-tools": "node scripts/verify-desktop-tools.ts",
     "verify:web": "node scripts/verify-web.ts",
     "verify:screen": "node scripts/verify-screen.ts",
-    "verify:takeover": "node scripts/verify-takeover.ts"
+    "verify:takeover": "node scripts/verify-takeover.ts",
+    "verify:browser-page": "node scripts/verify-browser-page.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",

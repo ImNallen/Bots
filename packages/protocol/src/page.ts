@@ -1,13 +1,34 @@
-// What an element is in the DOM, read in an isolated world, never from its role attribute or its words. field is line for a
-// text-like input, lines for a textarea, secret for a password input, and rich for a contenteditable. choice is a checkbox, radio,
-// select, or a role of checkbox, switch, tab, or option. button is everything else the snapshot numbers.
-export type PageControl =
-  | { kind: "link" }
-  | { kind: "submit" }
-  | { kind: "field"; field: "line" | "lines" | "secret" | "rich"; readOnly: boolean }
-  | { kind: "choice" }
-  | { kind: "button" };
+import { z } from "zod";
+import { PAGE_LIMITS } from "./page-limits.ts";
 
-// words are the page's own words for the control, as the snapshot shows them. They only describe a card, and no rule reads them
-// to let a call run, because a page can call its Post button Read more.
-export type PageTarget = { ref: number; words: string; control: PageControl };
+export { PAGE_LIMITS } from "./page-limits.ts";
+
+export const pageControl = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("link") }),
+  z.strictObject({ kind: z.literal("submit") }),
+  z.strictObject({ kind: z.literal("field"), field: z.enum(["line", "lines", "secret", "rich"]), readOnly: z.boolean() }),
+  z.strictObject({ kind: z.literal("choice") }),
+  z.strictObject({ kind: z.literal("button") }),
+]);
+export type PageControl = z.infer<typeof pageControl>;
+
+// Words describe the page's control. They never authorize an action.
+export const pageTarget = z.strictObject({
+  ref: z.number().int().min(1).max(PAGE_LIMITS.targets),
+  words: z.string().max(PAGE_LIMITS.words),
+  control: pageControl,
+});
+export type PageTarget = z.infer<typeof pageTarget>;
+
+export const pageView = z.strictObject({
+  snapshotId: z.uuid(),
+  origin: z.string().max(PAGE_LIMITS.origin).refine((origin) => {
+    if (!URL.canParse(origin)) return false;
+    const url = new URL(origin);
+    return ["http:", "https:"].includes(url.protocol) && url.origin === origin;
+  }).nullable(),
+  targets: z.array(pageTarget).max(PAGE_LIMITS.targets),
+  truncated: z.boolean(),
+}).refine((page) => new Set(page.targets.map(({ ref }) => ref)).size === page.targets.length, "duplicate refs")
+  .refine((page) => new TextEncoder().encode(JSON.stringify(page)).length <= PAGE_LIMITS.jsonBytes, "page too large");
+export type PageView = z.infer<typeof pageView>;

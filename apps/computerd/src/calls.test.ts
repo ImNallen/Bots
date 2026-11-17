@@ -30,6 +30,25 @@ function counting(result: () => Promise<ToolResult> = async () => ok) {
 }
 
 describe("calls", () => {
+  it("replays exact page facts after reopening the journal without executing again", async () => {
+    const page = { snapshotId: "00000000-0000-4000-8000-000000000001", origin: "https://example.com", targets: [{ ref: 1, words: "Read more", control: { kind: "submit" as const } }], truncated: false };
+    const execute = counting(async () => ({ ...ok, page }));
+    const first = await createCalls({ journal: await openJournal({ dir }), execute: execute.execute }).call(request);
+    const replay = await createCalls({ journal: await openJournal({ dir }), execute: execute.execute }).call(request);
+    expect(replay).toEqual(first);
+    expect(replay.page).toEqual(page);
+    expect(execute.counter.runs).toBe(1);
+  });
+
+  it("fits page-only results before journaling and on replay", async () => {
+    const execute = counting(async () => ({ ...ok, output: "\0😀".repeat(500000) }));
+    const calls = createCalls({ journal: await openJournal({ dir }), execute: execute.execute });
+    const first = await calls.call(request);
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(2 * 1024 * 1024 - 200);
+    expect(await calls.call(request)).toEqual(first);
+    expect(first.truncated).toBe(true);
+  });
+
   it("hands the tool how the call browses, so a logged-out call stays logged out", async () => {
     const seen: unknown[] = [];
     const execute: ExecuteTool = async ({ browsing }) => {

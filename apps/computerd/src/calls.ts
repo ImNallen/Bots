@@ -1,4 +1,4 @@
-import { withoutScreenImage, type Browsing, type ToolInvocation, type ToolResult } from "@bots/protocol";
+import { fitToLink, withoutScreenImage, type Browsing, type ToolInvocation, type ToolResult } from "@bots/protocol";
 import type { Journal } from "./journal.ts";
 
 export type ExecuteTool = (args: {
@@ -28,8 +28,9 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
   const inFlight = new Map<string, InFlight>();
 
   async function settle(callId: string, result: ToolResult): Promise<ToolResult> {
-    await journal.finish({ callId, result: withoutScreenImage(result) });
-    return result;
+    const fitted = fitToLink(result);
+    await journal.finish({ callId, result: withoutScreenImage(fitted) });
+    return fitted;
   }
 
   async function resolve(request: CallRequest, signal: AbortSignal): Promise<ToolResult> {
@@ -37,7 +38,7 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
     const entry = await journal.read(callId);
     switch (entry.kind) {
       case "finished":
-        return entry.result;
+        return fitToLink(entry.result);
       case "started":
         return await settle(callId, { outcome: "interrupted", output: INTERRUPTED_OUTPUT, truncated: false });
       case "absent":
@@ -54,7 +55,7 @@ export function createCalls(args: { journal: Journal; execute: ExecuteTool }): C
     const entry = await journal.read(callId);
     switch (entry.kind) {
       case "finished":
-        return entry.result;
+        return fitToLink(entry.result);
       case "started":
         return await settle(callId, { outcome: "interrupted", output: INTERRUPTED_OUTPUT, truncated: false });
       case "absent":
