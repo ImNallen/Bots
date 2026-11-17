@@ -158,6 +158,15 @@ describe("toAppendBody", () => {
     expect([...new Uint8Array(screen.image.bytes)]).toEqual([1, 2, 3]);
   });
 
+  it("serializes exact page identity alongside a screen or by itself", () => {
+    const page = { snapshotId: "00000000-0000-4000-8000-000000000001", origin: "https://example.com", targets: [], truncated: false };
+    for (const screen of [undefined, view]) {
+      const body = toAppendBody({ ...base, name: "browser_snapshot" }, { outcome: "ok", output: "page", truncated: false, page, ...(screen === undefined ? {} : { screen }) });
+      expect(body).toMatchObject({ page: JSON.stringify(page) });
+      if (screen !== undefined) expect(body).toMatchObject({ screen: { view: JSON.stringify(view) } });
+    }
+  });
+
   it("stores a look with no picture, and a result with no screen as before", () => {
     expect(toAppendBody(base, { outcome: "ok", output: "x", truncated: false, screen: view })).toEqual({ ...base, outcome: "ok", output: "x", truncated: false, screen: { view: JSON.stringify(view) } });
     expect(toAppendBody(base, { outcome: "error", output: "x", truncated: false })).toEqual({ ...base, outcome: "error", output: "x", truncated: false });
