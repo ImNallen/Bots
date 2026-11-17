@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pageElementAim, pageFocusAim } from "./page.ts";
 import {
   desktopClickArgs,
   desktopInvocations,
@@ -95,13 +96,26 @@ const computerOptions = [
   z.strictObject({ name: z.literal("web_fetch"), args: webFetchArgs }),
   z.strictObject({ name: z.literal("browser_navigate"), args: browserNavigateArgs }),
   z.strictObject({ name: z.literal("browser_snapshot"), args: browserSnapshotArgs }),
+] as const;
+
+const pageRequests = [
   z.strictObject({ name: z.literal("browser_click"), args: browserClickArgs }),
   z.strictObject({ name: z.literal("browser_type"), args: browserTypeArgs }),
   z.strictObject({ name: z.literal("browser_press"), args: browserPressArgs }),
 ] as const;
 
-// What the link carries. A desktop input carries the aim that the orchestrator resolved, which the model never sends.
-export const toolInvocation = z.discriminatedUnion("name", [...computerOptions, ...desktopInvocations]);
+// What the link carries. A desktop or page input carries the aim that the orchestrator resolved, which the model never sends.
+const pageInvocations = [
+  pageRequests[0].extend({ aim: pageElementAim }),
+  pageRequests[1].extend({ aim: pageElementAim }),
+  pageRequests[2].extend({ aim: pageFocusAim }),
+] as const;
+export const toolInvocation = z.discriminatedUnion("name", [...computerOptions, ...pageInvocations, ...desktopInvocations]);
+export type PageInputRequest = z.infer<(typeof pageRequests)[number]>;
+export type AimedPageInvocation = z.infer<(typeof pageInvocations)[number]>;
+export function isPageInputRequest(tool: ModelInvocation | ToolInvocation): tool is PageInputRequest {
+  return tool.name === "browser_click" || tool.name === "browser_type" || tool.name === "browser_press";
+}
 
 export type ToolInvocation = z.infer<typeof toolInvocation>;
 export type BrowserInvocation = Extract<ToolInvocation, { name: `browser_${string}` }>;
@@ -217,8 +231,8 @@ export function isDesktopInputRequest(tool: ModelInvocation): tool is DesktopInp
   return tool.name.startsWith("desktop_") && tool.name !== "desktop_look";
 }
 
-// What a model's call parses into. A desktop input has no aim yet, so it cannot reach the link until the runner aims it.
-export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation> | DesktopInputRequest | MemoryInvocation | ScheduleInvocation | SearchInvocation | QuietInvocation;
+// What a model's call parses into. A desktop or page input has no aim yet, so it cannot reach the link until the runner aims it.
+export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation | AimedPageInvocation> | PageInputRequest | DesktopInputRequest | MemoryInvocation | ScheduleInvocation | SearchInvocation | QuietInvocation;
 
 // controlsComputer can make the VM do anything its user can, so the Shell level asks for it. readsScreen reads the whole desktop,
 // which shows the owner's logged-in pages, so a read-only run never gets it. endsRoutine changes nothing and only ends a routine.
@@ -275,12 +289,12 @@ const TOOLS = {
   },
   browser_type: {
     description:
-      "Replace the text in a field from the latest snapshot. Set submit to press Enter afterward. Returns a new snapshot.",
+      "Replace the text in a field or rich editor from the latest snapshot. Keep submit false: browser key dispatch is unavailable until it can bind safely. To submit, request a separate approved click. Returns a new snapshot.",
     args: browserTypeArgs,
     effect: "changesOutside",
   },
   browser_press: {
-    description: "Press one key on this bot's current page. Use the arrow keys and Enter to choose from a dropdown. Returns a new snapshot.",
+    description: "Browser key dispatch is unavailable until it can bind safely to the captured target. Every key, including Tab and Escape, refuses without input. Use a separate approved click where possible.",
     args: browserPressArgs,
     effect: "changesOutside",
   },
@@ -412,6 +426,7 @@ export type ParsedToolCall = { kind: "ok"; invocation: ModelInvocation } | { kin
 
 const modelInvocation = z.discriminatedUnion("name", [
   ...computerOptions,
+  ...pageRequests,
   ...desktopRequests,
   ...memoryInvocation.options,
   ...scheduleInvocation.options,

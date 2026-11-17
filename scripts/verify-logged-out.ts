@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browsing } from "@bots/protocol";
+import { fixtureAim } from "./page-fixture.ts";
 import { createBrowser, webSocketConnector, type Cdp, type CdpConnector } from "../apps/computerd/src/browser.ts";
 import { createLogins, type Jar } from "../apps/computerd/src/logins.ts";
 
@@ -143,8 +144,8 @@ check(again.output.includes("cookies: none"), "a login made in an ended window i
 
 const dialog = await open(browser, "/alert", run("two"));
 check(dialog.outcome === "ok" && dialog.output.includes("alert returned"), "a dialog in a logged-out page's first script is answered", dialog.output);
-await open(browser, "/popup", run("two"));
-const popup = await browser.execute({ botId: BOT, tool: { name: "browser_click", args: { ref: 1 } }, browsing: run("two"), signal });
+const opener = await open(browser, "/popup", run("two"));
+const popup = await browser.execute({ botId: BOT, tool: { name: "browser_click", aim: fixtureAim(opener.page, 1), args: { ref: 1 } }, browsing: run("two"), signal });
 check(popup.outcome === "ok" && popup.output.includes("alert returned"), "a popup whose first script alerts stays in the window's context, and it is the current page", popup.output);
 const targets = (await inspector.send("Target.getTargets")).targetInfos as { type: string; browserContextId: string; url: string }[];
 const defaultId = (await inspector.send("Target.getBrowserContexts")).defaultBrowserContextId as string;

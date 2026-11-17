@@ -49,7 +49,7 @@ export const forApproval = query({
   handler: async (ctx, { approvalId }) => {
     const { user } = await requireIdentity(ctx);
     const approval = await ctx.db.get(approvalId);
-    if (user === null || approval === null || approval.ownerId !== user._id || approval.state !== "pending" || approval.subject === undefined) {
+    if (user === null || approval === null || approval.ownerId !== user._id || approval.state !== "pending" || approval.subject === undefined || !approval.toolName.startsWith("desktop_")) {
       return null;
     }
     const row = await screenOf(ctx, approval.runId);

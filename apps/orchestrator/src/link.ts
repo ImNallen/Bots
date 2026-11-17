@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { Id } from "@bots/convex/dataModel";
 import {
   LINK_CLOSE,
+  PAGE_AIM_TOOL_CAPABILITY,
+  isPageInputRequest,
   MAX_COMPUTER_MESSAGE_BYTES,
   TOOLS_BEFORE_ANNOUNCEMENT,
   capText,
@@ -437,7 +439,7 @@ export function startLink(args: {
         if (connection !== undefined && connection.computer.generation !== call.generation) {
           return { outcome: "unavailable", output: "The computer was reset. This old call cannot run on the new computer.", truncated: false };
         }
-        if (connection !== undefined && !connection.accepts.has(call.tool.name)) {
+        if (connection !== undefined && (!connection.accepts.has(call.tool.name) || isPageInputRequest(call.tool) && !connection.accepts.has(PAGE_AIM_TOOL_CAPABILITY))) {
           return { outcome: "error", output: OLDER_COMPUTERD_OUTPUT, truncated: false };
         }
         const step = await (connection === undefined ? awaitComputer(call) : exchange(call, connection));

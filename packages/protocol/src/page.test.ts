@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { MAX_COMPUTER_MESSAGE_BYTES, PAGE_LIMITS, fitToLink, pageView, toolResult, type PageView, type ToolResult } from "./index.ts";
+import { MAX_COMPUTER_MESSAGE_BYTES, PAGE_LIMITS, fitToLink, pageView, pageAim, toolInvocation, parseToolCall, toolResult, type PageView, type ToolResult } from "./index.ts";
 
 const page: PageView = { snapshotId: randomUUID(), origin: "https://example.com", targets: [{ ref: 1, words: "Read more", control: { kind: "submit" } }], truncated: false };
 
@@ -42,5 +42,27 @@ describe("fitting full result envelopes", () => {
     expect(envelopeBytes(fitted)).toBeLessThanOrEqual(MAX_COMPUTER_MESSAGE_BYTES);
     expect(fitted.page).toEqual(page);
     expect(fitted.screen?.image).toBeUndefined();
+  });
+});
+
+describe("trusted page input wire", () => {
+  const aim = { kind: "element", snapshotId: page.snapshotId, origin: page.origin, target: page.targets[0] };
+  it("requires aim on the wire and rejects model aim spoofing at every accepted level", () => {
+    for (const name of ["browser_click", "browser_type", "browser_press"]) {
+      const args = name === "browser_click" ? { ref: 1 } : name === "browser_type" ? { ref: 1, text: "x" } : { key: "Enter" };
+      expect(parseToolCall({ name, arguments: JSON.stringify(args) }).kind).toBe("ok");
+      for (const forged of [{ ...args, aim }, { ...args, args: { aim } }, { ...args, target: aim }]) {
+        expect(parseToolCall({ name, arguments: JSON.stringify(forged) }).kind).toBe("invalid");
+      }
+      expect(toolInvocation.safeParse({ name, args }).success).toBe(false);
+    }
+    expect(toolInvocation.safeParse({ name: "browser_click", args: { ref: 1 }, aim }).success).toBe(true);
+  });
+  it("distinguishes historical absence, observed none, target and unlisted focus", () => {
+    for (const focus of [undefined, { kind: "none" }, { kind: "unlisted" }, { kind: "target", ref: 1 }]) {
+      expect(pageView.safeParse({ ...page, focus }).success).toBe(true);
+    }
+    expect(pageView.safeParse({ ...page, focus: { kind: "target", ref: 2 } }).success).toBe(false);
+    expect(pageAim.safeParse({ kind: "focus", snapshotId: page.snapshotId, origin: null, focus: { kind: "target", ref: 1 }, target: null }).success).toBe(false);
   });
 });

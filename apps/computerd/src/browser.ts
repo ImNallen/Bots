@@ -28,17 +28,6 @@ const PAGE_FATE_OUTPUT: Record<PageFate, string> = {
   stuck: "The page froze, and the browser did not close it.",
 };
 
-const KEY_CODES: Record<string, number> = {
-  Enter: 13,
-  Tab: 9,
-  Escape: 27,
-  Backspace: 8,
-  ArrowUp: 38,
-  ArrowDown: 40,
-  ArrowLeft: 37,
-  ArrowRight: 39,
-};
-
 export type CdpEvent = { method: string; params: Record<string, unknown>; sessionId: string | undefined };
 
 export type Cdp = {
@@ -57,107 +46,183 @@ const PAGE_ACCESS = 'globalThis[Symbol.for("bots.page.owner")]';
 const SCREEN_PREFIX_BYTES = Math.max(...SLOTS.map((slot) => Buffer.byteLength(`Screen ${slot}\n`)));
 const PAGE_OWNER = `(() => {
   if (${PAGE_ACCESS}) return;
-  let refs = new Map();
-  const element = (ref) => {
-    const e = refs.get(ref);
-    return e && e.isConnected && e.ownerDocument === document ? e : null;
-  };
-  ${PAGE_ACCESS} = {
-    locate(ref) {
-      const e = element(ref);
-      if (!e) return null;
-      e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  let snapshot = null;
+  const reader = () => {
+    const limits = ${JSON.stringify(PAGE_LIMITS)};
+    let visits = 0;
+    let truncated = false;
+    const clean = (s) => {
+      if (s && s.length > limits.words) truncated = true;
+      return (s ?? '').slice(0, 512).replace(/\\s+/g, ' ').trim().slice(0, limits.words).toWellFormed();
+    };
+    const visit = () => {
+      if (++visits <= 10000) return true;
+      truncated = true;
+      return false;
+    };
+    const visible = (e) => {
       const r = e.getBoundingClientRect();
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-    },
-    clear(ref) {
-      const e = element(ref);
-      if (!e) return false;
-      e.focus();
-      if (typeof e.select === 'function') e.select();
-      else document.execCommand('selectAll');
-      return true;
+      if (!r.width || !r.height) return false;
+      const s = getComputedStyle(e);
+      return s.visibility !== 'hidden' && s.display !== 'none';
+    };
+    const skip = (e) => ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'].includes(e.tagName.toUpperCase());
+    const rendered = (e) => {
+      const style = getComputedStyle(e);
+      return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
+    };
+    const breaksLine = (e) => e.tagName === 'BR' || /^(block|flex|grid|table|list-item|flow-root)/.test(getComputedStyle(e).display);
+    // substringData returns at most the requested number of characters.
+    const text = (root, renderedOnly = true) => {
+      if (renderedOnly && getComputedStyle(root).display === 'none') return '';
+      let value = '';
+      let n = root.firstChild;
+      let count = 0;
+      while (n && value.length < 512 && count++ < 64) {
+        if (!visit()) break;
+        if (n.nodeType === Node.TEXT_NODE && (!renderedOnly || rendered(n.parentElement))) value += n.substringData(0, 512 - value.length);
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          if (!skip(n) && (!renderedOnly || getComputedStyle(n).display !== 'none')) {
+            if (renderedOnly && breaksLine(n)) value += ' ';
+            if (n.firstChild) { n = n.firstChild; continue; }
+          }
+        }
+        while (n !== root && !n.nextSibling) {
+          if (renderedOnly && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
+          n = n.parentNode;
+        }
+        if (renderedOnly && n !== root && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
+        n = n === root ? null : n.nextSibling;
+      }
+      if (n) truncated = true;
+      return clean(value);
+    };
+    const label = (e) => clean(e.getAttribute('aria-label')) || (e.labels?.[0] ? text(e.labels[0]) : '') ||
+      clean(e.getAttribute('placeholder')) || clean(e.getAttribute('title')) || clean(e.getAttribute('alt')) ||
+      text(e) || clean(e.getAttribute('name'));
+    const classify = (e) => {
+      if (e instanceof HTMLInputElement) {
+        if (e.type === 'password') return { kind: 'field', field: 'secret', readOnly: e.readOnly };
+        if (['text', 'search', 'email', 'url', 'tel'].includes(e.type))
+          return { kind: 'field', field: 'line', readOnly: e.readOnly };
+        if (['submit', 'image'].includes(e.type)) return { kind: 'submit' };
+        if (['checkbox', 'radio'].includes(e.type)) return { kind: 'choice' };
+        return { kind: 'button' };
+      }
+      if (e instanceof HTMLTextAreaElement) return { kind: 'field', field: 'lines', readOnly: e.readOnly };
+      if (e instanceof HTMLButtonElement) return { kind: e.type === 'submit' ? 'submit' : 'button' };
+      if (e instanceof HTMLAnchorElement && e.hasAttribute('href')) return { kind: 'link' };
+      if (e instanceof HTMLSelectElement) return { kind: 'choice' };
+      if (e.isContentEditable) return { kind: 'field', field: 'rich', readOnly: false };
+      if (['checkbox', 'switch', 'tab', 'option'].includes(e.getAttribute('role'))) return { kind: 'choice' };
+      return { kind: 'button' };
+    };
+    return { clean, text, label, classify, visible, skip, visit, get truncated() { return truncated; } };
+  };
+  const origin = () => /^https?:$/.test(location.protocol) && location.origin.length <= ${PAGE_LIMITS.origin} ? location.origin : null;
+  const formValue = (form, name) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, name).get.call(form);
+  const formOf = (e) => {
+    for (let proto = Object.getPrototypeOf(e); proto; proto = Object.getPrototypeOf(proto)) {
+      const get = Object.getOwnPropertyDescriptor(proto, 'form')?.get;
+      if (get) return get.call(e);
+    }
+    return null;
+  };
+  const fingerprint = (e, read = reader()) => {
+    const form = formOf(e);
+    let remaining = 32768;
+    const value = JSON.stringify({
+      tag: e.tagName, type: e.getAttribute('type'), role: e.getAttribute('role'),
+      words: read.label(e), control: read.classify(e), disabled: e.matches(':disabled'),
+      inert: e.closest('[inert]') !== null, editable: e.isContentEditable,
+      href: e instanceof HTMLAnchorElement ? e.href : null,
+      target: e instanceof HTMLAnchorElement ? e.target : null,
+      linkEffects: e instanceof HTMLAnchorElement ? ['ping', 'download', 'rel', 'referrerpolicy'].map(a => e.getAttribute(a)) : null,
+      base: [document.baseURI, document.querySelector('base[target]')?.getAttribute('target')],
+      form: form ? ['action', 'method', 'target', 'enctype', 'noValidate'].map(name => formValue(form, name)) : null,
+      formAction: e.hasAttribute('formaction') ? e.formAction : null,
+      overrides: ['formaction', 'formmethod', 'formtarget', 'formenctype', 'formnovalidate'].map(a => e.getAttribute(a))
+    }, (_key, part) => {
+      if (typeof part !== 'string') return part;
+      remaining -= part.length;
+      return remaining < 0 ? null : part;
+    });
+    return remaining >= 0 && value.length <= 32768 ? value : null;
+  };
+  const refused = (reason) => ({ kind: 'refused', reason: 'The browser action did not run: ' + reason });
+  ${PAGE_ACCESS} = {
+    act(tool) {
+      if (tool.name === 'browser_press' || tool.name === 'browser_type' && tool.args.submit)
+        return refused('browser keys cannot bind safely to the captured target. Use a separate approved click instead of submitting with Enter.');
+      const aim = tool.aim;
+      if (!snapshot || snapshot.id !== aim.snapshotId || snapshot.document !== document || snapshot.origin !== origin() || snapshot.url !== location.href)
+        return refused('the captured page is no longer available. Take a new snapshot.');
+      const entry = snapshot.refs.get(tool.args.ref);
+      if (!entry || aim.kind !== 'element' || JSON.stringify(entry.target) !== JSON.stringify(aim.target) || aim.origin !== snapshot.origin)
+        return refused('the captured control does not match this action.');
+      const e = entry.element;
+      const valid = () => e.isConnected && e.ownerDocument === document && snapshot.document === document &&
+        snapshot.url === location.href && snapshot.origin === origin() &&
+        entry.form === formOf(e) && entry.fingerprint !== null && entry.fingerprint === fingerprint(e) && !e.matches(':disabled') && !e.closest('[inert]') && reader().visible(e);
+      if (!valid()) return refused('the control changed since its snapshot. Take a new snapshot.');
+      if (!(e instanceof HTMLElement)) return refused('this control does not support native element actions.');
+      const field = e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement;
+      const rich = e.isContentEditable && entry.target.control.kind === 'field' && entry.target.control.field === 'rich';
+      if (tool.name === 'browser_type' && ((!field && !rich) || field && e.readOnly || !['line', 'lines', 'secret', 'rich'].includes(entry.target.control.field)))
+        return refused('this control does not support safely bound text replacement.');
+      e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const hit = () => {
+        const r = e.getBoundingClientRect();
+        const x = (Math.max(0, r.left) + Math.min(innerWidth, r.right)) / 2;
+        const y = (Math.max(0, r.top) + Math.min(innerHeight, r.bottom)) / 2;
+        const top = document.elementFromPoint(x, y);
+        return top === e || e.contains(top);
+      };
+      if (!valid() || !hit()) return refused('the control changed or is covered.');
+      if (tool.name === 'browser_click') {
+        if (e instanceof HTMLSelectElement && typeof HTMLSelectElement.prototype.showPicker !== 'function')
+          return refused('the browser does not support opening this select safely.');
+        HTMLElement.prototype.focus.call(e, { preventScroll: true });
+        if (!valid() || !hit()) return refused('the control changed before clicking.');
+        HTMLElement.prototype.click.call(e);
+        if (e instanceof HTMLSelectElement && e.isConnected && !e.matches(':disabled') && !e.closest('[inert]')) {
+          try { HTMLSelectElement.prototype.showPicker.call(e); }
+          catch { throw new Error('The click ran, but the browser could not open its select picker.'); }
+        }
+      } else {
+        HTMLElement.prototype.focus.call(e, { preventScroll: true });
+        if (document.activeElement !== e || !valid() || !hit()) return refused('focus or the control changed before typing.');
+        if (field) {
+          const proto = e instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+          proto.select.call(e);
+        } else {
+          const range = document.createRange(); range.selectNodeContents(e);
+          const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        }
+        const selection = rich ? getSelection() : null;
+        const complete = field ? e.selectionStart === null || e.selectionStart === 0 &&
+          (e instanceof HTMLInputElement && e.type === 'password' || e.selectionEnd === e.value.length) :
+          selection && selection.rangeCount === 1 && selection.getRangeAt(0).startContainer === e &&
+          selection.getRangeAt(0).startOffset === 0 && selection.getRangeAt(0).endContainer === e && selection.getRangeAt(0).endOffset === e.childNodes.length;
+        if (document.activeElement !== e || !valid() || !hit() || !complete)
+          return refused('focus, selection or the control changed before typing.');
+        if (!Document.prototype.execCommand.call(document, 'insertText', false, tool.args.text))
+          return refused('the browser does not support text replacement in this control.');
+      }
+      return { kind: 'acted' };
     },
     capture(snapshotId, showLinkAddresses) {
-      refs = new Map();
+      const read = reader();
+      const { clean, text, label, classify, visible, skip, visit } = read;
       const limits = ${JSON.stringify(PAGE_LIMITS)};
-      let visits = 0;
+      const bytes = (s) => new TextEncoder().encode(s).length;
+      const refs = new Map();
       let truncated = false;
-      const encoder = new TextEncoder();
-      const bytes = (s) => encoder.encode(s).length;
-      const clean = (s) => {
-        if (s && s.length > limits.words) truncated = true;
-        return (s ?? '').slice(0, 512).replace(/\\s+/g, ' ').trim().slice(0, limits.words).toWellFormed();
-      };
-      const interactive = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=switch],[role=menuitem],[role=tab],[role=option],[contenteditable],[onclick]';
-      const visit = () => {
-        if (++visits <= 10000) return true;
-        truncated = true;
-        return false;
-      };
-      const visible = (e) => {
-        const r = e.getBoundingClientRect();
-        if (!r.width || !r.height) return false;
-        const s = getComputedStyle(e);
-        return s.visibility !== 'hidden' && s.display !== 'none';
-      };
-      const skip = (e) => ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'].includes(e.tagName.toUpperCase());
-      const rendered = (e) => {
-        const style = getComputedStyle(e);
-        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
-      };
-      const breaksLine = (e) => e.tagName === 'BR' || /^(block|flex|grid|table|list-item|flow-root)/.test(getComputedStyle(e).display);
-      // substringData returns at most the requested number of characters.
-      const text = (root, renderedOnly = true) => {
-        if (renderedOnly && getComputedStyle(root).display === 'none') return '';
-        let value = '';
-        let n = root.firstChild;
-        let count = 0;
-        while (n && value.length < 512 && count++ < 64) {
-          if (!visit()) break;
-          if (n.nodeType === Node.TEXT_NODE && (!renderedOnly || rendered(n.parentElement))) value += n.substringData(0, 512 - value.length);
-          if (n.nodeType === Node.ELEMENT_NODE) {
-            if (!skip(n) && (!renderedOnly || getComputedStyle(n).display !== 'none')) {
-              if (renderedOnly && breaksLine(n)) value += ' ';
-              if (n.firstChild) { n = n.firstChild; continue; }
-            }
-          }
-          while (n !== root && !n.nextSibling) {
-            if (renderedOnly && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
-            n = n.parentNode;
-          }
-          if (renderedOnly && n !== root && n.nodeType === Node.ELEMENT_NODE && breaksLine(n)) value += ' ';
-          n = n === root ? null : n.nextSibling;
-        }
-        if (n) truncated = true;
-        return clean(value);
-      };
-      const label = (e) => clean(e.getAttribute('aria-label')) || (e.labels?.[0] ? text(e.labels[0]) : '') ||
-        clean(e.getAttribute('placeholder')) || clean(e.getAttribute('title')) || clean(e.getAttribute('alt')) ||
-        text(e) || clean(e.getAttribute('name'));
-      const classify = (e) => {
-        if (e instanceof HTMLInputElement) {
-          if (e.type === 'password') return { kind: 'field', field: 'secret', readOnly: e.readOnly };
-          if (['text', 'search', 'email', 'url', 'tel'].includes(e.type))
-            return { kind: 'field', field: 'line', readOnly: e.readOnly };
-          if (['submit', 'image'].includes(e.type)) return { kind: 'submit' };
-          if (['checkbox', 'radio'].includes(e.type)) return { kind: 'choice' };
-          return { kind: 'button' };
-        }
-        if (e instanceof HTMLTextAreaElement) return { kind: 'field', field: 'lines', readOnly: e.readOnly };
-        if (e instanceof HTMLButtonElement) return { kind: e.type === 'submit' ? 'submit' : 'button' };
-        if (e instanceof HTMLAnchorElement && e.hasAttribute('href')) return { kind: 'link' };
-        if (e instanceof HTMLSelectElement) return { kind: 'choice' };
-        if (e.isContentEditable) return { kind: 'field', field: 'rich', readOnly: false };
-        if (['checkbox', 'switch', 'tab', 'option'].includes(e.getAttribute('role'))) return { kind: 'choice' };
-        return { kind: 'button' };
-      };
-      const origin = /^https?:$/.test(location.protocol) && location.origin.length <= limits.origin ? location.origin : null;
-      const page = { snapshotId, origin, targets: [], truncated: false };
+      const page = { snapshotId, origin: origin(), targets: [], truncated: false, focus: { kind: 'unlisted' } };
       const title = document.querySelector('title');
       let output = 'Title: ' + (title ? text(title, false) : '') + '\\nURL: ' + location.href.slice(0, 300) + '\\n';
       let outputBytes = bytes(output);
-      let pageBytes = bytes(JSON.stringify(page));
+      let pageBytes = bytes(JSON.stringify(page)) + 32;
       let last = '';
       const admit = (line, target, e) => {
         if (!target && line === last) return true;
@@ -173,7 +238,7 @@ const PAGE_OWNER = `(() => {
         last = line;
         if (target) {
           page.targets.push(target);
-          refs.set(target.ref, e);
+          refs.set(target.ref, { element: e, target, fingerprint: fingerprint(e), form: formOf(e) });
         }
         return true;
       };
@@ -188,7 +253,7 @@ const PAGE_OWNER = `(() => {
         } else if (n.nodeType === Node.ELEMENT_NODE) {
           const e = n;
           if (skip(e)) descend = false;
-          else if (e.matches(interactive) && !(e instanceof HTMLInputElement && e.type === 'hidden') && visible(e)) {
+          else if (e.matches('a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=switch],[role=menuitem],[role=tab],[role=option],[contenteditable],[onclick]') && !(e instanceof HTMLInputElement && e.type === 'hidden') && visible(e)) {
             if (page.targets.length === limits.targets) { truncated = true; break; }
             const ref = page.targets.length + 1;
             const words = label(e);
@@ -214,6 +279,12 @@ const PAGE_OWNER = `(() => {
         while (n !== root && !n.nextSibling) n = n.parentNode;
         n = n === root ? null : n.nextSibling;
       }
+      const focused = document.activeElement;
+      const focusedRef = [...refs].find(([, entry]) => entry.element === focused)?.[0];
+      page.focus = focusedRef ? { kind: 'target', ref: focusedRef } :
+        !focused || focused === document.body || focused === document.documentElement ? { kind: 'none' } : { kind: 'unlisted' };
+      snapshot = { id: snapshotId, document, url: location.href.length <= 32768 ? location.href : null, origin: page.origin, refs, focused };
+      truncated ||= read.truncated;
       page.truncated = truncated;
       return { output, truncated, page };
     }
@@ -221,13 +292,17 @@ const PAGE_OWNER = `(() => {
 })()`;
 
 const observation = z.strictObject({ output: z.string().max(OUTPUT_CAP_BYTES), truncated: z.boolean(), page: pageView });
-const point = z.object({ x: z.number().finite(), y: z.number().finite() }).nullable();
+const actionResult = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("acted") }),
+  z.strictObject({ kind: z.literal("refused"), reason: z.string() }),
+]);
 const evaluated = z.object({ result: z.object({ value: z.unknown() }) });
 
-async function isolated(client: Cdp, sessionId: string, expression: string): Promise<unknown> {
+async function isolated(client: Cdp, sessionId: string, expression: string, world: string, beforeAct?: () => Promise<void>, userGesture = false): Promise<unknown> {
   const { frameTree } = z.object({ frameTree: z.object({ frame: z.object({ id: z.string() }) }) }).parse(await client.send("Page.getFrameTree", {}, sessionId));
-  const { executionContextId } = z.object({ executionContextId: z.number().int() }).parse(await client.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: PAGE_WORLD }, sessionId));
-  const reply = await client.send("Runtime.evaluate", { expression: `${PAGE_OWNER};${expression}`, contextId: executionContextId, returnByValue: true }, sessionId);
+  const { executionContextId } = z.object({ executionContextId: z.number().int() }).parse(await client.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: world }, sessionId));
+  await beforeAct?.();
+  const reply = await client.send("Runtime.evaluate", { expression: `${PAGE_OWNER};${expression}`, contextId: executionContextId, returnByValue: true, userGesture }, sessionId);
   if (reply.exceptionDetails !== undefined) throw new Error("the isolated page reader failed");
   return evaluated.parse(reply).result.value;
 }
@@ -318,6 +393,7 @@ export function createBrowser(args: {
 }): Browser {
   const { desktops, connector = webSocketConnector, takeoverSettled, personHasScreen, toolDeadlineMs = TOOL_DEADLINE_MS, frozenProbeMs = FROZEN_PROBE_MS, loggedOutIdleMs = LOGGED_OUT_IDLE_MS } = args;
   // Only one bot's queue touches its entry, so this needs no promise to share.
+  const pageWorld = `${PAGE_WORLD}.${randomUUID()}`;
   const connections = new Map<string, Connection>();
   // One bot's steps must not interleave, because a click belongs to the snapshot before it. Different bots do not wait on each other.
   const queues = new Map<string, Promise<unknown>>();
@@ -481,7 +557,7 @@ export function createBrowser(args: {
     await delay(SETTLE_MS, undefined, { signal });
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const state = await isolated(client, sessionId, "document.readyState").catch(() => "loading");
+      const state = await isolated(client, sessionId, "document.readyState", pageWorld).catch(() => "loading");
       if (state === "complete") {
         return;
       }
@@ -489,37 +565,9 @@ export function createBrowser(args: {
     }
   }
 
-  async function click(client: Cdp, sessionId: string, point: { x: number; y: number }): Promise<void> {
-    const base = { x: point.x, y: point.y };
-    await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...base }, sessionId);
-    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...base, button: "left", buttons: 1, clickCount: 1 }, sessionId);
-    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...base, button: "left", buttons: 0, clickCount: 1 }, sessionId);
-  }
-
-  async function press(client: Cdp, sessionId: string, key: string): Promise<void> {
-    const code = KEY_CODES[key];
-    if (code === undefined) {
-      throw new Error(`there is no key named ${key}`);
-    }
-    const event = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code };
-    await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...event }, sessionId);
-    if (key === "Enter") {
-      await client.send("Input.dispatchKeyEvent", { type: "char", ...event, text: "\r" }, sessionId);
-    }
-    await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...event }, sessionId);
-  }
-
-  async function locate(client: Cdp, sessionId: string, ref: number): Promise<{ x: number; y: number }> {
-    const found = point.parse(await isolated(client, sessionId, `${PAGE_ACCESS}.locate(${ref})`));
-    if (found === null) {
-      throw new StaleRefError(ref);
-    }
-    return found;
-  }
-
   async function act(connection: Connection, call: PageCall, context: ContextPages, tool: BrowserInvocation): Promise<z.infer<typeof observation>> {
     const { client, ends } = call;
-    const { sessionId } = await currentPage(connection, client, context);
+    const { targetId, sessionId } = await currentPage(connection, client, context);
     switch (tool.name) {
       case "browser_navigate": {
         const reply = await client.send("Page.navigate", { url: tool.args.url }, sessionId);
@@ -531,19 +579,18 @@ export function createBrowser(args: {
       case "browser_snapshot":
         break;
       case "browser_click":
-        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
-        break;
       case "browser_type":
-        await click(client, sessionId, await locate(client, sessionId, tool.args.ref));
-        if (await isolated(client, sessionId, `${PAGE_ACCESS}.clear(${tool.args.ref})`) !== true) throw new StaleRefError(tool.args.ref);
-        await client.send("Input.insertText", { text: tool.args.text }, sessionId);
-        if (tool.args.submit) {
-          await press(client, sessionId, "Enter");
+      case "browser_press": {
+        if (tool.name === "browser_click" || tool.name === "browser_type" && !tool.args.submit) {
+          await client.send("Page.bringToFront", {}, sessionId);
         }
+        const result = actionResult.parse(await isolated(client, sessionId, `${PAGE_ACCESS}.act(${JSON.stringify(tool)})`, pageWorld, async () => {
+          const latest = await currentPage(connection, client, context);
+          if (latest.targetId !== targetId) throw new Error("the newest page changed; the action did not run");
+        }, tool.name === "browser_click"));
+        if (result.kind === "refused") throw new Error(result.reason);
         break;
-      case "browser_press":
-        await press(client, sessionId, tool.args.key);
-        break;
+      }
     }
     // An action can open a popup at any time during the wait, and the next action goes to the newest page.
     // So the snapshot must come from the page that is still newest after the wait, or its refs would point at the wrong page.
@@ -556,7 +603,7 @@ export function createBrowser(args: {
       }
       after = latest;
     }
-    return observation.parse(await isolated(client, after.sessionId, `${PAGE_ACCESS}.capture(${JSON.stringify(randomUUID())}, ${context === connection.loggedOut})`));
+    return observation.parse(await isolated(client, after.sessionId, `${PAGE_ACCESS}.capture(${JSON.stringify(randomUUID())}, ${context === connection.loggedOut})`, pageWorld));
   }
 
   async function closeIfFrozen(botId: string, connection: Connection, context: ContextPages | null): Promise<PageFate> {
@@ -657,12 +704,6 @@ export function createBrowser(args: {
         }
       }),
   };
-}
-
-class StaleRefError extends Error {
-  constructor(ref: number) {
-    super(`there is no element ${ref} on the page now, so take a new snapshot`);
-  }
 }
 
 export async function webSocketConnector(cdpPort: number): Promise<Cdp> {
