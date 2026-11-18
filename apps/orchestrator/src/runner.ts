@@ -20,7 +20,7 @@ import {
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import { aimDesktopInput, approvalDetail, shownScreen, type StoredScreen } from "./desktop.ts";
-import type { Link, LinkOutcome } from "./link.ts";
+import type { Computer, Link, LinkOutcome } from "./link.ts";
 import type { LogFields } from "./log.ts";
 import {
   DENIED_OUTPUT,
@@ -33,7 +33,7 @@ import {
   waitForApproval,
 } from "./approvals.ts";
 import { aimPageInput, loadPage, retainedPageInput } from "./page.ts";
-import { decideByRules, desktopAim, type PageFacts } from "./rules.ts";
+import { decideByRules, desktopAim, type PageFacts } from "@bots/convex/automaticRules";
 import { waitWhileTakenOver } from "./takeover.ts";
 import { historyOf, threadEventOf, type ThreadEvent } from "./history.ts";
 import { PROVIDER_LABEL, completeWithRetry, type CompletionResult, type MistralUserChunk, type ModelProvider } from "./mistral.ts";
@@ -341,15 +341,19 @@ export async function runTool(args: {
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
   const { invocation } = parsed;
+  const previousAdmission = invocation.name === "shell" && await deps.service.query(api.approvals.wasCommandAdmitted, { runId, toolCallId: call.id, leaseToken: claim.leaseToken });
+  const stoppedOutput = (output: string) => previousAdmission
+    ? "An earlier attempt of this command was authorized and its outcome is unknown. It may already have run. No further attempt was sent. Check the computer's state before requesting it again."
+    : output;
   let retained = await deps.service.query(api.approvals.forCall, { runId, toolCallId: call.id });
   if (retained?.state === "denied" || retained?.state === "expired") {
-    return { ...base, outcome: "denied", output: retained.state === "denied" ? DENIED_OUTPUT : EXPIRED_OUTPUT, truncated: false };
+    return { ...base, outcome: "denied", output: stoppedOutput(retained.state === "denied" ? DENIED_OUTPUT : EXPIRED_OUTPUT), truncated: false };
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   let decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
-    return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
+    return { ...base, outcome: "rejected", output: stoppedOutput(READ_ONLY_OUTPUT), truncated: false };
   }
   if (decision === "routineOnly") {
     deps.log({ level: "info", event: "tool-refused", runId, toolCallId: call.id });
@@ -368,11 +372,15 @@ export async function runTool(args: {
   }
   // A card from the rules carries a one-sentence reason. Other asks leave it unset.
   let reason: string | undefined;
+  let commandEntryId: string | null = null;
   if (decision === "byRules") {
     const aim = prepared.kind === "computer" && isDesktopInvocation(prepared.tool) && prepared.tool.name !== "desktop_look" ? desktopAim(prepared.tool) : null;
     const outcome = decideByRules({ invocation, aim, page: prepared.kind === "computer" ? prepared.facts ?? null : null, workspace: `${WORKSPACE_ROOT}/${claim.botId}` });
     deps.log({ level: "info", event: "tool-rule", runId, toolCallId: call.id, rule: outcome.rule, run: outcome.run });
-    decision = outcome.run ? "run" : "ask";
+    if (!outcome.run && outcome.permission === "shellFallback") {
+      commandEntryId = await deps.service.query(api.approvals.commandForCall, { runId, toolCallId: call.id, leaseToken: claim.leaseToken });
+    }
+    decision = outcome.run || commandEntryId !== null ? "run" : "ask";
     reason = outcome.run ? undefined : outcome.reason;
   }
   if (decision === "ask") {
@@ -398,11 +406,11 @@ export async function runTool(args: {
       case "approved":
         break;
       case "aborted":
-        return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+        return { ...base, outcome: "cancelled", output: stoppedOutput(NOT_SENT_CANCELLED_OUTPUT), truncated: false };
       case "denied":
-        return { ...base, outcome: "denied", output: DENIED_OUTPUT, truncated: false };
+        return { ...base, outcome: "denied", output: stoppedOutput(DENIED_OUTPUT), truncated: false };
       case "expired":
-        return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
+        return { ...base, outcome: "denied", output: stoppedOutput(EXPIRED_OUTPUT), truncated: false };
     }
   }
   if (isPageInputRequest(invocation) && retained !== null) {
@@ -434,13 +442,21 @@ export async function runTool(args: {
   lease.lost.throwIfAborted();
   const callId = makeCallId({ runId, toolCallId: call.id });
   deps.log({ level: "info", event: "tool-dispatch", callId, tool: tool.name });
+  const savedEntryId = commandEntryId;
   const result = await deps.link.call({
     ownerId: claim.ownerId,
     generation: claim.generation,
     callId,
     botId: claim.botId,
     tool,
+    previousAdmission,
     browsing: browsingForCall({ capability: claim.capability, runId, tool }),
+    ...(savedEntryId === null ? {} : {
+      beforeSend: (computer: Computer) => deps.service.mutation(api.approvals.authorizeCommand, {
+        runId, toolCallId: call.id, leaseToken: claim.leaseToken, entryId: savedEntryId,
+        computerId: computer.computerId, generation: computer.generation,
+      }),
+    }),
     lost: lease.lost,
     cancel: lease.cancel,
   });

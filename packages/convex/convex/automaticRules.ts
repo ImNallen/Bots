@@ -1,9 +1,6 @@
 import type { AimedInvocation, ModelInvocation, PageControl, PageTarget, WindowKind } from "@bots/protocol";
 
-// What a call becomes at the Automatic level once the rules have read it. run means the call goes with no card. Otherwise the owner
-// sees a card whose one plain sentence is reason. rule names which rule decided, so a later PR can add user rules to the same table
-// and the card can say which one fired.
-export type RuleOutcome = { run: true; rule: string } | { run: false; rule: string; reason: string };
+export type RuleOutcome = { run: true; rule: string } | { run: false; rule: string; reason: string; permission: "builtin" | "shellFallback" | "ineligible" };
 
 // A desktop input's resolved aim, reduced to what the rules read. The orchestrator fills it from the run's newest look, so the same
 // stored look decides the same way on a resume. element is null for typing or a key with no target, window is null with none active.
@@ -44,7 +41,7 @@ export function desktopAim(tool: AimedInvocation): DesktopAim {
 export function decideByRules(input: RuleInput): RuleOutcome {
   for (const name of BUILT_IN_ORDER) {
     if (BUILT_IN_RULES[name].applies(input)) {
-      return { run: false, rule: name, reason: BUILT_IN_RULES[name].reason };
+      return { run: false, permission: "builtin", rule: name, reason: BUILT_IN_RULES[name].reason };
     }
   }
   return allow(input);
@@ -63,7 +60,7 @@ function allow(input: RuleInput): RuleOutcome {
     case "shell":
       return readOnlyShell(invocation.args.command)
         ? { run: true, rule: "readOnlyShell" }
-        : { run: false, rule: "default", reason: "This command isn't a known read-only one, so it needs your approval." };
+        : { run: false, permission: "shellFallback", rule: "default", reason: "This command isn't a known read-only one, so it needs your approval." };
     case "desktop_scroll":
       return { run: true, rule: "desktopScroll" };
     case "desktop_click":
@@ -77,7 +74,7 @@ function allow(input: RuleInput): RuleOutcome {
     case "browser_press":
       return pageAllowed(invocation, page);
     default:
-      return { run: false, rule: "default", reason: DEFAULT_REASON };
+      return { run: false, permission: "ineligible", rule: "default", reason: DEFAULT_REASON };
   }
 }
 
@@ -119,10 +116,10 @@ const PAGE_FILLS: Readonly<Record<FillKey, string | null>> = {
 };
 
 function pageAllowed(invocation: PageInvocation, page: PageFacts | null): RuleOutcome {
-  const decide = (reason: string | null, rule: string): RuleOutcome => (reason === null ? { run: true, rule } : { run: false, rule: "pageAction", reason });
+  const decide = (reason: string | null, rule: string): RuleOutcome => (reason === null ? { run: true, rule } : { run: false, permission: "ineligible", rule: "pageAction", reason });
   switch (invocation.name) {
     case "browser_click":
-      return { run: false, rule: "pageAction", reason: PAGE_CLICK_REASON };
+      return { run: false, permission: "ineligible", rule: "pageAction", reason: PAGE_CLICK_REASON };
     case "browser_press":
       return decide(PAGE_KEYS[invocation.args.key], "pageKey");
     case "browser_type":
@@ -195,26 +192,26 @@ function hasCommitWord(name: string): boolean {
 
 function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
   if (aim === null) {
-    return { run: false, rule: "default", reason: DEFAULT_REASON };
+    return { run: false, permission: "ineligible", rule: "default", reason: DEFAULT_REASON };
   }
   if (button !== "left" && button !== "right") {
-    return { run: false, rule: "desktopClick", reason: "This is a double or middle click, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: "This is a double or middle click, so it needs your approval." };
   }
   if (isFileChooser(aim)) {
-    return { run: false, rule: "desktopClick", reason: FILE_CHOOSER_REASON };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: FILE_CHOOSER_REASON };
   }
   const name = aim.element?.name ?? "";
   if (name.trim() === "") {
-    return { run: false, rule: "desktopClick", reason: "This clicks a control with no name, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: "This clicks a control with no name, so it needs your approval." };
   }
   if (isTerminal(aim)) {
-    return { run: false, rule: "desktopClick", reason: "This clicks inside a terminal, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: "This clicks inside a terminal, so it needs your approval." };
   }
   if (isWeb(aim)) {
-    return { run: false, rule: "desktopClick", reason: WEB_REASON };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: WEB_REASON };
   }
   if (hasCommitWord(name)) {
-    return { run: false, rule: "desktopClick", reason: "This looks like it commits or confirms something, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopClick", reason: "This looks like it commits or confirms something, so it needs your approval." };
   }
   return { run: true, rule: "desktopClick" };
 }
@@ -222,30 +219,30 @@ function deskClickAllowed(button: string, aim: DesktopAim | null): RuleOutcome {
 function deskTypeAllowed(args: { submit: boolean; text: string; aim: DesktopAim | null }): RuleOutcome {
   const { submit, text, aim } = args;
   if (isFileChooser(aim)) {
-    return { run: false, rule: "desktopType", reason: FILE_CHOOSER_REASON };
+    return { run: false, permission: "ineligible", rule: "desktopType", reason: FILE_CHOOSER_REASON };
   }
   if (submit) {
-    return { run: false, rule: "desktopType", reason: "This types and then presses Enter, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopType", reason: "This types and then presses Enter, so it needs your approval." };
   }
   if (/[\r\n]/.test(text)) {
-    return { run: false, rule: "desktopType", reason: "This types more than one line, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopType", reason: "This types more than one line, so it needs your approval." };
   }
   if (aim !== null && isTerminal(aim)) {
-    return { run: false, rule: "desktopType", reason: "This types into a terminal, so it needs your approval." };
+    return { run: false, permission: "ineligible", rule: "desktopType", reason: "This types into a terminal, so it needs your approval." };
   }
   if (aim === null || isWeb(aim)) {
-    return { run: false, rule: "desktopType", reason: WEB_REASON };
+    return { run: false, permission: "ineligible", rule: "desktopType", reason: WEB_REASON };
   }
   return { run: true, rule: "desktopType" };
 }
 
 function deskKeyAllowed(keys: string, aim: DesktopAim | null): RuleOutcome {
   if (isFileChooser(aim)) {
-    return { run: false, rule: "desktopKey", reason: FILE_CHOOSER_REASON };
+    return { run: false, permission: "ineligible", rule: "desktopKey", reason: FILE_CHOOSER_REASON };
   }
   return NAVIGATION_KEYS.has(keys)
     ? { run: true, rule: "desktopKey" }
-    : { run: false, rule: "desktopKey", reason: "This presses a key that isn't plain navigation, so it needs your approval." };
+    : { run: false, permission: "ineligible", rule: "desktopKey", reason: "This presses a key that isn't plain navigation, so it needs your approval." };
 }
 
 // ---- The read-only shell allow rule. A conservative tokenizer parses the command, and anything it cannot parse with certainty asks.
@@ -522,7 +519,7 @@ const BUILT_IN_RULES = {
   },
   tooLong: {
     reason: "This action is too long to check automatically.",
-    applies: (input) => Buffer.byteLength(JSON.stringify(input.invocation.args), "utf8") > MAX_ACTION_BYTES,
+    applies: (input) => new TextEncoder().encode(JSON.stringify(input.invocation.args)).byteLength > MAX_ACTION_BYTES,
   },
   downloadIntoShell: {
     reason: "This downloads something from the internet and runs it without reading it first.",

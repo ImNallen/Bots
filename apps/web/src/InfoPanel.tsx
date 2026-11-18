@@ -8,6 +8,7 @@ import { characterOf, DEFAULT_CHARACTER, type CharacterPatch } from "./character
 import { CharacterPicker, CharacterPreview } from "./CharacterPicker.tsx";
 import type { useCharacterMutation } from "./useCharacterMutation.ts";
 import { Icon } from "./Icon.tsx";
+import { SavedCommands } from "./SavedCommands.tsx";
 import { RoutinesSection } from "./RoutinesSection.tsx";
 import { hasChanges, savedProfile, shownProfile, withEdit, type Profile, type ProfileEdits } from "./profileEdits.ts";
 import { errorMessage } from "./session.tsx";
@@ -235,6 +236,7 @@ export function InfoPanel(props: {
         <section className="info-card">
           <h3>Approvals</h3>
           <ApprovalSetting botId={bot._id} level={bot.approvalLevel ?? "automatic"} />
+          <SavedCommands botId={bot._id} />
           <p className="panel-note">Choose when your bot asks before acting. Automatic, the default, runs routine steps and asks only before actions that send, delete, or run something unknown.</p>
         </section>
         <DeleteBot botId={bot._id} name={bot.name} />

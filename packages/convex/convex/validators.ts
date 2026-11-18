@@ -176,3 +176,14 @@ export const botColor = v.union(
   v.literal("grey"),
   v.literal("lemon"),
 );
+
+export const commandScope = v.object({ computerId: v.id("computers"), generation: v.number(), workspace: v.string() });
+export const savedCommands = v.object({
+  scope: commandScope,
+  entries: v.array(v.object({ id: v.string(), command: v.string(), createdAt: v.number() })),
+});
+export const shellSubject = v.object({
+  eventId: v.id("runEvents"), arguments: v.string(), command: v.string(), scope: commandScope,
+});
+export type CommandScope = Infer<typeof commandScope>;
+export type ShellSubject = Infer<typeof shellSubject>;

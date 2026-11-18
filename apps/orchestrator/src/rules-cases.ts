@@ -1,5 +1,5 @@
 import type { BROWSER_KEYS, KeyCombo, PageControl, WindowKind } from "@bots/protocol";
-import type { DesktopAim, PageFacts, RuleInput } from "./rules.ts";
+import type { DesktopAim, PageFacts, RuleInput } from "@bots/convex/automaticRules";
 
 // The labelled approval cases, ported from the research branch's review set with the model-only fields dropped. decideByRules reads
 // input alone, so the owner's request, the bot's earlier actions, and the expected risks are gone, and only the action, its desktop

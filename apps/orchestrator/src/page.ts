@@ -1,7 +1,7 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import { pageAim, pageView, type AimedPageInvocation, type PageAim, type PageInputRequest, type PageView } from "@bots/protocol";
-import type { PageFacts } from "./rules.ts";
+import type { PageFacts } from "@bots/convex/automaticRules";
 import type { Service } from "./service.ts";
 
 export async function loadPage(service: Service, runId: Id<"runs">): Promise<PageView | null> {

@@ -84,6 +84,96 @@ describe("link", () => {
     expect(result.outcome).toBe("unavailable");
   });
 
+  it("checks permission only after a connection is ready and refuses without sending", async () => {
+    let checks = 0;
+    const pending = link.call({ ...callArgs("permission:disconnected"), beforeSend: async () => { checks++; return false; } });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(checks).toBe(0);
+    const computer = await connectComputer();
+    const result = await pending;
+    expect(checks).toBe(1);
+    expect(result.output).toContain("was not sent");
+    expect(computer.received.some(message => message.kind === "toolCall")).toBe(false);
+    computer.socket.close(); await computer.closed;
+  });
+
+  it("rechecks when a socket is replaced during authorization", async () => {
+    const older = await connectComputer();
+    const gate = Promise.withResolvers<boolean>();
+    let checks = 0;
+    const pending = link.call({ ...callArgs("permission:replace"), beforeSend: async () => ++checks === 1 ? gate.promise : false });
+    await until(() => checks === 1);
+    const newer = await connectComputer();
+    await older.closed;
+    gate.resolve(true);
+    expect((await pending).output).toContain("was not sent");
+    expect(checks).toBe(2);
+    expect(newer.received.some(message => message.kind === "toolCall")).toBe(false);
+    newer.socket.close(); await newer.closed;
+  });
+
+  it("reports uncertainty when permission is revoked after an earlier transmission", async () => {
+    const first = await connectComputer();
+    let checks = 0;
+    const pending = link.call({ ...callArgs("permission:retry"), beforeSend: async () => ++checks === 1 });
+    await until(() => first.received.some(message => message.kind === "toolCall"));
+    first.socket.terminate(); await first.closed;
+    const second = await connectComputer();
+    const result = await pending;
+    expect(result.output).toContain("outcome is unknown");
+    expect(result.output).not.toContain("was not sent");
+    expect(second.received.some(message => message.kind === "toolCall")).toBe(false);
+    second.socket.close(); await second.closed;
+  });
+
+  it("preserves uncertainty when a later authorization request throws", async () => {
+    const first = await connectComputer();
+    let checks = 0;
+    const pending = link.call({ ...callArgs("permission:failed-check"), beforeSend: async () => {
+      if (++checks === 1) return true;
+      throw new Error("Backend unavailable");
+    } });
+    await until(() => first.received.some(message => message.kind === "toolCall"));
+    first.socket.terminate(); await first.closed;
+    const second = await connectComputer();
+    expect((await pending).output).toContain("outcome is unknown");
+    expect(second.received.some(message => message.kind === "toolCall")).toBe(false);
+    second.socket.close(); await second.closed;
+  });
+
+  it("checks cancellation and lost leases after awaiting permission", async () => {
+    for (const signal of ["cancel", "lost"] as const) {
+      const computer = await connectComputer();
+      const controller = new AbortController();
+      const gate = Promise.withResolvers<boolean>();
+      const pending = link.call({ ...callArgs(`permission:${signal}`, { [signal]: controller.signal }), beforeSend: () => gate.promise });
+      controller.abort(new Error("Lease lost")); gate.resolve(true);
+      if (signal === "lost") await expect(pending).rejects.toThrow("Lease lost");
+      else expect((await pending).outcome).toBe("cancelled");
+      expect(computer.received.some(message => message.kind === "toolCall")).toBe(false);
+      computer.socket.close(); await computer.closed;
+    }
+  });
+
+  it("retains uncertainty from an earlier runner's admission", async () => {
+    const computer = await connectComputer();
+    const result = await link.call({ ...callArgs("permission:recovered"), previousAdmission: true, beforeSend: async () => false });
+    expect(result.output).toContain("outcome is unknown");
+    expect(result.output).not.toContain("was not sent");
+    expect(computer.received.some(message => message.kind === "toolCall")).toBe(false);
+    computer.socket.close(); await computer.closed;
+  });
+
+  it("preserves a definitive computer error after an earlier admission", async () => {
+    const computer = await connectComputer();
+    const pending = link.call({ ...callArgs("permission:known-result"), previousAdmission: true, beforeSend: async () => true });
+    await until(() => computer.received.some(message => message.kind === "toolCall"));
+    const result = { outcome: "error", output: "The shell exited with an error", truncated: false };
+    computer.socket.send(JSON.stringify({ kind: "toolResult", callId: "permission:known-result", result }));
+    expect(await pending).toEqual(result);
+    computer.socket.close(); await computer.closed;
+  });
+
   it("delivers a result and caps its output again, because a VM is untrusted", async () => {
     const computer = await connectComputer();
     const pending = link.call(callArgs("a:cap"));

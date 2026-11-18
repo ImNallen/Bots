@@ -35,7 +35,8 @@
     "verify:browser-page": "node scripts/verify-browser-page.ts",
     "verify:pages": "node scripts/verify-pages.ts",
     "verify:page-acts": "node scripts/verify-page-acts.ts",
-    "verify:page-policy": "node scripts/verify-page-policy.ts"
+    "verify:page-policy": "node scripts/verify-page-policy.ts",
+    "verify:command-permissions": "node scripts/verify-command-permissions.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",
