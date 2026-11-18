@@ -349,7 +349,7 @@ export const cleanupReset = internalMutation({
       }
       case "bots": {
         const bots = await ctx.db.query("bots").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId)).paginate({ cursor: cleanup.cursor, numItems: 32 });
-        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined });
+        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined, savedCommands: undefined });
         await ctx.db.patch(computerId, { resetCleanup: bots.isDone ? undefined : { kind: "bots", cursor: bots.continueCursor } });
         if (bots.isDone) return;
         break;

@@ -2,6 +2,8 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   approvalLevel,
+  savedCommands,
+  shellSubject,
   approvalState,
   attachmentContentType,
   botColor,
@@ -50,6 +52,7 @@ export default defineSchema({
   bots: defineTable({
     ownerId: v.id("users"),
     name: v.string(),
+    savedCommands: v.optional(savedCommands),
     // While this is in the future, the owner controls the bot's screen and the bot starts no tool.
     takeoverUntil: v.optional(v.number()),
     // A bot with no value uses the default, which is "automatic".
@@ -82,6 +85,8 @@ export default defineSchema({
     toolCallId: v.string(),
     toolName: v.string(),
     state: approvalState,
+    shellSubject: v.optional(shellSubject),
+    savedEntryId: v.optional(v.string()),
     requestedAt: v.number(),
     // A desktop input's card: what it does in words, and the box that the card outlines on the run's newest look.
     subject: v.optional(v.string()),

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { PageView } from "@bots/protocol";
 import { aimPageInput, retainedPageInput } from "./page.ts";
-import { decideByRules } from "./rules.ts";
+import { decideByRules } from "@bots/convex/automaticRules";
 
 const page: PageView = { snapshotId: randomUUID(), origin: null, targets: [{ ref: 1, words: "Draft", control: { kind: "field", field: "line", readOnly: false } }], truncated: false };
 const request = { name: "browser_type", args: { ref: 1, text: "draft", submit: false } } as const;
