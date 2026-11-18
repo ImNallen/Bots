@@ -35,7 +35,7 @@ export type DisplayItem = { key: string } & (
     }
   // picture is true for a desktop input, whose card shows the run's newest look with the target outlined. reason is the Automatic
   // rules' one sentence, or null at the other levels.
-  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean; reason: string | null }
+  | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean; reason: string | null; commandPermission?: PendingApproval["commandPermission"] }
   | { kind: "denied"; text: string }
   | { kind: "failed"; reason: string }
   | { kind: "stopped" }
@@ -231,7 +231,7 @@ function callItem(args: {
   call: ToolCall;
   result: ToolResult | undefined;
   active: boolean;
-  approval: Pick<PendingApproval, "_id" | "subject" | "reason"> | undefined;
+  approval: Pick<PendingApproval, "_id" | "subject" | "reason" | "commandPermission"> | undefined;
   timeZone: string;
 }): DisplayItem {
   const { key, call, result, active, approval, timeZone } = args;
@@ -250,9 +250,10 @@ function callItem(args: {
         kind: "approval",
         approvalId: approval._id,
         title: routine?.title ?? words?.ask ?? `Run ${call.name}?`,
-        arguments: routine?.arguments ?? subject ?? callArguments(call.arguments),
+        arguments: approval.commandPermission != null ? callArguments(approval.commandPermission.arguments) : routine?.arguments ?? subject ?? callArguments(call.arguments),
         picture: subject !== null && call.name.startsWith("desktop_"),
         reason: approval.reason,
+        commandPermission: approval.commandPermission,
       };
     }
     // A row that is still running must not claim the past tense.

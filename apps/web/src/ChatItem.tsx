@@ -143,6 +143,8 @@ function ScreenTarget({ approvalId }: { approvalId: Id<"approvals"> }) {
 
 function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" }> }) {
   const decide = useMutation(api.approvals.decide);
+  const saveCommand = useMutation(api.approvals.saveCommand);
+  const [confirmSave, setConfirmSave] = useState(false);
   const [sent, setSent] = useState<Decision | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   // Scrolling back up does not take away what the person has already read.
@@ -152,7 +154,8 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
   }, []);
   // Set before the next render, so a second click in the same instant still finds it.
   const sending = useRef(false);
-  const answer = (decision: Decision) => {
+  const answer = (action: Decision | "saveCommand") => {
+    const decision = action === "saveCommand" ? "approved" : action;
     if (sending.current) {
       return;
     }
@@ -160,7 +163,8 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
     setSent(decision);
     setProblem(null);
     // On success the call stops being pending and this card goes away.
-    decide({ approvalId: item.approvalId, decision }).catch((error: unknown) => {
+    const request = action === "saveCommand" ? saveCommand({ approvalId: item.approvalId }) : decide({ approvalId: item.approvalId, decision });
+    request.catch((error: unknown) => {
       sending.current = false;
       setSent(null);
       setProblem(errorMessage(error));
@@ -193,6 +197,16 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
           </button>
         ))}
       </div>
+      {item.commandPermission != null && (
+        <div className="command-permission">
+          {confirmSave ? <>
+            <p>Always allow this exact command for {item.commandPermission.botName} in <code>{item.commandPermission.scope.workspace}</code> on this computer, generation {item.commandPermission.scope.generation}, at Automatic only.</p>
+            <p>Scripts and configuration this command reads can change. Built-in approval rules still apply. Revoke it in Bot details → Approvals.</p>
+            <button type="button" className="btn btn-go" disabled={sent !== null || !allArgumentsRead(item.arguments.length, read)} onClick={() => answer("saveCommand")}>Save and approve</button>
+            <button type="button" className="btn" disabled={sent !== null} onClick={() => setConfirmSave(false)}>Cancel</button>
+          </> : <button type="button" className="btn" disabled={sent !== null || !allArgumentsRead(item.arguments.length, read)} onClick={() => setConfirmSave(true)}>Always allow this command</button>}
+        </div>
+      )}
       {problem !== null && (
         <p className="error" role="alert">
           {problem}

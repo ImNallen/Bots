@@ -9,7 +9,7 @@ type Body = Event["body"];
 const NOW = new Date(2026, 10, 6, 15, 0).getTime();
 const USAGE = { promptTokens: 1, completionTokens: 1 };
 
-function id<T extends "runs" | "runEvents" | "approvals">(value: string): Id<T> {
+function id<T extends "runs" | "runEvents" | "approvals" | "computers">(value: string): Id<T> {
   return value as Id<T>;
 }
 
@@ -52,6 +52,7 @@ const approval = (toolCallId = "c1", subject: string | null = null, reason: stri
   _id: id<"approvals">("a1"),
   runId: id<"runs">("run1"),
   toolCallId,
+  commandPermission: null,
   subject,
   reason,
 });
@@ -275,6 +276,15 @@ describe("conversationItems", () => {
       });
     });
 
+    it("shows the immutable shell arguments instead of a caller label or changed timeline text", () => {
+      const pending = { ...approval(), subject: "Forged label", commandPermission: {
+        eventId: id<"runEvents">("event1"), arguments: JSON.stringify({ command: "bash original.sh" }), command: "bash original.sh",
+        botName: "Atlas", scope: { computerId: id<"computers">("computer1"), generation: 0, workspace: "/workspace/bot1" },
+      } };
+      const item = only(itemsOf([pendingRun(shell("bash changed.sh"))], [pending]), "approval");
+      expect(item.arguments).toEqual([{ label: null, value: "bash original.sh" }]);
+    });
+
     it("asks about a desktop input in the orchestrator's words, shows typed text in full, and shows the screen", () => {
       const askOf = (name: string, args: object, subject: string) =>
         only(itemsOf([pendingRun({ id: "c1", name, arguments: JSON.stringify(args) })], [approval("c1", subject)]), "approval");
@@ -286,6 +296,7 @@ describe("conversationItems", () => {
         arguments: [{ label: null, value: 'Click entry "Address and search bar" in Chromium' }],
         picture: true,
         reason: null,
+        commandPermission: null,
       });
       expect(askOf("desktop_type", { mark: 4, text: "rm -rf ~\nexit", submit: true }, 'Type into entry "x" in Chromium, then press Enter')).toMatchObject({
         title: "Type this?",
