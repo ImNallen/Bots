@@ -155,6 +155,25 @@ describe("link", () => {
     }
   });
 
+  it("retains uncertainty from an earlier runner's admission", async () => {
+    const computer = await connectComputer();
+    const result = await link.call({ ...callArgs("permission:recovered"), previousAdmission: true, beforeSend: async () => false });
+    expect(result.output).toContain("outcome is unknown");
+    expect(result.output).not.toContain("was not sent");
+    expect(computer.received.some(message => message.kind === "toolCall")).toBe(false);
+    computer.socket.close(); await computer.closed;
+  });
+
+  it("preserves a definitive computer error after an earlier admission", async () => {
+    const computer = await connectComputer();
+    const pending = link.call({ ...callArgs("permission:known-result"), previousAdmission: true, beforeSend: async () => true });
+    await until(() => computer.received.some(message => message.kind === "toolCall"));
+    const result = { outcome: "error", output: "The shell exited with an error", truncated: false };
+    computer.socket.send(JSON.stringify({ kind: "toolResult", callId: "permission:known-result", result }));
+    expect(await pending).toEqual(result);
+    computer.socket.close(); await computer.closed;
+  });
+
   it("delivers a result and caps its output again, because a VM is untrusted", async () => {
     const computer = await connectComputer();
     const pending = link.call(callArgs("a:cap"));

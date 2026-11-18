@@ -25,7 +25,7 @@ export function SavedCommands({ botId }: { botId: Id<"bots"> }) {
     <h4>Saved commands</h4>
     {saved === null || saved.entries.length === 0 ? <p>No saved commands.</p> : <>
       <p>{saved.active ? "Active at Automatic only." : "Inactive. These commands apply only at Automatic on their original computer."}</p>
-      <p>Workspace <code>{saved.scope.workspace}</code>. Computer generation {saved.scope.generation}.</p>
+      <p>Workspace <code>{saved.scope.workspace}</code>. Resetting the computer clears these permissions.</p>
       {saved.entries.map(entry => <div className="saved-command" key={entry.id}>
         <pre tabIndex={0}>{entry.command}</pre>
         <button type="button" className="btn" disabled={pending !== null} onClick={() => void remove(entry.id)}>{pending === entry.id ? "Revoking" : "Revoke"}</button>

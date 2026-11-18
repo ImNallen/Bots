@@ -172,7 +172,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
   };
   return (
     <section className="ask" data-done={sent !== null} aria-label="This call needs your approval">
-      <h3>{sent === "approved" ? "Approved · Continuing" : sent === "denied" ? "Skipped · Nothing was run" : item.title}</h3>
+      <h3>{sent === "approved" ? "Approved · Continuing" : sent === "denied" ? "Denied · No further action" : item.title}</h3>
       {item.reason !== null && <p className="ask-reason">{item.reason}</p>}
       {item.arguments.map((argument, index) => (
         <div className="ask-argument" key={argument.label ?? index}>
@@ -200,7 +200,7 @@ function ApprovalCard({ item }: { item: Extract<DisplayItem, { kind: "approval" 
       {item.commandPermission != null && (
         <div className="command-permission">
           {confirmSave ? <>
-            <p>Always allow this exact command for {item.commandPermission.botName} in <code>{item.commandPermission.scope.workspace}</code> on this computer, generation {item.commandPermission.scope.generation}, at Automatic only.</p>
+            <p>Always allow this exact command for {item.commandPermission.botName} in <code>{item.commandPermission.scope.workspace}</code> on this computer until it is reset, at Automatic only.</p>
             <p>Scripts and configuration this command reads can change. Built-in approval rules still apply. Revoke it in Bot details → Approvals.</p>
             <button type="button" className="btn btn-go" disabled={sent !== null || !allArgumentsRead(item.arguments.length, read)} onClick={() => answer("saveCommand")}>Save and approve</button>
             <button type="button" className="btn" disabled={sent !== null} onClick={() => setConfirmSave(false)}>Cancel</button>

@@ -48,6 +48,7 @@ export type Link = {
     lost: AbortSignal;
     cancel: AbortSignal;
     beforeSend?: (computer: Computer) => Promise<boolean>;
+    previousAdmission?: boolean;
   }) => Promise<LinkOutcome>;
   sendBrowsingEnd: (args: { ownerId: Id<"users">; generation: number; botId: string; browsing: Browsing }) => void;
 };
@@ -435,7 +436,7 @@ export function startLink(args: {
       }
     },
     async call(call) {
-      let transmitted = false;
+      let executionPossible = call.previousAdmission ?? false;
       for (;;) {
         const connection = connections.get(call.ownerId);
         if (connection !== undefined && connection.computer.generation !== call.generation) {
@@ -448,19 +449,17 @@ export function startLink(args: {
           let authorized = false;
           try {
             authorized = await call.beforeSend(connection.computer);
-          } catch {
-            // A failed retry cannot tell us whether an earlier transmission executed.
-          }
+          } catch {}
           call.lost.throwIfAborted();
-          if (call.cancel.aborted) return { outcome: "cancelled", output: transmitted ? CANCELLED_UNREACHABLE_OUTPUT : "The call was cancelled before it was sent.", truncated: false };
+          if (call.cancel.aborted) return { outcome: "cancelled", output: executionPossible ? CANCELLED_UNREACHABLE_OUTPUT : "The call was cancelled before it was sent.", truncated: false };
           if (connections.get(call.ownerId) !== connection || connection.socket.readyState !== WebSocket.OPEN) continue;
           if (!authorized) return {
             outcome: "unavailable",
-            output: transmitted ? UNAVAILABLE_OUTPUT : "The saved command permission is no longer available. This call was not sent. Request the command again for approval.",
+            output: executionPossible ? UNAVAILABLE_OUTPUT : "The saved command permission is no longer available. This call was not sent. Request the command again for approval.",
             truncated: false,
           };
         }
-        if (connection !== undefined && !call.cancel.aborted && !call.lost.aborted) transmitted = true;
+        if (connection !== undefined && !call.cancel.aborted && !call.lost.aborted) executionPossible = true;
         const step = await (connection === undefined ? awaitComputer(call) : exchange(call, connection));
         switch (step.kind) {
           case "result":

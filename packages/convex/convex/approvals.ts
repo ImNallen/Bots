@@ -190,7 +190,19 @@ export const authorizeCommand = mutation({
   handler: async (ctx, args) => {
     await requireService(ctx);
     const match = await matchingCommand(ctx, args);
-    return match !== null && match.entry.id === args.entryId && match.subject.scope.computerId === args.computerId && match.subject.scope.generation === args.generation && (match.bot.takeoverUntil ?? 0) <= Date.now();
+    if (match === null || match.entry.id !== args.entryId || match.subject.scope.computerId !== args.computerId || match.subject.scope.generation !== args.generation || (match.bot.takeoverUntil ?? 0) > Date.now()) return false;
+    await ctx.db.patch(args.runId, { lastCommandAdmission: args.toolCallId });
+    return true;
+  },
+});
+
+export const wasCommandAdmitted = query({
+  args: { runId: v.id("runs"), toolCallId: v.string(), leaseToken: v.string() },
+  handler: async (ctx, { runId, toolCallId, leaseToken }) => {
+    await requireService(ctx);
+    const run = await ctx.db.get(runId);
+    if (run?.state.kind !== "running" || run.state.leaseToken !== leaseToken || run.state.leaseUntil <= Date.now()) throw new ConvexError("Lease lost");
+    return run.lastCommandAdmission === toolCallId;
   },
 });
 

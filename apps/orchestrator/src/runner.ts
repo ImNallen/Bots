@@ -341,15 +341,19 @@ export async function runTool(args: {
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
   const { invocation } = parsed;
+  const previousAdmission = invocation.name === "shell" && await deps.service.query(api.approvals.wasCommandAdmitted, { runId, toolCallId: call.id, leaseToken: claim.leaseToken });
+  const stoppedOutput = (output: string) => previousAdmission
+    ? "An earlier attempt of this command was authorized and its outcome is unknown. It may already have run. No further attempt was sent. Check the computer's state before requesting it again."
+    : output;
   let retained = await deps.service.query(api.approvals.forCall, { runId, toolCallId: call.id });
   if (retained?.state === "denied" || retained?.state === "expired") {
-    return { ...base, outcome: "denied", output: retained.state === "denied" ? DENIED_OUTPUT : EXPIRED_OUTPUT, truncated: false };
+    return { ...base, outcome: "denied", output: stoppedOutput(retained.state === "denied" ? DENIED_OUTPUT : EXPIRED_OUTPUT), truncated: false };
   }
   const level = await deps.service.query(api.bots.approvalLevelFor, { botId: claim.botId });
   let decision = decideTool({ capability: claim.capability, level, toolName: invocation.name, readUntrustedText: readUntrusted });
   if (decision === "reject") {
     deps.log({ level: "info", event: "tool-rejected", runId, toolCallId: call.id });
-    return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
+    return { ...base, outcome: "rejected", output: stoppedOutput(READ_ONLY_OUTPUT), truncated: false };
   }
   if (decision === "routineOnly") {
     deps.log({ level: "info", event: "tool-refused", runId, toolCallId: call.id });
@@ -402,11 +406,11 @@ export async function runTool(args: {
       case "approved":
         break;
       case "aborted":
-        return { ...base, outcome: "cancelled", output: NOT_SENT_CANCELLED_OUTPUT, truncated: false };
+        return { ...base, outcome: "cancelled", output: stoppedOutput(NOT_SENT_CANCELLED_OUTPUT), truncated: false };
       case "denied":
-        return { ...base, outcome: "denied", output: DENIED_OUTPUT, truncated: false };
+        return { ...base, outcome: "denied", output: stoppedOutput(DENIED_OUTPUT), truncated: false };
       case "expired":
-        return { ...base, outcome: "denied", output: EXPIRED_OUTPUT, truncated: false };
+        return { ...base, outcome: "denied", output: stoppedOutput(EXPIRED_OUTPUT), truncated: false };
     }
   }
   if (isPageInputRequest(invocation) && retained !== null) {
@@ -445,6 +449,7 @@ export async function runTool(args: {
     callId,
     botId: claim.botId,
     tool,
+    previousAdmission,
     browsing: browsingForCall({ capability: claim.capability, runId, tool }),
     ...(savedEntryId === null ? {} : {
       beforeSend: (computer: Computer) => deps.service.mutation(api.approvals.authorizeCommand, {

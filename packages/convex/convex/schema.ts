@@ -178,6 +178,7 @@ export default defineSchema({
     lastClaimSeq: v.optional(v.number()),
     claimsWithoutProgress: v.optional(v.number()),
     computerGeneration: v.optional(v.number()),
+    lastCommandAdmission: v.optional(v.string()),
   })
     .index("by_thread", ["threadId"])
     .index("by_state", ["state.kind"])

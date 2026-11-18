@@ -1,4 +1,4 @@
-import { parseToolCall } from "@bots/protocol";
+import { parseToolCall, WORKSPACE_ROOT } from "@bots/protocol";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { QueryCtx } from "./_generated/server.js";
 import { decideByRules } from "./automaticRules.js";
@@ -27,7 +27,7 @@ export async function eligibleShell(ctx: QueryCtx, run: Doc<"runs">, toolCallId:
   if (result !== null) return null;
   const parsed = parseToolCall(call);
   if (parsed.kind !== "ok" || parsed.invocation.name !== "shell") return null;
-  const scope = { computerId: computer._id, generation, workspace: `/workspace/${bot._id}` };
+  const scope = { computerId: computer._id, generation, workspace: `${WORKSPACE_ROOT}/${bot._id}` };
   const policy = decideByRules({ invocation: parsed.invocation, workspace: scope.workspace, aim: null, page: null });
   if (policy.run || policy.permission !== "shellFallback") return null;
   const subject: ShellSubject = { eventId: turn._id, arguments: call.arguments, command: parsed.invocation.args.command, scope };

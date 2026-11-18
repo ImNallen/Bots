@@ -268,12 +268,30 @@ try {
   await tab.locator(".ask-argument pre").evaluateAll(elements => elements.forEach(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event("scroll")); }));
   await allow.click(); const scope = await tab.locator(".command-permission").innerText(); assert.ok(scope.includes(`/workspace/${botId}`)); assert.ok(scope.includes("Exact command proof")); assert.ok(scope.includes("Automatic only")); assert.ok(scope.includes("configuration"));
   await tab.screenshot({ path: join(output, "command-scope.png") });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await tab.setViewportSize({ width: 412, height: 915 });
+    await tab.emulateMedia({ colorScheme });
+    await tab.waitForFunction("theme => document.documentElement.dataset.theme === theme", colorScheme);
+    assert.equal(await tab.evaluate("document.documentElement.scrollWidth <= innerWidth"), true, "phone approval scope must fit the viewport");
+    await tab.getByRole("button", { name: "Save and approve", exact: true }).scrollIntoViewIfNeeded();
+    await tab.screenshot({ path: join(output, `command-scope-phone-${colorScheme}.png`) });
+  }
+  await tab.setViewportSize({ width: 1440, height: 1000 });
+  await tab.emulateMedia({ colorScheme: "light" });
   await owner.mutation(api.bots.setApprovalLevel, { botId, level: "everything" });
   await tab.getByRole("button", { name: "Save and approve", exact: true }).click(); await tab.getByRole("alert").filter({ hasText: "can no longer be saved" }).waitFor();
   await owner.mutation(api.bots.setApprovalLevel, { botId, level: "automatic" }); await tab.getByRole("button", { name: "Save and approve", exact: true }).click();
   await wait(async () => (await saved())?.entries.length === 1 ? true : null, "UI saves grant");
   await tab.getByRole("button", { name: "About Exact command proof", exact: true }).click();
   await tab.getByRole("button", { name: "Revoke", exact: true }).scrollIntoViewIfNeeded(); await tab.screenshot({ path: join(output, "saved-command.png") });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await tab.setViewportSize({ width: 412, height: 915 });
+    await tab.emulateMedia({ colorScheme });
+    await tab.waitForFunction("theme => document.documentElement.dataset.theme === theme", colorScheme);
+    await tab.getByRole("button", { name: "Revoke", exact: true }).scrollIntoViewIfNeeded();
+    assert.equal(await tab.evaluate("document.documentElement.scrollWidth <= innerWidth"), true, "phone saved commands must fit the viewport");
+    await tab.screenshot({ path: join(output, `saved-command-phone-${colorScheme}.png`) });
+  }
   await owner.mutation(api.bots.setApprovalLevel, { botId, level: "everything" }); await tab.getByText("Inactive. These commands apply only at Automatic on their original computer.").waitFor();
   await tab.getByRole("button", { name: "Revoke", exact: true }).click(); await tab.getByText("No saved commands.").waitFor(); assert.equal((await saved())?.entries.length, 0);
   await owner.mutation(api.approvals.saveCommand, { approvalId: uiCard.approvalId }); assert.equal((await saved())?.entries.length, 0);
