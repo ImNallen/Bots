@@ -7,7 +7,8 @@
     "build": "vite build",
     "typecheck": "tsc --project tsconfig.json",
     "test": "vitest run",
-    "verify:chat": "node scripts/verify-chat.ts"
+    "verify:chat": "node scripts/verify-chat.ts",
+    "verify:markdown": "node scripts/verify-markdown.ts"
   },
   "dependencies": {
     "@bots/convex": "workspace:*",
@@ -15,12 +16,13 @@
     "@dnd-kit/modifiers": "9.0.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@novnc/novnc": "1.7.0",
+    "@pierre/highlights": "0.5.1",
+    "@pierre/words": "0.2.2",
     "@tanstack/react-router": "1.170.46",
     "convex": "catalog:",
+    "htmlparser2": "catalog:",
     "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "react-markdown": "10.1.0",
-    "remark-gfm": "4.0.1"
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@bots/protocol": "workspace:*",

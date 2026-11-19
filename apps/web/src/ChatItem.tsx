@@ -304,7 +304,7 @@ export function ChatItem({ item, character, botName = "Bot", onRetry, completed 
       return (
         <article className="assistant-message">
           <BotAuthor character={character} botName={botName} state={item.streaming ? "working" : completed ? "success" : "idle"} />
-          <div className="bub" aria-live={item.streaming ? "polite" : undefined}><Markdown text={item.text} /></div>
+          <div className="bub" aria-live={item.streaming ? "polite" : undefined}><Markdown text={item.text} streaming={item.streaming} /></div>
           {!item.streaming && <ReplyActions text={item.text} onRetry={onRetry} />}
         </article>
       );
