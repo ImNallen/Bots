@@ -329,6 +329,70 @@ try {
   await page.getByRole("button", { name: "Take control", exact: true }).waitFor();
   assert.equal((await owner.query(api.threads.timeline, { threadId: normalThread })).runs.at(-1)?.handoff, null);
   assert.equal(executions, 0);
+  const renewalPage = await ui.newPage({ viewport: { width: 1440, height: 1000 } });
+  renewalPage.setDefaultTimeout(15000);
+  renewalPage.on("pageerror", error => errors.push(error.message));
+  await renewalPage.addInitScript(`{
+    const NativeSocket = window.WebSocket, interval = window.setInterval, clear = window.clearInterval;
+    const renewals = new Map();
+    window.setInterval = (callback, delay, ...args) => {
+      const id = interval(callback, delay, ...args);
+      if (delay === 60000) renewals.set(id, () => callback(...args));
+      return id;
+    };
+    window.clearInterval = (id) => { renewals.delete(id); clear(id); };
+    const race = window.takeoverRace = {
+      armed: false, renewalId: null, acquireId: null, renewalResponse: null, acquireResponse: null,
+      trigger() { this.armed = true; for (const renew of renewals.values()) renew(); },
+      flush(kind) { const [socket, data] = this[kind]; this[kind] = null; this.replaying = true;
+        socket.dispatchEvent(new MessageEvent('message', { data })); this.replaying = false; }
+    };
+    function DelayedSocket(...args) {
+      const socket = new NativeSocket(...args), send = socket.send.bind(socket);
+      socket.addEventListener('message', (event) => {
+        if (race.replaying || typeof event.data !== 'string') return;
+        let message; try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type !== 'MutationResponse') return;
+        const kind = message.requestId === race.renewalId ? 'renewalResponse'
+          : message.requestId === race.acquireId ? 'acquireResponse' : null;
+        if (kind !== null) { race[kind] = [socket, event.data]; event.stopImmediatePropagation(); }
+      });
+      socket.send = (data) => {
+        if (race.armed && typeof data === 'string') {
+          let message; try { message = JSON.parse(data); } catch {}
+          if (message?.type === 'Mutation' && message.udfPath === 'bots:takeOver') {
+            const kind = message.args[0]?.action?.kind;
+            if (kind === 'renew' && race.renewalId === null) race.renewalId = message.requestId;
+            if (kind === 'acquire' && race.renewalId !== null && race.acquireId === null) race.acquireId = message.requestId;
+          }
+        }
+        send(data);
+      };
+      return socket;
+    }
+    DelayedSocket.prototype = NativeSocket.prototype;
+    Object.setPrototypeOf(DelayedSocket, NativeSocket);
+    window.WebSocket = DelayedSocket;
+  }`);
+  await renewalPage.goto(`${base}/bots/${normalBot}?screen=true`);
+  await renewalPage.getByRole("button", { name: "Take control", exact: true }).click();
+  await renewalPage.getByRole("button", { name: "Give back", exact: true }).waitFor();
+  const normalRun = (await owner.query(api.threads.timeline, { threadId: normalThread })).runs.at(-1); assert(normalRun);
+  alter(normalRun._id, "expireInput");
+  await renewalPage.evaluate("window.takeoverRace.trigger()");
+  await renewalPage.waitForFunction("window.takeoverRace.renewalResponse !== null");
+  await renewalPage.getByRole("button", { name: "Give back", exact: true }).click();
+  await renewalPage.getByRole("button", { name: "Take control", exact: true }).click();
+  await renewalPage.waitForFunction("window.takeoverRace.acquireResponse !== null");
+  const freshSession = (await owner.query(api.bots.get, { botId: normalBot }))?.takeoverSessionId; assert(freshSession);
+  await renewalPage.evaluate("window.takeoverRace.flush('renewalResponse')");
+  await renewalPage.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  await renewalPage.evaluate("window.takeoverRace.flush('acquireResponse')");
+  await renewalPage.getByRole("button", { name: "Give back", exact: true }).waitFor();
+  assert.equal((await owner.query(api.bots.get, { botId: normalBot }))?.takeoverSessionId, freshSession);
+  await renewalPage.getByRole("button", { name: "Give back", exact: true }).click();
+  await renewalPage.close();
+  console.log("ok delayed rejection from an old renewal cannot abort a fresh control acquisition in the mounted viewer");
   for (const [name, viewport, dark] of [
     ["desktop-light", { width: 1440, height: 1000 }, false], ["desktop-dark", { width: 1440, height: 1000 }, true],
     ["phone-light", { width: 390, height: 844 }, false], ["phone-dark", { width: 390, height: 844 }, true],

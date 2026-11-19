@@ -103,6 +103,7 @@ function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<S
       renew = setInterval(() => {
         if (paused.current) return;
         takeOver({ botId, action: { kind: "renew", sessionId: grant.sessionId } }).catch(() => {
+          if (cancelled) return;
           clearInterval(renew);
           dispatch({ type: "disconnected" });
         });
