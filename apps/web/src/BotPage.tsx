@@ -236,8 +236,8 @@ function useStickToBottom(mounted: boolean) {
   return { scroller, onScroll };
 }
 
-function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: string; character: Character }) {
-  const { botId, threadId, botName, character } = props;
+function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botName: string; character: Character; onOpenScreen: () => void }) {
+  const { botId, threadId, botName, character, onOpenScreen } = props;
   const timeline = useQuery(api.threads.timeline, { threadId });
   const pending = useQuery(api.approvals.pendingForThread, { threadId });
   const user = useQuery(api.users.current);
@@ -283,7 +283,7 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
               <span>Send a message to start.</span>
             </div>
           )}
-          <ChatFeed items={items} character={character} botName={botName} completedReplyKey={completedReply ? `${completedReply._id}:text` : undefined}
+          <ChatFeed onOpenScreen={onOpenScreen} items={items} character={character} botName={botName} completedReplyKey={completedReply ? `${completedReply._id}:text` : undefined}
             onRetry={latestRun && !isActive(latestRun) ? async (text) => { await send({ threadId, text }); } : undefined} />
         </section>
       </div>
@@ -295,8 +295,8 @@ function Conversation(props: { botId: Id<"bots">; threadId: Id<"threads">; botNa
   );
 }
 
-function BotThread(props: { botId: Id<"bots">; botName: string; character: Character }) {
-  const { botId, botName, character } = props;
+function BotThread(props: { botId: Id<"bots">; botName: string; character: Character; onOpenScreen: () => void }) {
+  const { botId, botName, character, onOpenScreen } = props;
   const ensureThread = useMutation(api.threads.ensureForBot);
   const [thread, setThread] = useState<
     { kind: "pending" } | { kind: "ready"; threadId: Id<"threads"> } | { kind: "failed"; message: string }
@@ -331,7 +331,7 @@ function BotThread(props: { botId: Id<"bots">; botName: string; character: Chara
     case "failed":
       return <ProblemNotice title="Could not open the conversation" message={thread.message} />;
     case "ready":
-      return <Conversation botId={botId} threadId={thread.threadId} botName={botName} character={character} />;
+      return <Conversation onOpenScreen={onOpenScreen} botId={botId} threadId={thread.threadId} botName={botName} character={character} />;
   }
 }
 
@@ -410,7 +410,7 @@ function BotChat({ botId }: { botId: string }) {
             </button>
           </header>
           <div className="chat-body">
-            <BotThread botId={bot._id} botName={bot.name} character={character} />
+            <BotThread onOpenScreen={openScreen} botId={bot._id} botName={bot.name} character={character} />
           </div>
         </div>
         {(info === true || routines === true) && (
@@ -431,7 +431,7 @@ function BotChat({ botId }: { botId: string }) {
             onShowRoutines={() => void navigate({ to: "/bots/$botId", params, search: (previous) => ({ ...previous, info: true, routines: true }), replace: true })}
           />
         )}
-        {screen === true && <ScreenPanel botId={bot._id} botName={bot.name} character={character} chat={chat} openRequest={screenRequest} onCoverChange={setScreenCoversChat} onClose={closeScreen} />}
+        {screen === true && <ScreenPanel handoff={rows?.find((row) => row._id === botId)?.handoff ?? undefined} botId={bot._id} botName={bot.name} character={character} chat={chat} openRequest={screenRequest} onCoverChange={setScreenCoversChat} onClose={closeScreen} />}
       </div>
     </ScreenCoversChat.Provider>
   );

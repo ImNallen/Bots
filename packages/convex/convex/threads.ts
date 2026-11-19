@@ -1,4 +1,5 @@
 import { requireComputerAvailable } from "./computers.js";
+import { handoffView } from "./handoffChecks.js";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -239,6 +240,7 @@ export const timeline = query({
         : null;
       runs.push({
         _id: run._id,
+        handoff: run.handoff === undefined ? null : { toolCallId: run.handoff.toolCallId, ...await handoffView(ctx, run, run.handoff.toolCallId) },
         createdAt: run._creationTime,
         state: publicState(run.state),
         cancelRequested: run.cancelRequested,

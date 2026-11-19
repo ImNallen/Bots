@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
+  handoff,
   approvalLevel,
   savedCommands,
   shellSubject,
@@ -55,6 +56,7 @@ export default defineSchema({
     savedCommands: v.optional(savedCommands),
     // While this is in the future, the owner controls the bot's screen and the bot starts no tool.
     takeoverUntil: v.optional(v.number()),
+    takeoverSessionId: v.optional(v.string()),
     // A bot with no value uses the default, which is "automatic".
     approvalLevel: v.optional(approvalLevel),
     // A bot with no value takes its look from its id.
@@ -178,6 +180,7 @@ export default defineSchema({
     lastClaimSeq: v.optional(v.number()),
     claimsWithoutProgress: v.optional(v.number()),
     computerGeneration: v.optional(v.number()),
+    handoff: v.optional(handoff),
     lastCommandAdmission: v.optional(v.string()),
   })
     .index("by_thread", ["threadId"])

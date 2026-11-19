@@ -110,11 +110,11 @@ try {
   assert.equal((await owner.query(api.approvals.pendingForThread, { threadId: f.threadId })).length, 0);
   await f.finish(); console.log("ok actual runner+Convex+computer: Automatic plain fill, zero approvals");
   f = await fixture("browser_type", { ref: 1, text: "After takeover" });
-  await owner.mutation(api.bots.takeOver, { botId: f.botId });
+  const controlGrant1 = await owner.mutation(api.bots.takeOver, { botId: f.botId, action: { kind: "acquire" } });
   const blocked = f.execute();
   await new Promise(resolve => setTimeout(resolve, 150));
   await evaluate("draft.readOnly=true");
-  await owner.mutation(api.bots.releaseTakeover, { botId: f.botId });
+  await owner.mutation(api.bots.releaseTakeover, { botId: f.botId, sessionId: controlGrant1.sessionId });
   const blockedResult = await blocked; assert.ok("outcome" in blockedResult); assert.equal(blockedResult.outcome, "error");
   assert.equal((await evaluate("draft.value")).value, ""); await f.finish();
   console.log("ok takeover wait retains original aim and changed control refuses");

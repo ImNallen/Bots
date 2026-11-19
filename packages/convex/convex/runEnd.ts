@@ -24,15 +24,21 @@ export function pastDeadline(run: Pick<Doc<"runs">, "deadlineAt">, now: number):
   return run.deadlineAt !== undefined && now > run.deadlineAt;
 }
 
-export async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: TerminalRunState): Promise<void> {
-  await ctx.db.patch(runId, { state, endedAt: Date.now() });
+export async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: TerminalRunState, handoffEnd: "declined" | "invalidated" = "invalidated"): Promise<void> {
+  const run = await ctx.db.get(runId);
+  if (run?.handoff !== undefined) {
+    await closeUnansweredCalls(ctx, run, handoffEnd);
+    const bot = await ctx.db.get(run.botId);
+    if (bot !== null && run.handoff.state.kind === "pending") await ctx.db.patch(bot._id, { takeoverUntil: undefined, takeoverSessionId: undefined });
+  }
+  await ctx.db.patch(runId, { state, endedAt: Date.now(), handoff: undefined });
   await deleteStream(ctx, runId);
   await deleteScreen(ctx, runId);
   await deletePage(ctx, runId);
 }
 
 // Every later model request replays this history, and a tool call with no result would make it malformed.
-export async function closeUnansweredCalls(ctx: MutationCtx, run: Doc<"runs">): Promise<void> {
+export async function closeUnansweredCalls(ctx: MutationCtx, run: Doc<"runs">, handoffEnd: "declined" | "invalidated" = "invalidated"): Promise<void> {
   const answered = new Set<string>();
   for await (const event of ctx.db
     .query("runEvents")
@@ -46,7 +52,11 @@ export async function closeUnansweredCalls(ctx: MutationCtx, run: Doc<"runs">): 
       return;
     }
     let seq = run.nextSeq;
+    let notSent = run.handoff !== undefined;
     for (const call of event.body.toolCalls.filter(({ id }) => !answered.has(id))) {
+      notSent ||= call.name === "request_takeover";
+      const declined = call.id === run.handoff?.toolCallId && handoffEnd === "declined";
+      const output = declined ? "Your owner declined this help request and stopped the run." : notSent ? "The run stopped before this call was sent. It did not run." : UNANSWERED_CALL_OUTPUT;
       await ctx.db.insert("runEvents", {
         runId: run._id,
         threadId: run.threadId,
@@ -55,8 +65,8 @@ export async function closeUnansweredCalls(ctx: MutationCtx, run: Doc<"runs">): 
           kind: "toolResult",
           toolCallId: call.id,
           name: call.name,
-          outcome: "unavailable",
-          output: UNANSWERED_CALL_OUTPUT,
+          outcome: declined ? "denied" : "unavailable",
+          output,
           truncated: false,
         },
       });

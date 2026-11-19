@@ -169,9 +169,9 @@ try {
     await service.mutation(api.runs.finish, { runId: routine, leaseToken: routineClaim.leaseToken, state: { kind: "done" } });
   }
   console.log("ok capacity is atomic, permissions inactive at every other level, read-only refuses saved write");
-  f = await fixture(command); await owner.mutation(api.bots.takeOver, { botId });
+  f = await fixture(command); const controlGrant1 = await owner.mutation(api.bots.takeOver, { botId: botId, action: { kind: "acquire" } });
   const duringTakeover = f.execute(); await new Promise(resolve => setTimeout(resolve, 150)); const before = executions;
-  await revokeAll(); await owner.mutation(api.bots.releaseTakeover, { botId });
+  await revokeAll(); await owner.mutation(api.bots.releaseTakeover, { botId: botId, sessionId: controlGrant1.sessionId });
   const blocked = await duringTakeover; assert.ok("output" in blocked); assert.match(blocked.output, /was not sent/); assert.equal(executions, before); await f.finish();
   f = await fixture(command); const again = await f.request(); await owner.mutation(api.approvals.saveCommand, { approvalId: again.approvalId }); await f.finish();
   stopComputer(); link.disconnect(user._id); await wait(async () => !link.isConnected(user._id) ? true : null, "disconnect");

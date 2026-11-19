@@ -9,6 +9,7 @@ const ID = "approval" as Id<"approvals">;
 const LEVELS = ["everything", "outside", "shell", "nothing"] as const satisfies readonly ApprovalLevel[];
 const ALL_LEVELS: readonly ApprovalLevel[] = [...LEVELS, "automatic"];
 const ANSWERS: Record<ToolName, Record<(typeof LEVELS)[number], boolean>> = {
+  request_takeover: { everything: false, outside: false, shell: false, nothing: false },
   shell: { everything: true, outside: true, shell: true, nothing: false },
   read_file: { everything: true, outside: false, shell: false, nothing: false },
   write_file: { everything: true, outside: false, shell: false, nothing: false },
@@ -51,7 +52,7 @@ describe("decideTool for a read-only run", () => {
 
   it("forbids exactly the tools that change something, and every desktop tool, because the desktop shows the owner's logins", () => {
     const rejected = TOOLS.filter((toolName) => decideTool({ capability: "readOnly", level: "nothing", toolName, readUntrustedText: false }) === "reject");
-    expect(rejected).toEqual(["shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "name_set", ...SCHEDULE_TOOLS]);
+    expect(rejected).toEqual(["request_takeover", "shell", "write_file", "browser_click", "browser_type", "browser_press", "desktop_look", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "memory_save", "memory_forget", "description_set", "name_set", ...SCHEDULE_TOOLS]);
   });
 });
 
@@ -111,7 +112,7 @@ describe("decideTool for a full run", () => {
   });
 
   it("asks for every tool at everything, but stay_quiet, which a full run refuses", () => {
-    expect(asked("everything")).toEqual(TOOLS.filter((toolName) => toolName !== "stay_quiet"));
+    expect(asked("everything")).toEqual(TOOLS.filter((toolName) => toolName !== "stay_quiet" && toolName !== "request_takeover"));
   });
 
   const DESKTOP_INPUT: ToolName[] = ["desktop_click", "desktop_type", "desktop_key", "desktop_scroll"];

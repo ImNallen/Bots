@@ -331,7 +331,7 @@ export const cleanupReset = internalMutation({
         if (call !== undefined && turn !== null) {
           const result = await ctx.db.query("runEvents").withIndex("by_run_call_seq", (q) => q.eq("runId", run._id).eq("body.toolCallId", call.id).gt("seq", turn.seq)).first();
           if (result === null) {
-            await ctx.db.insert("runEvents", { runId: run._id, threadId: run.threadId, seq: run.nextSeq, body: { kind: "toolResult", toolCallId: call.id, name: call.name, outcome: "unavailable", output: "The owner reset the shared computer. The call outcome is unknown.", truncated: false } });
+            await ctx.db.insert("runEvents", { runId: run._id, threadId: run.threadId, seq: run.nextSeq, body: { kind: "toolResult", toolCallId: call.id, name: call.name, outcome: "unavailable", output: run.handoff !== undefined || (turn.body.kind === "assistantTurn" && turn.body.toolCalls.slice(0, callIndex + 1).some((call) => call.name === "request_takeover")) ? "The owner reset the shared computer before this call was sent. It did not run." : "The owner reset the shared computer. The call outcome is unknown.", truncated: false } });
             await ctx.db.patch(run._id, { nextSeq: run.nextSeq + 1 });
           }
           await ctx.db.patch(computerId, { resetCleanup: { kind: "runs", runId: run._id, callIndex: callIndex + 1 } });
@@ -349,7 +349,7 @@ export const cleanupReset = internalMutation({
       }
       case "bots": {
         const bots = await ctx.db.query("bots").withIndex("by_owner", (q) => q.eq("ownerId", computer.ownerId)).paginate({ cursor: cleanup.cursor, numItems: 32 });
-        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined, savedCommands: undefined });
+        for (const bot of bots.page) await ctx.db.patch(bot._id, { takeoverUntil: undefined, takeoverSessionId: undefined, savedCommands: undefined });
         await ctx.db.patch(computerId, { resetCleanup: bots.isDone ? undefined : { kind: "bots", cursor: bots.continueCursor } });
         if (bots.isDone) return;
         break;

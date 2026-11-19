@@ -1,6 +1,7 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import {
+  TAKEOVER_COMPLETED_OUTPUT,
   isDesktopInputRequest,
   isPageInputRequest,
   isDesktopInvocation,
@@ -34,7 +35,7 @@ import {
 } from "./approvals.ts";
 import { aimPageInput, loadPage, retainedPageInput } from "./page.ts";
 import { decideByRules, desktopAim, type PageFacts } from "@bots/convex/automaticRules";
-import { waitWhileTakenOver } from "./takeover.ts";
+import { waitForHandoff, waitWhileTakenOver } from "./takeover.ts";
 import { historyOf, threadEventOf, type ThreadEvent } from "./history.ts";
 import { PROVIDER_LABEL, completeWithRetry, type CompletionResult, type MistralUserChunk, type ModelProvider } from "./mistral.ts";
 import {
@@ -191,7 +192,7 @@ type Prepared =
   | { kind: "search"; query: string }
   | { kind: "computer"; tool: ToolInvocation; detail: { subject?: string; box?: Box; pageAim?: string }; facts?: PageFacts };
 
-async function prepareCall(invocation: Exclude<ModelInvocation, PageInputRequest>, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
+async function prepareCall(invocation: Exclude<ModelInvocation, PageInputRequest | { name: "request_takeover" }>, toolCallId: string, screen: () => Promise<StoredScreen | null>): Promise<Prepared> {
   if (isMemoryInvocation(invocation)) {
     switch (invocation.name) {
       case "memory_save":
@@ -341,6 +342,14 @@ export async function runTool(args: {
     return { ...base, outcome: "invalid", output: parsed.reason, truncated: false };
   }
   const { invocation } = parsed;
+  if (invocation.name === "request_takeover" && claim.capability === "full") {
+    const requested = await deps.service.mutation(api.handoffs.request, { runId, toolCallId: call.id, leaseToken: claim.leaseToken });
+    const answer = await waitForHandoff({ initial: requested.kind, read: async () => (await deps.service.query(api.handoffs.stateOf, { runId, toolCallId: call.id })).kind,
+      signals: [lease.lost, lease.cancel], onWait: () => slot.release() }).finally(() => slot.reclaim());
+    lease.lost.throwIfAborted();
+    if (answer !== "completed") throw new Error("Help request ended");
+    return { ...base, outcome: "ok", output: TAKEOVER_COMPLETED_OUTPUT, truncated: false };
+  }
   const previousAdmission = invocation.name === "shell" && await deps.service.query(api.approvals.wasCommandAdmitted, { runId, toolCallId: call.id, leaseToken: claim.leaseToken });
   const stoppedOutput = (output: string) => previousAdmission
     ? "An earlier attempt of this command was authorized and its outcome is unknown. It may already have run. No further attempt was sent. Check the computer's state before requesting it again."
@@ -359,6 +368,7 @@ export async function runTool(args: {
     deps.log({ level: "info", event: "tool-refused", runId, toolCallId: call.id });
     return { ...base, outcome: "error", output: ROUTINE_ONLY_OUTPUT, truncated: false };
   }
+  if (invocation.name === "request_takeover") return { ...base, outcome: "rejected", output: READ_ONLY_OUTPUT, truncated: false };
   if (retained !== null) decision = "ask";
   let prepared: Prepared;
   if (isPageInputRequest(invocation)) {

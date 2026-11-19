@@ -382,6 +382,7 @@ describe("parseToolCall", () => {
       "schedule_create",
       "schedule_update",
       "schedule_delete",
+      "request_takeover",
       "stay_quiet",
     ]);
     for (const tool of toolDefinitions) {
@@ -427,6 +428,7 @@ describe("toolEffect", () => {
       schedule_update: "changesSchedule",
       schedule_delete: "changesSchedule",
       stay_quiet: "endsRoutine",
+      request_takeover: "requestsTakeover",
     };
     const effects = toolDefinitions.map((tool) => [tool.function.name, toolEffect(tool.function.name as ToolName)]);
     expect(Object.fromEntries(effects)).toEqual(expected);

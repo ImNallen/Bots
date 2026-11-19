@@ -1,7 +1,7 @@
 import { api } from "@bots/convex";
 import type { Id } from "@bots/convex/dataModel";
 import RFB from "@novnc/novnc";
-import { useConvex, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type Dispatch, type RefObject } from "react";
 import { BotFace } from "./BotFace.tsx";
 import type { Character } from "./character.ts";
@@ -47,8 +47,8 @@ function socketUrl(path: string): string {
   return `${scheme}://${window.location.host}${path}`;
 }
 
-function ScreenStream(props: { botId: string; mode: "watch" | "control"; dispatch: Dispatch<ScreenEvent> }) {
-  const { botId, mode, dispatch } = props;
+function ScreenStream(props: { botId: string; mode: "watch" | "control"; sessionId: string | null; pauseInput: RefObject<((paused: boolean) => void) | null>; dispatch: Dispatch<ScreenEvent> }) {
+  const { botId, mode, sessionId, pauseInput, dispatch } = props;
   const target = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,9 +56,10 @@ function ScreenStream(props: { botId: string; mode: "watch" | "control"; dispatc
     if (element === null) {
       return undefined;
     }
-    const path = `/screens/${encodeURIComponent(botId)}${mode === "control" ? "/input" : ""}`;
+    const path = `/screens/${encodeURIComponent(botId)}${mode === "control" ? `/input?session=${encodeURIComponent(sessionId ?? "")}` : ""}`;
     const rfb = new RFB(element, socketUrl(path), { shared: true });
     rfb.viewOnly = mode === "watch";
+    pauseInput.current = (paused) => { rfb.viewOnly = mode === "watch" || paused; };
     rfb.scaleViewport = true;
     rfb.resizeSession = false;
     rfb.background = VIEW_BACKGROUND;
@@ -75,74 +76,48 @@ function ScreenStream(props: { botId: string; mode: "watch" | "control"; dispatc
     return () => {
       rfb.removeEventListener("connect", onConnect);
       rfb.removeEventListener("disconnect", onDisconnect);
+      pauseInput.current = null;
       rfb.disconnect();
     };
-  }, [botId, mode, dispatch]);
+  }, [botId, mode, sessionId, pauseInput, dispatch]);
 
   return <div className="scr-stream" ref={target} aria-label="This bot's screen" />;
 }
 
-// While the state holds the screen, the owner has it. Leaving those states for any reason gives it back, and so does closing the
-// view or leaving the page, so none of them keeps the bot waiting.
-function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<ScreenEvent>) {
-  const convex = useConvex();
+function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<ScreenEvent>, paused: RefObject<boolean>) {
   const takeOver = useMutation(api.bots.takeOver);
   const release = useMutation(api.bots.releaseTakeover);
-  const until = useRef(0);
-  const replaced = useRef(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const holding = holdsScreen(state);
-  const lost = state.kind === "lost";
-
   useEffect(() => {
-    if (!holding) {
-      return undefined;
-    }
+    if (!holding) return;
     let cancelled = false;
-    replaced.current = false;
-    const renew = setInterval(() => {
-      takeOver({ botId }).then(
-        (value) => {
-          until.current = value;
-        },
-        () => {},
-      );
-    }, RENEW_MS);
-    takeOver({ botId }).then(
-      (value) => {
-        until.current = value;
-        if (!cancelled) {
-          dispatch({ type: "granted" });
-        }
-      },
-      () => {
-        if (!cancelled) {
-          dispatch({ type: "refused" });
-        }
-      },
-    );
+    let owned: string | null = null;
+    let renew: ReturnType<typeof setInterval> | undefined;
+    takeOver({ botId, action: { kind: "acquire" } }).then((grant) => {
+      owned = grant.sessionId;
+      if (cancelled) { void release({ botId, sessionId: owned }).catch(() => {}); return; }
+      paused.current = false;
+      setSessionId(owned);
+      dispatch({ type: "granted" });
+      renew = setInterval(() => {
+        if (paused.current) return;
+        takeOver({ botId, action: { kind: "renew", sessionId: grant.sessionId } }).catch(() => {
+          if (cancelled) return;
+          clearInterval(renew);
+          dispatch({ type: "disconnected" });
+        });
+      }, RENEW_MS);
+    }).catch(() => { if (!cancelled) dispatch({ type: "refused" }); });
     return () => {
       cancelled = true;
       clearInterval(renew);
-      if (!replaced.current) {
-        release({ botId }).catch(() => {});
-      }
+      setSessionId(null);
+      if (owned !== null) void release({ botId, sessionId: owned }).catch(() => {});
     };
-  }, [botId, holding, dispatch, release, takeOver]);
-
-  // A newer tab of this owner ends this stream by taking over. It renewed the take-over before that, so a value that is not ours
-  // says so, and giving back now would take the screen from that tab.
-  useEffect(() => {
-    if (lost) {
-      convex
-        .query(api.bots.get, { botId })
-        .then((bot) => {
-          const current = bot?.takeoverUntil ?? 0;
-          replaced.current = current !== 0 && current !== until.current;
-        })
-        .catch(() => {})
-        .finally(() => dispatch({ type: "settled" }));
-    }
-  }, [botId, convex, dispatch, lost]);
+  }, [botId, holding, dispatch, release, takeOver, paused]);
+  useEffect(() => { if (state.kind === "lost") dispatch({ type: "settled" }); }, [state.kind, dispatch]);
+  return sessionId;
 }
 
 // A phone's keyboard covers the page without resizing it, so the view follows the part that stays visible. A pinch also shrinks that
@@ -259,7 +234,7 @@ function TouchControls({ stream }: { stream: Stream }) {
   );
 }
 
-function ControlPill({ state, dispatch, floating = false }: { state: ScreenState; dispatch: Dispatch<ScreenEvent>; floating?: boolean }) {
+function ControlPill({ state, dispatch, floating = false, onResume, resuming = false, waitingForHelp = false }: { state: ScreenState; dispatch: Dispatch<ScreenEvent>; floating?: boolean; waitingForHelp?: boolean; onResume?: () => void; resuming?: boolean }) {
   switch (state.kind) {
     case "watching":
     case "requesting":
@@ -267,7 +242,7 @@ function ControlPill({ state, dispatch, floating = false }: { state: ScreenState
         <div className="seg-big">
           <span>
             {floating ? <WindowIcon name="eye" /> : <Icon name="eye" />}
-            {floating ? "Watching · Live" : "Watching"}
+            {waitingForHelp ? "Bot waiting" : floating ? "Watching · Live" : "Watching"}
           </span>
           <button type="button" disabled={state.kind === "requesting"} onClick={() => dispatch({ type: "takeControl" })}>
             {state.kind === "requesting" ? "Taking control…" : "Take control"}
@@ -279,8 +254,8 @@ function ControlPill({ state, dispatch, floating = false }: { state: ScreenState
       return (
         <div className="seg-big">
           <span><Icon name="pointer" />You have control</span>
-          <button type="button" onClick={() => dispatch({ type: "giveBack" })}>
-            Give back
+          <button type="button" disabled={resuming} onClick={onResume ?? (() => dispatch({ type: "giveBack" }))}>
+            {onResume ? "Give back and resume" : "Give back"}
           </button>
         </div>
       );
@@ -337,12 +312,30 @@ function Message({ state, dispatch }: { state: ScreenState; dispatch: Dispatch<S
   }
 }
 
-export function ScreenPanel({ botId, botName, character, chat, openRequest, onClose, onCoverChange }: {
+export function ScreenPanel({ botId, botName, character, chat, openRequest, onClose, onCoverChange, handoff }: {
   botId: Id<"bots">; botName: string; character: Character; chat: RefObject<HTMLElement | null>;
+  handoff?: { runId: Id<"runs">; toolCallId: string };
   openRequest: number; onClose: () => void; onCoverChange: (covered: boolean) => void;
 }) {
   const [state, dispatch] = useReducer(screenReducer, INITIAL_SCREEN_STATE);
-  useTakeover(botId, state, dispatch);
+  const paused = useRef(false);
+  const pauseInput = useRef<((paused: boolean) => void) | null>(null);
+  const sessionId = useTakeover(botId, state, dispatch, paused);
+  const decide = useMutation(api.handoffs.decide);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  async function resume() {
+    if (handoff === undefined || sessionId === null) return;
+    paused.current = true;
+    pauseInput.current?.(true);
+    setResuming(true); setResumeError(null);
+    try {
+      const answer = await decide({ ...handoff, decision: { kind: "complete", controlSessionId: sessionId } });
+      if (answer.kind !== "completed") throw new Error("This help request is no longer current.");
+      dispatch({ type: "giveBack" });
+    } catch (error) { setResumeError(error instanceof Error ? error.message : "Could not resume. Try again."); }
+    finally { setResuming(false); }
+  }
   const isPhone = useIsPhone();
   const hasTouchKeyboard = useHasCoarsePointer();
   const [presentation, setPresentation] = useState<"window" | "minimized" | "fullscreen">("window");
@@ -411,15 +404,16 @@ export function ScreenPanel({ botId, botName, character, chat, openRequest, onCl
         <button type="button" className="window-button" aria-label="Close the screen" onClick={onClose}><WindowIcon name="close" /></button>
         <span className="visually-hidden" id="computer-window-help">Drag to move, or use arrow keys. {minimized ? "Press Enter or double-click to restore." : "Press Enter or double-click for full screen."}</span>
       </div>}
-      <p key="status" className={fullScreen ? "scr-state" : "visually-hidden"} role="status">{topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
+      <p key="status" className={fullScreen ? "scr-state" : "visually-hidden"} role="status">{handoff !== undefined ? "The bot is still waiting for your help." : topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
       <div className="scr-mid" key="stream" hidden={minimized}>
-        {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} dispatch={dispatch} />}
+        {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} sessionId={sessionId} pauseInput={pauseInput} dispatch={dispatch} />}
         <Message state={state} dispatch={dispatch} />
       </div>
       <div className="scr-low" key="controls" hidden={minimized}>
-        {state.kind === "controlling" && hasTouchKeyboard && <TouchControls stream={state.stream} />}
-        <ControlPill state={state} dispatch={dispatch} floating={!fullScreen} />
-        <p className="scr-hint">{holding ? compact ? "Leaving this view gives control back." : "Use your mouse and keyboard. Give back when you’re ready." : compact ? "Pinch to zoom. Rotate for a larger view." : "Take control to click, type, or sign in."}</p>
+        {state.kind === "controlling" && !resuming && hasTouchKeyboard && <TouchControls stream={state.stream} />}
+        <ControlPill state={state} dispatch={dispatch} floating={!fullScreen} waitingForHelp={handoff !== undefined} onResume={handoff === undefined ? undefined : () => { void resume(); }} resuming={resuming} />
+        {resumeError !== null && <p className="scr-resume-error" role="alert">{resumeError}</p>}
+        <p className="scr-hint">{handoff !== undefined ? "Closing this view keeps the bot paused." : holding ? compact ? "Leaving this view gives control back." : "Use your mouse and keyboard. Give back when you’re ready." : compact ? "Pinch to zoom. Rotate for a larger view." : "Take control to click, type, or sign in."}</p>
       </div>
       {!fullScreen && !minimized && edges.map((edge) => <div key={edge} className="window-resize" data-edge={edge}
         role={edge === "se" ? "slider" : undefined} tabIndex={edge === "se" ? 0 : undefined}

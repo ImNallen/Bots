@@ -212,12 +212,13 @@ watcher.closed.then(() => {
   watcherClosed = true;
 });
 
-await client.mutation(api.bots.takeOver, { botId: watched.botId });
+const controlGrant1 = await client.mutation(api.bots.takeOver, { botId: watched.botId, action: { kind: "acquire" } });
 const crossSite = await refusal(inputPath, { Origin: "https://evil.example" });
 report(crossSite === 403, "during a take-over, a page from another site still cannot send input", String(crossSite));
 
-const replaced = await openRfb(inputPath);
-const input = await openRfb(inputPath);
+const replaced = await openRfb(`${inputPath}?session=${controlGrant1.sessionId}`);
+const controlGrant2 = await client.mutation(api.bots.takeOver, { botId: watched.botId, action: { kind: "acquire" } });
+const input = await openRfb(`${inputPath}?session=${controlGrant2.sessionId}`);
 const replacedCode = await Promise.race([replaced.closed, sleep(5000).then(() => "still open")]);
 report(replacedCode !== "still open", "a second take-over ends the first viewer's input stream", String(replacedCode));
 
@@ -269,7 +270,7 @@ report(
   `state ${during?.state.kind}, model already asked for the tool: ${asked}, tool results ${during === undefined ? "?" : resultsOf(during).length}`,
 );
 
-await client.mutation(api.bots.releaseTakeover, { botId: watched.botId });
+await client.mutation(api.bots.releaseTakeover, { botId: watched.botId, sessionId: controlGrant2.sessionId });
 const closeCode = await Promise.race([input.closed, sleep(15_000).then(() => "still open")]);
 report(closeCode === LINK_CLOSE.takeoverEnded, "giving back closes the input channel", String(closeCode));
 const afterGiveBack = await refusal(inputPath, { Origin: origin });

@@ -3,7 +3,7 @@ import type { StreamMode } from "@bots/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { desktopOf, streamPort, type DesktopLease, type Slot } from "./desktops.ts";
-import { relayScreen } from "./screens.ts";
+import { createControlActivation, relayScreen } from "./screens.ts";
 
 const SLOT: Slot = 8;
 const CDP_PORT = desktopOf(SLOT).cdpPort;
@@ -65,6 +65,7 @@ describe("relayScreen", () => {
 
   function relay(args: {
     mode: StreamMode;
+    activate?: ReturnType<ReturnType<typeof createControlActivation>>;
     acquire?: () => Promise<DesktopLease>;
     restartInput?: (slot: Slot) => Promise<void>;
     opened?: () => Promise<void>;
@@ -88,6 +89,7 @@ describe("relayScreen", () => {
       token: "token",
       streamId: "stream",
       mode: args.mode,
+      ...(args.activate === undefined ? {} : { activate: args.activate }),
       acquire: args.acquire ?? (async () => leases.lease),
       restartInput:
         args.restartInput ??
@@ -118,6 +120,22 @@ describe("relayScreen", () => {
     relay({ mode: "control" });
     await until(() => dialed.length === 1);
     expect(events).toEqual([`opened ${CDP_PORT}`, `restart ${SLOT}`, "dial control"]);
+  });
+
+  it("orders actual activation when an older tab stalls in login baseline collection", async () => {
+    const activation = createControlActivation();
+    let releaseA = () => {};
+    let startedA = false;
+    const baseline = new Promise<void>((resolve) => { releaseA = resolve; });
+    relay({ mode: "control", activate: activation("bot"), opened: async () => { startedA = true; await baseline; }, restartInput: async () => { events.push("A restart"); } });
+    await until(() => startedA);
+    relay({ mode: "control", activate: activation("bot"), restartInput: async () => { events.push("B restart"); } });
+    await until(() => orchestratorSide.length === 2);
+    releaseA();
+    await until(() => dialed.length === 1);
+    expect(events).not.toContain("A restart");
+    expect(events).toContain("B restart");
+    expect(dialed[0]?.socket.destroyed).toBe(false);
   });
 
   it("keeps the lease until the logins have moved, however long that takes", async () => {

@@ -13,6 +13,23 @@ export type TakeoverLogins = {
   closed: (cdpPort: number) => Promise<void>;
 };
 
+export function createControlActivation() {
+  const bots = new Map<string, { tail: Promise<void>; current: object }>();
+  return (botId: string) => {
+    const entry = bots.get(botId) ?? { tail: Promise.resolve(), current: {} };
+    const identity = {};
+    entry.current = identity;
+    bots.set(botId, entry);
+    return async (activate: (current: () => boolean) => Promise<void>) => {
+      const next = entry.tail.then(() => activate(() => entry.current === identity));
+      entry.tail = next.catch(() => {});
+      try { await next; } finally { if (entry.current === identity) bots.delete(botId); }
+    };
+  };
+}
+
+type Activation = ReturnType<ReturnType<typeof createControlActivation>>;
+
 // A VM takes no inbound connections, so a stream is one more connection that this computer dials to the link.
 // The relay holds a lease for as long as it runs, so a viewer's desktop is never stopped.
 export function relayScreen(args: {
@@ -23,6 +40,7 @@ export function relayScreen(args: {
   acquire: () => Promise<DesktopLease>;
   restartInput: (slot: Slot) => Promise<void>;
   logins: TakeoverLogins;
+  activate?: Activation;
 }): void {
   const { linkUrl, token, streamId, mode, acquire, restartInput, logins } = args;
   const socket = new WebSocket(linkUrl, { maxPayload: MAX_INBOUND_BYTES, handshakeTimeout: 10_000 });
@@ -33,53 +51,53 @@ export function relayScreen(args: {
   async function open(): Promise<void> {
     const granted = await acquire();
     let counted = false;
-    // The lease outlives closed, so this desktop cannot stop while its cookies are read.
+    let ended = false;
     const end = async (): Promise<void> => {
-      if (counted) {
-        await logins.closed(granted.cdpPort);
-      }
-      granted.release();
+      if (ended) return;
+      ended = true;
+      try {
+        if (counted) await logins.closed(granted.cdpPort);
+      } finally { granted.release(); }
     };
+    const activate = args.activate ?? (async (work) => work(() => true));
     try {
-      // The owner can leave during a slow start, and no close event will come to release this lease. A restart now would also
-      // end the take-over of a newer tab for nothing.
-      if (socket.readyState === WebSocket.OPEN && mode === "control") {
-        // Before the restart, so the baseline comes before any key, and a newer tab counts before an older tab's close.
-        await logins.opened(granted.cdpPort);
-        counted = true;
-        if (socket.readyState === WebSocket.OPEN) {
-          await restartInput(granted.slot);
+      await activate(async (current) => {
+        const live = () => current() && socket.readyState === WebSocket.OPEN;
+        if (live() && mode === "control") {
+          await logins.opened(granted.cdpPort);
+          counted = true;
+          if (live()) await restartInput(granted.slot);
         }
-      }
+        if (!live()) {
+          socket.close();
+          await end();
+          return;
+        }
+        finish = end;
+        const tcp = connect(streamPort(granted.slot, mode), "127.0.0.1");
+        screen = tcp;
+        tcp.on("data", (chunk) => {
+          if (socket.readyState !== WebSocket.OPEN) return;
+          socket.send(chunk, { binary: true }, () => {
+            if (socket.bufferedAmount < PAUSE_ABOVE_BYTES) tcp.resume();
+          });
+          if (socket.bufferedAmount >= PAUSE_ABOVE_BYTES) tcp.pause();
+        });
+        tcp.on("close", () => socket.close());
+        tcp.on("error", (error) => {
+          log({ level: "warn", event: "screen-relay-failed", message: error.message });
+          socket.close();
+        });
+        await new Promise<void>((resolve) => {
+          tcp.once("connect", resolve);
+          tcp.once("close", resolve);
+        });
+        if (!live()) { tcp.destroy(); socket.close(); }
+      });
     } catch (error) {
       await end();
       throw error;
     }
-    if (socket.readyState !== WebSocket.OPEN) {
-      await end();
-      return;
-    }
-    finish = end;
-    const tcp = connect(streamPort(granted.slot, mode), "127.0.0.1");
-    screen = tcp;
-    tcp.on("data", (chunk) => {
-      if (socket.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      socket.send(chunk, { binary: true }, () => {
-        if (socket.bufferedAmount < PAUSE_ABOVE_BYTES) {
-          tcp.resume();
-        }
-      });
-      if (socket.bufferedAmount >= PAUSE_ABOVE_BYTES) {
-        tcp.pause();
-      }
-    });
-    tcp.on("close", () => socket.close());
-    tcp.on("error", (error) => {
-      log({ level: "warn", event: "screen-relay-failed", message: error.message });
-      socket.close();
-    });
   }
 
   socket.on("open", () => socket.send(JSON.stringify({ kind: "streamHello", token, streamId })));

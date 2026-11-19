@@ -16,10 +16,11 @@ export function groupToolItems(items: readonly DisplayItem[]): FeedItem[] {
   return groups;
 }
 
-export function ChatFeed({ items, character, botName, onRetry, completedReplyKey }: {
+export function ChatFeed({ items, character, botName, onRetry, completedReplyKey, onOpenScreen }: {
   items: readonly DisplayItem[];
   character: Character;
   botName: string;
+  onOpenScreen?: () => void;
   onRetry?: (text: string) => Promise<void>;
   completedReplyKey?: string;
 }) {
@@ -36,7 +37,7 @@ export function ChatFeed({ items, character, botName, onRetry, completedReplyKey
       </details>;
     }
     const canRetry = onRetry && item === latestReply && prompt?.kind === "user";
-    return <ChatItem key={item.key} item={item} character={character} botName={botName} completed={item.key === completedReplyKey}
+    return <ChatItem onOpenScreen={onOpenScreen} key={item.key} item={item} character={character} botName={botName} completed={item.key === completedReplyKey}
       onRetry={canRetry ? () => onRetry(prompt.text || "Please try responding to my last message again.") : undefined} />;
   });
 }

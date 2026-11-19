@@ -36,7 +36,8 @@
     "verify:pages": "node scripts/verify-pages.ts",
     "verify:page-acts": "node scripts/verify-page-acts.ts",
     "verify:page-policy": "node scripts/verify-page-policy.ts",
-    "verify:command-permissions": "node scripts/verify-command-permissions.ts"
+    "verify:command-permissions": "node scripts/verify-command-permissions.ts",
+    "verify:handoff": "pnpm build && node scripts/verify-handoff.ts"
   },
   "devDependencies": {
     "@bots/convex": "workspace:*",

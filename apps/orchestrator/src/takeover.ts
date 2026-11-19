@@ -41,3 +41,30 @@ export async function waitWhileTakenOver(args: {
     });
   }
 }
+
+export async function waitForHandoff(args: {
+  initial: "pending" | "completed" | "declined" | "invalidated";
+  read: () => Promise<"pending" | "completed" | "declined" | "invalidated">;
+  signals: AbortSignal[];
+  onWait: () => void;
+  pollMs?: number;
+}): Promise<"completed" | "invalidated"> {
+  let state = args.initial;
+  let waiting = false;
+  while (!args.signals.some((signal) => signal.aborted)) {
+    if (state === "completed") return "completed";
+    if (state !== "pending") return "invalidated";
+    if (!waiting) { waiting = true; args.onWait(); }
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        for (const signal of args.signals) signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, args.pollMs ?? POLL_MS);
+      for (const signal of args.signals) signal.addEventListener("abort", finish, { once: true });
+    });
+    try { state = await args.read(); } catch {}
+  }
+  return "invalidated";
+}

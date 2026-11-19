@@ -13,6 +13,7 @@ export const FACE_STATES: Record<ShownActivity["kind"], FaceState> = {
   queued: "idle",
   running: "working",
   needsApproval: "needsApproval",
+  needsHelp: "needsApproval",
   ownerHasScreen: "held",
   failed: "error",
 };
@@ -47,6 +48,7 @@ export const TOOL_STEPS: Record<ToolName, string> = {
   schedule_create: "Creating a routine",
   schedule_update: "Changing a routine",
   schedule_delete: "Deleting a routine",
+  request_takeover: "Waiting for your help",
   stay_quiet: "Finishing with nothing to report",
 };
 
@@ -97,6 +99,8 @@ export function useShownActivity(row: RowState): ShownActivity {
 
 export function subLineOf({ activity, lastMessage }: { activity: ShownActivity; lastMessage: string | null }): SubLine {
   switch (activity.kind) {
+    case "needsHelp":
+      return { text: "Needs your help", tone: "ask" };
     case "needsApproval":
       return { text: "Needs your approval", tone: "ask" };
     case "running":

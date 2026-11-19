@@ -36,6 +36,7 @@ export type DisplayItem = { key: string } & (
   // picture is true for a desktop input, whose card shows the run's newest look with the target outlined. reason is the Automatic
   // rules' one sentence, or null at the other levels.
   | { kind: "approval"; approvalId: Id<"approvals">; title: string; arguments: CallArgument[]; picture: boolean; reason: string | null; commandPermission?: PendingApproval["commandPermission"] }
+  | { kind: "handoff"; runId: Id<"runs">; toolCallId: string; reason: string; status: "pending" | "completed" | "declined" | "invalidated" }
   | { kind: "denied"; text: string }
   | { kind: "failed"; reason: string }
   | { kind: "stopped" }
@@ -69,6 +70,7 @@ const TOOL_WORDS = {
   schedule_create: { done: "Created a routine", ask: "Create this routine?", icon: "lines" },
   schedule_update: { done: "Changed a routine", ask: "Change this routine?", icon: "lines" },
   schedule_delete: { done: "Deleted a routine", ask: "Delete this routine?", icon: "close" },
+  request_takeover: { done: "Finished helping", ask: "Help on the screen", icon: "screen" },
   stay_quiet: { done: "Ended with nothing to report", ask: "End with nothing to report?", icon: "check" },
 } as const satisfies Record<ToolName, { done: string; ask: string; icon: IconName }>;
 
@@ -328,6 +330,17 @@ function runItems(args: { run: TimelineRun; approvals: ReadonlyMap<string, Pendi
           items.push({ key: `${_id}:text`, kind: "assistant", text: body.text, streaming: false });
         }
         for (const call of body.toolCalls) {
+          const help = run.handoff?.toolCallId === call.id ? run.handoff : null;
+          const answer = results.get(call.id);
+          if (call.name === "request_takeover" && (help !== null || answer !== undefined)) {
+            const raw = parseObject(call.arguments);
+            const reason = raw !== null && "reason" in raw && typeof raw.reason === "string" ? raw.reason : "Help on the screen";
+            const status = help?.kind ?? (answer?.outcome === "ok" ? "completed" : answer?.outcome === "denied" ? "declined" : "invalidated");
+            items.push({ key: `${run._id}:${call.id}`, kind: "handoff", runId: run._id, toolCallId: call.id, reason, status });
+            waitingForAnswer ||= status === "pending" || answer === undefined;
+            if (answer === undefined && (status === "pending" || status === "completed")) break;
+            continue;
+          }
           const item = callItem({
             key: `${run._id}:${call.id}`,
             call,

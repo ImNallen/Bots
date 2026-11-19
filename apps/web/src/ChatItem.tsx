@@ -271,7 +271,30 @@ function StatusLine({ item, character, botName }: { item: Extract<DisplayItem, {
   </div>;
 }
 
-export function ChatItem({ item, character, botName = "Bot", onRetry, completed = false }: { item: DisplayItem; character: Character; botName?: string; onRetry?: () => Promise<void>; completed?: boolean }) {
+function HandoffCard({ item, onOpenScreen }: { item: Extract<DisplayItem, { kind: "handoff" }>; onOpenScreen?: () => void }) {
+  const decide = useMutation(api.handoffs.decide);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function answer(kind: "complete" | "decline") {
+    setBusy(true); setError(null);
+    try {
+      const result = await decide({ runId: item.runId, toolCallId: item.toolCallId, decision: { kind } });
+      if (result.kind === "invalidated") setError("This help request is no longer current.");
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  return <div className="handoff-card" role="group" aria-label="Help on the screen">
+    <strong>{item.status === "pending" ? "Needs your help" : item.status === "completed" ? "You finished helping" : item.status === "declined" ? "Help declined" : "Help request ended"}</strong>
+    <p>{item.reason}</p>
+    {item.status === "pending" && <><p>Help privately on the screen, then resume the bot. Closing the screen keeps it paused.</p>
+      <div className="handoff-actions"><button type="button" onClick={onOpenScreen}>Open screen</button>
+        <button type="button" disabled={busy} onClick={() => void answer("complete")}>Resume bot</button>
+        <button type="button" disabled={busy} onClick={() => void answer("decline")}>Decline and stop</button></div></>}
+    {error !== null && <p className="error" role="alert">{error}</p>}
+  </div>;
+}
+
+export function ChatItem({ item, character, botName = "Bot", onRetry, completed = false, onOpenScreen }: { onOpenScreen?: () => void; item: DisplayItem; character: Character; botName?: string; onRetry?: () => Promise<void>; completed?: boolean }) {
   switch (item.kind) {
     case "time":
       return <div className="when">{item.label}</div>;
@@ -295,6 +318,8 @@ export function ChatItem({ item, character, botName = "Bot", onRetry, completed 
       );
     case "tool":
       return <ToolRow item={item} />;
+    case "handoff":
+      return <HandoffCard item={item} onOpenScreen={onOpenScreen} />;
     case "approval":
       return <div className="assistant-message"><BotAuthor character={character} botName={botName} state="needsApproval" /><ApprovalCard item={item} /></div>;
     case "denied":

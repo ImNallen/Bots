@@ -1866,3 +1866,10 @@ a.report-from { text-decoration: underline; text-underline-offset: 2px; }
 .saved-commands h4 { font-size: 13px; }
 .saved-commands code { overflow-wrap: anywhere; }
 .saved-command { padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+.handoff-card { border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin: 12px 0; background: var(--raised); }
+.handoff-card p { margin: 10px 0; overflow-wrap: anywhere; }
+.handoff-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.handoff-actions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--page); color: inherit; cursor: pointer; }
+
+.scr-resume-error { position: absolute; z-index: 3; bottom: 54px; left: 12px; right: 12px; padding: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
