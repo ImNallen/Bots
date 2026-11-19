@@ -284,6 +284,27 @@ try {
   ui = await chromium.launch();
   const page = await ui.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(15000);
+  await page.addInitScript(`{
+    const NativeSocket = window.WebSocket;
+    function ResumeFailureSocket(...args) {
+      const socket = new NativeSocket(...args), send = socket.send.bind(socket);
+      socket.send = (data) => {
+        if (window.failNextResume && typeof data === 'string') {
+          const message = JSON.parse(data);
+          if (message.type === 'Mutation' && message.udfPath === 'handoffs:decide') {
+            window.failNextResume = false;
+            message.args[0].decision.controlSessionId = 'expired-session';
+            data = JSON.stringify(message);
+          }
+        }
+        send(data);
+      };
+      return socket;
+    }
+    ResumeFailureSocket.prototype = NativeSocket.prototype;
+    Object.setPrototypeOf(ResumeFailureSocket, NativeSocket);
+    window.WebSocket = ResumeFailureSocket;
+  }`);
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${base}/bots/${screenCase.botId}`);
   await page.getByText("Needs your help", { exact: true }).last().waitFor();
@@ -293,6 +314,19 @@ try {
   await page.locator(".scr-stream canvas").click(); await page.keyboard.type(secret);
   await until(async () => keys.length >= secret.length ? true : null, "RFB input");
   assert.equal(String.fromCodePoint(...keys.filter(k => k < 128)).slice(-secret.length), secret);
+  await page.evaluate("window.failNextResume = true");
+  await page.getByRole("button", { name: "Give back and resume", exact: true }).click();
+  await page.locator(".scr-resume-error").waitFor();
+  await page.getByRole("button", { name: "Take control", exact: true }).waitFor();
+  await until(async () => !(await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverUntil ? true : null, "failed resume releases input");
+  assert.equal((await pending(screenCase.threadId)).handoff?.kind, "pending");
+  await page.getByRole("button", { name: "Take control", exact: true }).click();
+  await page.getByRole("button", { name: "Give back and resume", exact: true }).waitFor();
+  const beforeRetry = keys.length;
+  await page.locator(".scr-stream canvas").click(); await page.keyboard.type(secret);
+  await until(async () => keys.length >= beforeRetry + secret.length ? true : null, "RFB input after failed resume");
+  assert.equal(String.fromCodePoint(...keys.slice(beforeRetry).filter(k => k < 128)), secret);
+  console.log("ok failed resume releases control without completing help; reacquired screen accepts private input");
   await page.getByRole("button", { name: "Minimize computer window" }).click();
   await until(async () => !(await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverUntil ? true : null, "input release");
   assert.equal((await pending(screenCase.threadId)).handoff?.kind, "pending");
