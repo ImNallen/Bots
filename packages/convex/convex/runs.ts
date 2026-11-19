@@ -1,3 +1,5 @@
+import { TAKEOVER_COMPLETED_OUTPUT } from "@bots/protocol";
+import { currentCall, handoffContext, requireHandoffContext } from "./handoffChecks.js";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -32,7 +34,7 @@ async function requireLease(
   args: { runId: Id<"runs">; leaseToken: string },
 ): Promise<Doc<"runs">> {
   const run = await ctx.db.get(args.runId);
-  if (run === null || run.state.kind !== "running" || run.state.leaseToken !== args.leaseToken) {
+  if (run === null || run.state.kind !== "running" || run.state.leaseToken !== args.leaseToken || run.state.leaseUntil <= Date.now()) {
     throw new ConvexError("Lease lost");
   }
   await requireComputerAvailable(ctx, run.ownerId);
@@ -178,7 +180,8 @@ export const claim = mutation({
       return endedByThisClaim(run);
     }
     // Every attempt passes through here, and a crash cannot lose this count. Each attempt may have paid for a model call.
-    const claimsWithoutProgress = run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
+    const pendingHelp = run.handoff?.state.kind === "pending" && await handoffContext(ctx, run, run.handoff.toolCallId) !== null;
+    const claimsWithoutProgress = pendingHelp ? 0 : run.nextSeq === run.lastClaimSeq ? (run.claimsWithoutProgress ?? 0) + 1 : 0;
     if (claimsWithoutProgress >= MAX_CLAIMS_WITHOUT_PROGRESS) {
       await closeUnansweredCalls(ctx, run);
       await endRun(ctx, runId, run.cancelRequested ? { kind: "cancelled" } : { kind: "failed", reason: noProgressReason(run) });
@@ -228,7 +231,19 @@ export const append = mutation({
     if (run.nextSeq !== expectedSeq) {
       throw new ConvexError(`Expected seq ${run.nextSeq}, got ${expectedSeq}`);
     }
-    const stored = await storedBodyOf(ctx, run, body, expectedSeq);
+    const call = await currentCall(ctx, run);
+    const consumesHelp = body.kind === "toolResult" && body.name === "request_takeover";
+    if (run.handoff !== undefined || call?.name === "request_takeover") {
+      if (!consumesHelp || body.toolCallId !== call?.id) throw new ConvexError("Answer the current help request first");
+    }
+    if (consumesHelp && body.kind === "toolResult" && run.capability === "readOnly" && body.outcome !== "rejected") throw new ConvexError("Read-only runs cannot request help");
+    let stored: RunEventBody;
+    if (consumesHelp && body.kind === "toolResult" && (run.capability === "full" || run.handoff !== undefined)) {
+      await requireHandoffContext(ctx, run, body.toolCallId);
+      if (run.handoff?.toolCallId !== body.toolCallId || run.handoff.state.kind !== "completed") throw new ConvexError("The owner has not completed this help request");
+      stored = { kind: "toolResult", toolCallId: body.toolCallId, name: "request_takeover", outcome: "ok", output: TAKEOVER_COMPLETED_OUTPUT, truncated: false };
+      await ctx.db.patch(runId, { handoff: undefined });
+    } else stored = await storedBodyOf(ctx, run, body, expectedSeq);
     await ctx.db.insert("runEvents", { runId, threadId: run.threadId, seq: expectedSeq, body: stored });
     await ctx.db.patch(runId, { nextSeq: expectedSeq + 1 });
     await deleteStream(ctx, runId);
@@ -258,6 +273,7 @@ export const finish = mutation({
   handler: async (ctx, { runId, leaseToken, state }) => {
     await requireService(ctx);
     const run = await requireLease(ctx, { runId, leaseToken });
+    if (state.kind === "done" && (run.handoff !== undefined || (await currentCall(ctx, run))?.name === "request_takeover")) throw new ConvexError("Answer the current help request first");
     const ended = finishedState({ run, state, now: Date.now() });
     if (ended.kind !== "done" || run.scheduleId === undefined) {
       await endRun(ctx, runId, ended);
@@ -359,6 +375,10 @@ export const requestCancel = mutation({
         return;
       case "running":
         await ctx.db.patch(runId, { cancelRequested: true });
+        if (run.handoff !== undefined || (await currentCall(ctx, run))?.name === "request_takeover") {
+          if (run.handoff === undefined) await closeUnansweredCalls(ctx, run);
+          await endRun(ctx, runId, { kind: "cancelled" });
+        }
         return;
       case "done":
       case "failed":

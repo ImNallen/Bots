@@ -187,3 +187,8 @@ export const shellSubject = v.object({
 });
 export type CommandScope = Infer<typeof commandScope>;
 export type ShellSubject = Infer<typeof shellSubject>;
+
+export const handoff = v.object({
+  toolCallId: v.string(), requestedAt: v.number(),
+  state: v.union(v.object({ kind: v.literal("pending") }), v.object({ kind: v.literal("completed"), completedAt: v.number() })),
+});

@@ -1,3 +1,4 @@
+import { handoffView } from "./handoffChecks.js";
 import { computerOfOwner, requireComputerAvailable } from "./computers.js";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api.js";
@@ -11,7 +12,7 @@ import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape } from "./validators.js";
 
 const DEFAULT_APPROVAL_LEVEL = "automatic";
-// Long enough to log in to a site. A phone that sleeps or a forgotten tab stops renewing this, and the bot carries on.
+// A sleeping phone or forgotten tab stops renewing its input grant. Human help remains pending.
 const TAKEOVER_MS = 15 * 60 * 1000;
 
 export const list = query({
@@ -74,16 +75,20 @@ export const overview = query({
       const currentRun = (await activeRunOfBot(ctx, bot._id)) ?? chatRun;
       const chatEvents = chatRun === null ? [] : await newestEventsUpToText(ctx, chatRun._id, budget);
       const newestEvents = currentRun === null || currentRun._id === chatRun?._id ? chatEvents : await newestEventsUpToText(ctx, currentRun._id, budget);
+      const help = currentRun?.handoff === undefined ? null : await handoffView(ctx, currentRun, currentRun.handoff.toolCallId);
+      const pendingHelp = currentRun?.handoff !== undefined && help?.kind === "pending" ? { runId: currentRun._id, toolCallId: currentRun.handoff.toolCallId } : null;
       rows.push({
         lastRunAt: currentRun?._creationTime ?? 0,
         row: {
           _id: bot._id,
+          handoff: pendingHelp,
           name: bot.name,
           shape: bot.shape,
           color: bot.color,
           // The end time and not a comparison, because Convex does not rerun a query as time passes. The page decides when it ends.
           takeoverUntil: bot.takeoverUntil ?? null,
           activity: decideActivity({
+            hasPendingHandoff: pendingHelp !== null,
             hasPendingApproval: currentRun !== null && runsWithPendingApproval.has(currentRun._id),
             runState: currentRun?.state ?? null,
             newestEvents,
@@ -143,27 +148,30 @@ export const ownerForViewer = query({
       .withIndex("by_auth_subject", (q) => q.eq("authSubject", viewerSubject))
       .unique();
     const computer = await computerOfOwner(ctx, bot.ownerId);
-    return viewer?._id === bot.ownerId && computer?.reset === undefined && computer?.desiredVm?.removing !== true ? { ownerId: bot.ownerId, generation: computer?.desiredVm?.generation ?? 0, takeoverUntil: bot.takeoverUntil ?? 0 } : null;
+    return viewer?._id === bot.ownerId && computer?.reset === undefined && computer?.desiredVm?.removing !== true ? { ownerId: bot.ownerId, generation: computer?.desiredVm?.generation ?? 0, takeoverUntil: bot.takeoverUntil ?? 0, takeoverSessionId: bot.takeoverSessionId ?? null } : null;
   },
 });
 
-// The web app calls this to start and then to renew, so a renewal is the same call.
+// Only an explicit acquire replaces control. A delayed renewal cannot steal it back.
 export const takeOver = mutation({
-  args: { botId: v.id("bots") },
-  handler: async (ctx, { botId }) => {
+  args: { botId: v.id("bots"), action: v.union(v.object({ kind: v.literal("acquire") }), v.object({ kind: v.literal("renew"), sessionId: v.string() })) },
+  handler: async (ctx, { botId, action }) => {
     const bot = await requireOwnedBot(ctx, botId);
     await requireComputerAvailable(ctx, bot.ownerId);
-    const takeoverUntil = Date.now() + TAKEOVER_MS;
-    await ctx.db.patch(botId, { takeoverUntil });
-    return takeoverUntil;
+    const now = Date.now();
+    if (action.kind === "renew" && (bot.takeoverSessionId !== action.sessionId || (bot.takeoverUntil ?? 0) <= now)) throw new ConvexError("Control session ended. Take control again explicitly.");
+    const sessionId = action.kind === "acquire" ? crypto.randomUUID() : action.sessionId;
+    const takeoverUntil = now + TAKEOVER_MS;
+    await ctx.db.patch(botId, { takeoverUntil, takeoverSessionId: sessionId });
+    return { sessionId, until: takeoverUntil };
   },
 });
 
 export const releaseTakeover = mutation({
-  args: { botId: v.id("bots") },
-  handler: async (ctx, { botId }) => {
-    await requireOwnedBot(ctx, botId);
-    await ctx.db.patch(botId, { takeoverUntil: undefined });
+  args: { botId: v.id("bots"), sessionId: v.string() },
+  handler: async (ctx, { botId, sessionId }) => {
+    const bot = await requireOwnedBot(ctx, botId);
+    if (bot.takeoverSessionId === sessionId) await ctx.db.patch(botId, { takeoverUntil: undefined, takeoverSessionId: undefined });
   },
 });
 

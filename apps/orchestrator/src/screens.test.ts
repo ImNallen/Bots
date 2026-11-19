@@ -31,7 +31,9 @@ describe("attachScreens", () => {
   let openDelayMs: number;
   let ownerDelayMs: number;
   let logged: string[];
+  let ownerFails: boolean;
   let takeoverUntil: number;
+  let takeoverSessionId: string;
   let loggedFields: unknown[];
   let opened: Array<{ ownerId: Id<"users">; botId: string; mode: StreamMode }>;
 
@@ -41,8 +43,10 @@ describe("attachScreens", () => {
     stream = "computer";
     openDelayMs = 0;
     ownerDelayMs = 0;
+    ownerFails = false;
     logged = [];
     takeoverUntil = 0;
+    takeoverSessionId = "session";
     loggedFields = [];
     server = createServer();
     const fakeComputer = new WebSocketServer({ noServer: true });
@@ -51,7 +55,8 @@ describe("attachScreens", () => {
       authMode: { kind: "tailscale" },
       ownerForViewer: async (botId, subject) => {
         await new Promise((done) => setTimeout(done, ownerDelayMs));
-        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER, generation: 0, takeoverUntil } : null;
+        if (ownerFails) throw new Error("backend unavailable");
+        return botId === "my-bot" && subject === "tailscale:me@example" ? { ownerId: OWNER, generation: 0, takeoverUntil, takeoverSessionId } : null;
       },
       log: (fields) => {
         logged.push(fields.event);
@@ -164,11 +169,49 @@ describe("attachScreens", () => {
   });
 
   describe("input", () => {
-    const inputPath = "/screens/my-bot/input";
+    const inputPath = "/screens/my-bot/input?session=session";
     const open = (socket: WebSocket) => new Promise((resolve) => socket.once("open", resolve));
 
     it("is refused when the owner has not taken over", async () => {
       expect(await rejection(viewer({ path: inputPath }))).toBe(403);
+    });
+
+    it("refuses missing and stale sessions even with live control", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      expect(await rejection(viewer({ path: "/screens/my-bot/input" }))).toBe(403);
+      expect(await rejection(viewer({ path: "/screens/my-bot/input?session=stale" }))).toBe(403);
+    });
+
+    it("closes an old session when another tab acquires", async () => {
+      const { socket, near } = await takenOver();
+      const closed = closeCode(socket);
+      const remoteClosed = closeCode(near);
+      takeoverSessionId = "new-session";
+      expect(await closed).toBe(LINK_CLOSE.takeoverEnded);
+      await remoteClosed;
+    });
+
+    it("fences a delayed stream attachment after replacement", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      openDelayMs = 50;
+      const socket = viewer({ path: inputPath });
+      const closed = closeCode(socket);
+      await until(() => opened.length === 1);
+      takeoverSessionId = "new-session";
+      expect(await closed).toBe(LINK_CLOSE.takeoverEnded);
+      expect(logged).not.toContain("screen-opened");
+    });
+
+    it("closes both sockets when post-attachment authorization fails", async () => {
+      takeoverUntil = Date.now() + 60_000;
+      ownerDelayMs = 30;
+      const socket = viewer({ path: inputPath });
+      const closed = closeCode(socket);
+      await until(() => computerSide.length === 1);
+      const remoteClosed = closeCode(computerSide[0] as WebSocket);
+      ownerFails = true;
+      expect(await closed).toBe(LINK_CLOSE.internalError);
+      await remoteClosed;
     });
 
     it("is refused from another site during a take-over", async () => {
@@ -307,6 +350,7 @@ describe("attachScreens", () => {
       client.resetAndDestroy();
       await new Promise((done) => setTimeout(done, 80));
       ownerDelayMs = 0;
+    ownerFails = false;
       await stillServes();
     });
   });

@@ -48,7 +48,7 @@ await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, e
 await service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 4, body: { kind: "toolResult", toolCallId: "answered", name: "shell", outcome: "ok", output: "done", truncated: false } });
 await owner.mutation(api.runs.requestCancel, { runId });
 const approval = await service.mutation(api.approvals.request, { runId, toolCallId: "pending", toolName: "shell" });
-await owner.mutation(api.bots.takeOver, { botId });
+const controlGrant1 = await owner.mutation(api.bots.takeOver, { botId: botId, action: { kind: "acquire" } });
 const routine = runConvex(["run", "scheduleChecks:createForCheck", JSON.stringify({ botId, instruction: "Keep the routine" })]);
 assert.equal(routine.kind, "ok");
 assert(routine.kind === "ok");
@@ -73,7 +73,7 @@ assert.equal((await service.mutation(api.runs.claim, { runId: otherRun })).kind,
 await other.mutation(api.runs.requestCancel, { runId: otherRun });
 assert.equal(await service.query(api.approvals.stateOf, { approvalId: approval.approvalId }), "expired");
 await assert.rejects(owner.mutation(api.threads.send, { threadId, text: "Blocked" }));
-await assert.rejects(owner.mutation(api.bots.takeOver, { botId }));
+await assert.rejects(owner.mutation(api.bots.takeOver, { botId, action: { kind: "acquire" } }));
 await assert.rejects(service.mutation(api.approvals.request, { runId, toolCallId: "late", toolName: "shell" }));
 await assert.rejects(service.mutation(api.runs.append, { runId, leaseToken: claim.leaseToken, expectedSeq: 5, body: { kind: "assistantTurn", text: "Late", toolCalls: [], model: "test", usage: { promptTokens: 0, completionTokens: 0 } } }));
 await assert.rejects(service.mutation(api.runs.patchStream, { runId, leaseToken: claim.leaseToken, text: "Late stream" }));

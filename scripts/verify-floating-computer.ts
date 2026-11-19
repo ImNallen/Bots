@@ -22,7 +22,7 @@ const keys: number[] = [];
 // Only the remote desktop is a fixture. The actual noVNC client decodes RFB and sends input;
 // ownership and take-over state use the local backend through the running application.
 function desktop(socket: WebSocket, path: string) {
-  const input = path.endsWith("/input");
+  const input = new URL(path, "http://unused").pathname.endsWith("/input");
   socket.on("error", () => {});
   if (input) { inputOpened++; activeInputs++; } else watchOpened++;
   let closed = false;
@@ -89,7 +89,7 @@ async function prepare(page: Page) {
     const Native = window.WebSocket;
     function DesktopSocket(url, protocols) {
       const parsed = new URL(url, location.href);
-      return new Native(parsed.pathname.startsWith('/screens/') ? ${JSON.stringify(remoteOrigin)} + parsed.pathname : url, protocols);
+      return new Native(parsed.pathname.startsWith('/screens/') ? ${JSON.stringify(remoteOrigin)} + parsed.pathname + parsed.search : url, protocols);
     }
     DesktopSocket.prototype = Native.prototype;
     Object.setPrototypeOf(DesktopSocket, Native);

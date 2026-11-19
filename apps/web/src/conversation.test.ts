@@ -19,6 +19,7 @@ function run(overrides: Partial<Run> & { bodies?: Body[] } = {}): Run {
   return {
     _id,
     createdAt: NOW,
+    handoff: null,
     state: { kind: "done" },
     cancelRequested: false,
     stream: null,
@@ -483,5 +484,18 @@ describe("timeLabel", () => {
 
   it("treats a clock ahead of this device as today", () => {
     expect(label(new Date(2026, 10, 7, 9, 0))).toMatch(/^Today /);
+  });
+});
+
+
+describe("human help cards", () => {
+  const help = { id: "help", name: "request_takeover", arguments: '{"reason":"Sign in privately"}' };
+  it("keeps pending help outside activity, without Thinking or a running sibling", () => {
+    const items = itemsOf([run({ state: { kind: "running" }, handoff: { kind: "pending", toolCallId: "help", reason: "Sign in privately", requestedAt: NOW }, bodies: [turn("", [help, { id: "later", name: "browser_click", arguments: '{"ref":1}' }])] })]);
+    expect(items.filter(item => item.kind !== "time")).toEqual([{ key: "run1:help", kind: "handoff", runId: "run1", toolCallId: "help", reason: "Sign in privately", status: "pending" }]);
+  });
+  it("rebuilds a completed card from events after the run has cleared its handoff", () => {
+    const items = itemsOf([run({ bodies: [turn("", [help]), { ...result("help", "ok"), name: "request_takeover" }] })]);
+    expect(items.find(item => item.kind === "handoff")).toMatchObject({ status: "completed", reason: "Sign in privately" });
   });
 });

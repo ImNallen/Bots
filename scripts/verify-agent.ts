@@ -1633,9 +1633,9 @@ try {
       const heldNew = `during a take-over ${nonce}`;
       const heldText = `description take over ${nonce}`;
       scripted(heldText, [tools(setCall(heldNew))]);
-      await first.mutation(api.bots.takeOver, { botId: held.botId });
+      const controlGrant1 = await first.mutation(api.bots.takeOver, { botId: held.botId, action: { kind: "acquire" } });
       const heldDone = await held.settled(await held.send(heldText), 30_000);
-      await first.mutation(api.bots.releaseTakeover, { botId: held.botId });
+      await first.mutation(api.bots.releaseTakeover, { botId: held.botId, sessionId: controlGrant1.sessionId });
       await check("a description call skips the take-over wait, because it touches no screen", async () => {
         assert.deepEqual(outcomes(heldDone), ["ok"]);
         assert.equal(await stored(held), heldNew);
@@ -1997,9 +1997,9 @@ try {
       const heldNote = `during a take-over ${nonce}`;
       const heldText = `memory take over ${nonce}`;
       scripted(heldText, [tools(saveCall(heldNote))]);
-      await first.mutation(api.bots.takeOver, { botId: held.botId });
+      const controlGrant2 = await first.mutation(api.bots.takeOver, { botId: held.botId, action: { kind: "acquire" } });
       const heldDone = await held.settled(await held.send(heldText), 30_000);
-      await first.mutation(api.bots.releaseTakeover, { botId: held.botId });
+      await first.mutation(api.bots.releaseTakeover, { botId: held.botId, sessionId: controlGrant2.sessionId });
       await check("a memory call skips the take-over wait, because it touches no screen", async () => {
         assert.deepEqual(outcomes(heldDone), ["ok"]);
         assert.deepEqual(await textsOf(held), [heldNote]);
@@ -4010,7 +4010,7 @@ try {
       await cancelActive(quiets, longEnded.botId);
       const heldScreen = await tracked(quiets, "take-over");
       const heldRoutine = newRoutine(heldScreen.botId, `schedule take-over ${nonce}`);
-      await quiets.mutation(api.bots.takeOver, { botId: heldScreen.botId });
+      const controlGrant3 = await quiets.mutation(api.bots.takeOver, { botId: heldScreen.botId, action: { kind: "acquire" } });
       const heldFor = justPast();
       move(heldRoutine.scheduleId, heldFor);
       fireDue();
@@ -4018,7 +4018,7 @@ try {
         assert.equal(routineRow(heldRoutine.scheduleId)?.nextFireAt, heldFor);
         assert.deepEqual((await routinesOf(quiets, heldScreen.botId))[0]?.recentRuns, []);
       });
-      await quiets.mutation(api.bots.releaseTakeover, { botId: heldScreen.botId });
+      await quiets.mutation(api.bots.releaseTakeover, { botId: heldScreen.botId, sessionId: controlGrant3.sessionId });
       await quiets.mutation(api.schedules.pause, { scheduleId: heldRoutine.scheduleId });
 
       const keeps = await newOwner("keep-done");
@@ -6299,11 +6299,11 @@ try {
     fake.script(text, () => ({ kind: "text", text: "finished" }));
     await chat.settled(await chat.send(text));
     const kept = await newChat({ client: first, name: "kept" });
-    await first.mutation(api.bots.takeOver, { botId: chat.botId });
+    const controlGrant4 = await first.mutation(api.bots.takeOver, { botId: chat.botId, action: { kind: "acquire" } });
     await check("a bot under a take-over cannot be deleted", async () => {
       await assertRejected(first.mutation(api.bots.remove, { botId: chat.botId }), /Give back/);
     });
-    await first.mutation(api.bots.releaseTakeover, { botId: chat.botId });
+    await first.mutation(api.bots.releaseTakeover, { botId: chat.botId, sessionId: controlGrant4.sessionId });
     await first.mutation(api.bots.remove, { botId: chat.botId });
     await check("the bot is gone at once", async () => {
       assert.equal(await first.query(api.bots.get, { botId: chat.botId }), null);

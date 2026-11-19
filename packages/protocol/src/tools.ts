@@ -212,8 +212,13 @@ const stayQuietArgs = z.strictObject({
 // The runner answers this itself, so it never reaches a computer, and the link's wire type leaves it out.
 export const quietInvocation = z.strictObject({ name: z.literal("stay_quiet"), args: stayQuietArgs });
 
+const takeoverArgs = z.strictObject({ reason: z.string().trim().min(1).max(500) });
+export const takeoverInvocation = z.strictObject({ name: z.literal("request_takeover"), args: takeoverArgs });
+export type TakeoverInvocation = z.infer<typeof takeoverInvocation>;
+export const TAKEOVER_COMPLETED_OUTPUT = "Your owner finished helping and gave the computer back. This does not confirm a successful login. Read the current page or look at the screen again before acting; earlier targets are no longer valid.";
+
 export type QuietInvocation = z.infer<typeof quietInvocation>;
-export type ToolName = ToolInvocation["name"] | MemoryInvocation["name"] | ScheduleInvocation["name"] | SearchInvocation["name"] | QuietInvocation["name"];
+export type ToolName = ToolInvocation["name"] | MemoryInvocation["name"] | ScheduleInvocation["name"] | SearchInvocation["name"] | QuietInvocation["name"] | TakeoverInvocation["name"];
 
 export function isBrowserInvocation(tool: ToolInvocation): tool is BrowserInvocation {
   return tool.name.startsWith("browser_");
@@ -232,11 +237,11 @@ export function isDesktopInputRequest(tool: ModelInvocation): tool is DesktopInp
 }
 
 // What a model's call parses into. A desktop or page input has no aim yet, so it cannot reach the link until the runner aims it.
-export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation | AimedPageInvocation> | PageInputRequest | DesktopInputRequest | MemoryInvocation | ScheduleInvocation | SearchInvocation | QuietInvocation;
+export type ModelInvocation = Exclude<ToolInvocation, AimedInvocation | AimedPageInvocation> | PageInputRequest | DesktopInputRequest | MemoryInvocation | ScheduleInvocation | SearchInvocation | QuietInvocation | TakeoverInvocation;
 
 // controlsComputer can make the VM do anything its user can, so the Shell level asks for it. readsScreen reads the whole desktop,
 // which shows the owner's logged-in pages, so a read-only run never gets it. endsRoutine changes nothing and only ends a routine.
-export type ToolEffect = "reads" | "readsScreen" | "changesVm" | "changesOutside" | "controlsComputer" | "changesMemory" | "changesSchedule" | "endsRoutine";
+export type ToolEffect = "reads" | "readsScreen" | "changesVm" | "changesOutside" | "controlsComputer" | "changesMemory" | "changesSchedule" | "endsRoutine" | "requestsTakeover";
 
 type ToolRow<Effect extends ToolEffect> = { description: string; args: z.ZodType; effect: Effect };
 
@@ -369,17 +374,18 @@ const TOOLS = {
     args: scheduleDeleteArgs,
     effect: "changesSchedule",
   },
+  request_takeover: { description: "Pause this live chat to ask your owner for help on your existing screen, such as signing in privately. Give a short reason. Never ask for a password in chat. Wait for explicit completion, then inspect the current page again.", args: takeoverArgs, effect: "requestsTakeover" },
   stay_quiet: {
     description:
       "End this routine with nothing to report, so nothing is posted in your owner's chat. Call it only when your instruction says to tell your owner only in some case, and that case has not happened. reason is one sentence that says what you checked and found.",
     args: stayQuietArgs,
     effect: "endsRoutine",
   },
-} as const satisfies Record<ToolInvocation["name"], ToolRow<Exclude<ToolEffect, "changesMemory" | "changesSchedule" | "endsRoutine">>> &
+} as const satisfies Record<ToolInvocation["name"], ToolRow<Exclude<ToolEffect, "changesMemory" | "changesSchedule" | "endsRoutine" | "requestsTakeover">>> &
   Record<MemoryInvocation["name"], ToolRow<"changesMemory">> &
   Record<ScheduleInvocation["name"], ToolRow<"changesSchedule">> &
   Record<SearchInvocation["name"], ToolRow<"reads">> &
-  Record<QuietInvocation["name"], ToolRow<"endsRoutine">>;
+  Record<QuietInvocation["name"], ToolRow<"endsRoutine">> & Record<TakeoverInvocation["name"], ToolRow<"requestsTakeover">>;
 
 export function toolEffect(name: ToolName): ToolEffect {
   return TOOLS[name].effect;
@@ -403,10 +409,10 @@ export function isQuietInvocation(tool: ModelInvocation): tool is QuietInvocatio
 
 export const COMPUTER_TOOL_NAMES: readonly ToolInvocation["name"][] = toolInvocation.options.map((option) => option.shape.name.value);
 
-// A memory or routine call's result is what Convex wrote when it stored the call, and stay_quiet's is the runner's own words. Every
+// Memory, routine and help results are written by Convex, and stay_quiet uses the runner's words. Every
 // other result carries text from a command, a file, a page, a screen, or a search, which anyone on the internet could have written.
 // A new tool counts unless it is one of those.
-const TRUSTED_EFFECTS: ReadonlySet<ToolEffect> = new Set(["changesMemory", "changesSchedule", "endsRoutine"]);
+const TRUSTED_EFFECTS: ReadonlySet<ToolEffect> = new Set(["changesMemory", "changesSchedule", "endsRoutine", "requestsTakeover"]);
 const UNTRUSTED_RESULTS: ReadonlySet<string> = new Set(
   Object.entries(TOOLS)
     .filter(([, tool]) => !TRUSTED_EFFECTS.has(tool.effect))
@@ -432,6 +438,7 @@ const modelInvocation = z.discriminatedUnion("name", [
   ...scheduleInvocation.options,
   searchInvocation,
   quietInvocation,
+  takeoverInvocation,
 ]);
 
 export function parseToolCall(args: { name: string; arguments: string }): ParsedToolCall {

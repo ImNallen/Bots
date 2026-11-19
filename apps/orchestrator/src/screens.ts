@@ -54,21 +54,33 @@ export function attachScreens(args: {
   server: Pick<Server, "on">;
   authMode: AuthMode;
   link: Pick<Link, "openStream">;
-  ownerForViewer: (botId: string, viewerSubject: string) => Promise<{ ownerId: Id<"users">; generation: number; takeoverUntil: number } | null>;
+  ownerForViewer: (botId: string, viewerSubject: string) => Promise<{ ownerId: Id<"users">; generation: number; takeoverUntil: number; takeoverSessionId: string | null } | null>;
   log: (fields: LogFields) => void;
   takeoverCheckMs?: number;
 }): void {
   const { server, authMode, link, ownerForViewer, log, takeoverCheckMs = TAKEOVER_CHECK_MS } = args;
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_VIEWER_MESSAGE_BYTES });
 
+  const opening = new Map<string, Promise<unknown>>();
+  async function openControl(botId: string, subject: string, sessionId: string | null) {
+    const prior = opening.get(botId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(async () => {
+      const current = await ownerForViewer(botId, subject);
+      if (current === null || sessionId === null || current.takeoverSessionId !== sessionId || current.takeoverUntil <= Date.now()) return "no-computer" as const;
+      return await link.openStream({ ownerId: current.ownerId, generation: current.generation, botId, mode: "control" });
+    });
+    opening.set(botId, next);
+    try { return await next; } finally { if (opening.get(botId) === next) opening.delete(botId); }
+  }
+
   // The computer's side closes at once, because a viewer that never answers the close would otherwise keep typing until the close
   // times out. Closing it also ends the input stream, because that stream exits when its relay leaves.
-  function endWithTakeover(args: { viewer: WebSocket; computer: WebSocket; botId: string; subject: string }): void {
-    const { viewer, computer, botId, subject } = args;
+  function endWithTakeover(args: { viewer: WebSocket; computer: WebSocket; botId: string; subject: string; sessionId: string }): void {
+    const { viewer, computer, botId, subject, sessionId } = args;
     const check = setInterval(() => {
       ownerForViewer(botId, subject)
         .then((owner) => {
-          if (owner === null || owner.takeoverUntil <= Date.now()) {
+          if (owner === null || owner.takeoverUntil <= Date.now() || owner.takeoverSessionId !== sessionId) {
             viewer.close(LINK_CLOSE.takeoverEnded);
             computer.close();
           }
@@ -79,7 +91,9 @@ export function attachScreens(args: {
   }
 
   async function handle(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    const path = new URL(request.url ?? "/", "http://unused").pathname;
+    const url = new URL(request.url ?? "/", "http://unused");
+    const path = url.pathname;
+    const sessionId = url.searchParams.get("session");
     const match = SCREEN_PATH.exec(path);
     if (match === null) {
       reject(socket, 404);
@@ -110,7 +124,7 @@ export function attachScreens(args: {
       return;
     }
     const mode: StreamMode = match[2] === undefined ? "watch" : "control";
-    if (mode === "control" && owner.takeoverUntil <= Date.now()) {
+    if (mode === "control" && (sessionId === null || owner.takeoverUntil <= Date.now() || owner.takeoverSessionId !== sessionId)) {
       log({ level: "warn", event: "screen-rejected", reason: "not-taken-over" });
       reject(socket, 403);
       return;
@@ -123,28 +137,39 @@ export function attachScreens(args: {
       });
       // Bytes that arrive before the computer attaches would be lost, so the relay starts only once both ends exist.
       viewer.pause();
-      link
-        .openStream({ ownerId: owner.ownerId, generation: owner.generation, botId, mode })
-        .then((computer) => {
+      (mode === "control" ? openControl(botId, identity.identity.subject, sessionId) : link.openStream({ ownerId: owner.ownerId, generation: owner.generation, botId, mode }))
+        .then(async (computer) => {
           if (typeof computer === "string") {
             // A paused socket cannot finish a close handshake, so the viewer would hang for the close timeout.
             viewer.resume();
             viewer.close(computer === "too-many" ? LINK_CLOSE.tooManyStreams : LINK_CLOSE.noComputer, computer);
             return;
           }
+          computer.pause();
+          const current = await ownerForViewer(botId, identity.identity.subject).catch((error: unknown) => {
+            computer.resume();
+            computer.close();
+            throw error;
+          });
+          if (current === null || current.generation !== owner.generation || (mode === "control" && (current.takeoverSessionId !== sessionId || current.takeoverUntil <= Date.now()))) {
+            viewer.resume(); viewer.close(LINK_CLOSE.takeoverEnded); computer.resume(); computer.close(); return;
+          }
           if (viewer.readyState !== WebSocket.OPEN) {
+            computer.resume();
             computer.close();
             return;
           }
           relay(viewer, computer);
+          computer.resume();
           viewer.resume();
-          if (mode === "control") {
-            endWithTakeover({ viewer, computer, botId, subject: identity.identity.subject });
+          if (mode === "control" && sessionId !== null) {
+            endWithTakeover({ viewer, computer, botId, subject: identity.identity.subject, sessionId });
           }
           log({ level: "info", event: "screen-opened", botId, mode });
         })
         .catch((error: unknown) => {
           log({ level: "error", event: "screen-failed", message: error instanceof Error ? error.message : "unknown error" });
+          viewer.resume();
           viewer.close(LINK_CLOSE.internalError);
         });
     });

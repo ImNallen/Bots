@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { waitWhileTakenOver } from "./takeover.ts";
+import { waitForHandoff, waitWhileTakenOver } from "./takeover.ts";
 
 function run(args: { until: () => Promise<number>; signals?: AbortSignal[]; now?: () => number }) {
   const waits: number[] = [];
@@ -117,5 +117,20 @@ describe("waitWhileTakenOver", () => {
     }).done;
     expect(added).toBe(19);
     expect(removed).toBe(added);
+  });
+});
+
+describe("durable human help", () => {
+  it("releases its slot once and stays pending through read failures until explicit completion", async () => {
+    let reads = 0;
+    let waits = 0;
+    const result = await waitForHandoff({ initial: "pending", signals: [], onWait: () => { waits++; }, pollMs: 1,
+      read: async () => { reads++; if (reads === 1) throw Error("outage"); return reads < 4 ? "pending" : "completed"; } });
+    expect(result).toBe("completed"); expect(waits).toBe(1); expect(reads).toBe(4);
+  });
+  it("leaves promptly on cancellation while state reads fail", async () => {
+    const abort = new AbortController();
+    const result = waitForHandoff({ initial: "pending", signals: [abort.signal], onWait: () => {}, pollMs: 1, read: async () => { abort.abort(); throw Error("outage"); } });
+    expect(await result).toBe("invalidated");
   });
 });

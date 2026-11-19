@@ -9,7 +9,7 @@ import { openJournal } from "./journal.ts";
 import { connectLink } from "./link.ts";
 import { log } from "./log.ts";
 import { createLogins } from "./logins.ts";
-import { relayScreen } from "./screens.ts";
+import { createControlActivation, relayScreen } from "./screens.ts";
 import { createWeb, nodeNetwork } from "./web.ts";
 
 const STATE_DIR = "/var/lib/computerd";
@@ -67,6 +67,7 @@ const calls = createCalls({
     }
   },
 });
+const controlActivation = createControlActivation();
 connectLink({
   url: config.linkUrl,
   token: config.token,
@@ -78,6 +79,7 @@ connectLink({
       token: config.token,
       streamId,
       mode,
+      ...(mode === "control" ? { activate: controlActivation(botId) } : {}),
       acquire: () => desktops.acquire(botId),
       restartInput: systemd.restartInput,
       logins: {

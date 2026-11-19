@@ -12,7 +12,7 @@ export type ScreenState =
   | { kind: "requesting" }
   | { kind: "joining" }
   | { kind: "controlling"; stream: Stream }
-  // The input stream ended by itself. The owner still holds the take-over until a check of who ended it finishes.
+  // The input stream ended. Release this viewer's session before returning to watch.
   | { kind: "lost" };
 
 export type ScreenEvent =
