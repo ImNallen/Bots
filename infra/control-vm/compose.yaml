@@ -38,7 +38,7 @@ services:
 
   # web_search reaches it from the orchestrator, so it listens only on this machine's loopback.
   searxng:
-    image: searxng/searxng:latest@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+    image: searxng/searxng:latest@sha256:932f69dca010db9880bddebb2171f05d8e1a25d04a59149ff65409993d680024
     restart: unless-stopped
     ports:
       - "127.0.0.1:8789:8080"
