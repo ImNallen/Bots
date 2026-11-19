@@ -506,6 +506,7 @@ pre {
 }
 
 .bub > * + *,
+.bub .md > * + *,
 .bub li > * + *,
 .bub blockquote > * + * {
   margin-top: 8px;
@@ -582,6 +583,10 @@ pre {
   background: none;
   color: inherit;
   font: inherit;
+}
+
+.bub [data-markdown="code-header"] {
+  display: none;
 }
 
 .md-scroll {

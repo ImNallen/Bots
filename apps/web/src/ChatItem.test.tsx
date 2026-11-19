@@ -1,3 +1,4 @@
+import { DomUtils, parseDocument } from "htmlparser2";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Id } from "@bots/convex/dataModel";
@@ -29,7 +30,8 @@ describe("ChatItem", () => {
     const markdown = "**bold** ![i](https://e.example/i.png)";
     for (const streaming of [false, true]) {
       const html = render({ key: "a", kind: "assistant", text: markdown, streaming });
-      expect(html).toContain("<strong>bold</strong>");
+      expect(DomUtils.getElementsByTagName("strong", parseDocument(html).children).map(DomUtils.textContent)).toEqual(["bold"]);
+      expect(html.includes('data-streaming="true"')).toBe(streaming);
       expect(html).not.toContain("<img");
     }
     expect(render({ key: "a", kind: "assistant", text: "hi", streaming: true })).toContain('aria-live="polite"');
@@ -59,7 +61,8 @@ describe("ChatItem", () => {
       text: '**found** <b>raw</b> ![i](https://e.example/i.png) [ok](https://e.example) [bad](javascript:alert(1))',
       routine: null,
     });
-    expect(html).toContain("<strong>found</strong>");
+    expect(DomUtils.getElementsByTagName("strong", parseDocument(html).children).map(DomUtils.textContent)).toEqual(["found"]);
+    expect(html).not.toContain('data-streaming="true"');
     expect(html).not.toContain("<b>");
     expect(html).not.toContain("<img");
     expect(html).toContain('href="https://e.example"');
