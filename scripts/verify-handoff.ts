@@ -51,13 +51,13 @@ async function until<T>(probe: () => Promise<T | null>, label: string): Promise<
   while (Date.now() < deadline) { const v = await probe(); if (v !== null) return v; await new Promise(r => setTimeout(r, 30)); }
   throw Error(`Timed out waiting for ${label}`);
 }
-async function fixture(options: { sibling?: boolean; prior?: boolean } = {}, caller = owner) {
+async function fixture(options: { sibling?: boolean; prior?: boolean; reason?: string } = {}, caller = owner) {
   const botId = await caller.mutation(api.bots.create, { name: "Handoff proof", color: "green" });
   const threadId = await caller.mutation(api.threads.ensureForBot, { botId });
   const runId = await caller.mutation(api.threads.send, { threadId, text: "help privately" });
   const claim = await service.mutation(api.runs.claim, { runId });
   assert.equal(claim.kind, "claimed"); if (claim.kind !== "claimed") throw Error("claim");
-  const call = { id: randomUUID(), name: "request_takeover", arguments: '{"reason":"  Please sign in on the screen  "}' };
+  const call = { id: randomUUID(), name: "request_takeover", arguments: JSON.stringify({ reason: options.reason ?? "  Please sign in on the screen  " }) };
   const sibling = { id: randomUUID(), name: "browser_click", arguments: '{"ref":1}' };
   const prior = { id: randomUUID(), name: "read_file", arguments: '{"path":"/workspace/note"}' };
   const calls = [...(options.prior ? [prior] : []), call, ...(options.sibling ? [sibling] : [])];
@@ -73,7 +73,6 @@ async function fixture(options: { sibling?: boolean; prior?: boolean } = {}, cal
   return { botId, threadId, runId, claim, call, sibling, identity, request, state, decide, timeline, append, cancel };
 }
 
-// Backend authorization, replay and decision semantics run without an orchestrator.
 let f = await fixture({ sibling: true });
 await assert.rejects(owner.mutation(api.handoffs.request, { ...f.identity, leaseToken: f.claim.leaseToken }));
 await assert.rejects(other.mutation(api.handoffs.decide, { ...f.identity, decision: { kind: "complete" } }));
@@ -105,6 +104,23 @@ assert.equal((await f.decide({ kind: "complete" })).kind, "completed");
 assert.equal((await owner.query(api.bots.get, { botId: f.botId }))?.takeoverSessionId, next.sessionId);
 await owner.mutation(api.bots.releaseTakeover, { botId: f.botId, sessionId: next.sessionId }); await f.cancel();
 console.log("ok issue 82: stale renew/release/complete fenced; fixed atomic result, first decision, duplicate acknowledgment preserve newer control; forged success/turn/finish rejected");
+
+for (const readOnly of [false, true]) {
+  f = await fixture({ reason: "" });
+  if (readOnly) alter(f.runId, "readOnly");
+  const invalid = await service.mutation(api.runs.append, { runId: f.runId, leaseToken: f.claim.leaseToken, expectedSeq: f.claim.nextSeq + 1,
+    body: { kind: "toolResult", name: "request_takeover", toolCallId: f.call.id, outcome: "invalid", output: "untrusted validation text", truncated: false } });
+  assert(invalid.kind === "toolResult"); assert.equal(invalid.outcome, "invalid"); assert.notEqual(invalid.output, "untrusted validation text");
+  await service.mutation(api.runs.append, { runId: f.runId, leaseToken: f.claim.leaseToken, expectedSeq: f.claim.nextSeq + 2,
+    body: { kind: "assistantTurn", text: "Corrected the invalid call", toolCalls: [], model: "fixture", usage: { promptTokens: 0, completionTokens: 0 } } });
+  await service.mutation(api.runs.finish, { runId: f.runId, leaseToken: f.claim.leaseToken, state: { kind: "done" } });
+}
+f = await fixture(); await f.request(); await f.decide({ kind: "complete" });
+const newerControl = await owner.mutation(api.bots.takeOver, { botId: f.botId, action: { kind: "acquire" } });
+await f.cancel();
+assert.equal((await owner.query(api.bots.get, { botId: f.botId }))?.takeoverSessionId, newerControl.sessionId);
+await owner.mutation(api.bots.releaseTakeover, { botId: f.botId, sessionId: newerControl.sessionId });
+console.log("ok malformed help calls record validation failure; cancelling completed help preserves newer manual control");
 
 f = await fixture(); await f.request(); const expired = await owner.mutation(api.bots.takeOver, { botId: f.botId, action: { kind: "acquire" } });
 alter(f.runId, "expireInput");
@@ -217,7 +233,6 @@ try {
   await new Promise(r => setTimeout(r, 1200)); assert.equal(modelCalls, beforeDecline);
   console.log("ok ten pending requests release eight runner slots; unrelated bot advances; decline never retries model or sibling");
 
-  // Actual noVNC -> orchestrator opaque relay -> link -> computerd relayScreen -> TCP RFB fixture.
   const slot = 8;
   const activate = createControlActivation();
   function desktop(socket: Socket, input: boolean) {

@@ -12,7 +12,6 @@ export type ScreenState =
   | { kind: "requesting" }
   | { kind: "joining" }
   | { kind: "controlling"; stream: Stream }
-  // The input stream ended. Release this viewer's session before returning to watch.
   | { kind: "lost" };
 
 export type ScreenEvent =

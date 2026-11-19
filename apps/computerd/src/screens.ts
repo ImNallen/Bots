@@ -88,7 +88,6 @@ export function relayScreen(args: {
           log({ level: "warn", event: "screen-relay-failed", message: error.message });
           socket.close();
         });
-        // A replacement cannot restart the service until this connection has attached or ended.
         await new Promise<void>((resolve) => {
           tcp.once("connect", resolve);
           tcp.once("close", resolve);

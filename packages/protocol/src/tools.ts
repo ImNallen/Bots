@@ -409,9 +409,6 @@ export function isQuietInvocation(tool: ModelInvocation): tool is QuietInvocatio
 
 export const COMPUTER_TOOL_NAMES: readonly ToolInvocation["name"][] = toolInvocation.options.map((option) => option.shape.name.value);
 
-// Memory, routine and help results are written by Convex, and stay_quiet uses the runner's words. Every
-// other result carries text from a command, a file, a page, a screen, or a search, which anyone on the internet could have written.
-// A new tool counts unless it is one of those.
 const TRUSTED_EFFECTS: ReadonlySet<ToolEffect> = new Set(["changesMemory", "changesSchedule", "endsRoutine", "requestsTakeover"]);
 const UNTRUSTED_RESULTS: ReadonlySet<string> = new Set(
   Object.entries(TOOLS)

@@ -12,8 +12,7 @@ import { activeRunOfBot, chatThreadOf, purgeThreadBatch } from "./threads.js";
 import { approvalLevel, botColor, botShape } from "./validators.js";
 
 const DEFAULT_APPROVAL_LEVEL = "automatic";
-// A sleeping phone or forgotten tab stops renewing its input grant. Human help remains pending.
-const TAKEOVER_MS = 15 * 60 * 1000;
+const INPUT_GRANT_MS = 15 * 60 * 1000;
 
 export const list = query({
   args: {},
@@ -152,7 +151,6 @@ export const ownerForViewer = query({
   },
 });
 
-// Only an explicit acquire replaces control. A delayed renewal cannot steal it back.
 export const takeOver = mutation({
   args: { botId: v.id("bots"), action: v.union(v.object({ kind: v.literal("acquire") }), v.object({ kind: v.literal("renew"), sessionId: v.string() })) },
   handler: async (ctx, { botId, action }) => {
@@ -161,7 +159,7 @@ export const takeOver = mutation({
     const now = Date.now();
     if (action.kind === "renew" && (bot.takeoverSessionId !== action.sessionId || (bot.takeoverUntil ?? 0) <= now)) throw new ConvexError("Control session ended. Take control again explicitly.");
     const sessionId = action.kind === "acquire" ? crypto.randomUUID() : action.sessionId;
-    const takeoverUntil = now + TAKEOVER_MS;
+    const takeoverUntil = now + INPUT_GRANT_MS;
     await ctx.db.patch(botId, { takeoverUntil, takeoverSessionId: sessionId });
     return { sessionId, until: takeoverUntil };
   },

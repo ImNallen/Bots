@@ -2,7 +2,6 @@ import { v } from "convex/values";
 import { internalMutation } from "./_generated/server.js";
 import { computerOfOwner } from "./computers.js";
 
-// Disposable-backend verification only; internal functions require the deployment's admin key.
 export const alter = internalMutation({
   args: { runId: v.id("runs"), mode: v.union(v.literal("expireInput"), v.literal("readOnly"), v.literal("generation"), v.literal("removeBot"), v.literal("reset"), v.literal("clearReset"), v.literal("views")) },
   handler: async (ctx, { runId, mode }) => {

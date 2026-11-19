@@ -1,4 +1,4 @@
-import { TAKEOVER_COMPLETED_OUTPUT } from "@bots/protocol";
+import { parseToolCall, TAKEOVER_COMPLETED_OUTPUT } from "@bots/protocol";
 import { currentCall, handoffContext, requireHandoffContext } from "./handoffChecks.js";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v, type Infer } from "convex/values";
@@ -236,9 +236,12 @@ export const append = mutation({
     if (run.handoff !== undefined || call?.name === "request_takeover") {
       if (!consumesHelp || body.toolCallId !== call?.id) throw new ConvexError("Answer the current help request first");
     }
-    if (consumesHelp && body.kind === "toolResult" && run.capability === "readOnly" && body.outcome !== "rejected") throw new ConvexError("Read-only runs cannot request help");
+    const parsedHelp = consumesHelp && call?.name === "request_takeover" && call.id === body.toolCallId && run.handoff === undefined ? parseToolCall(call) : null;
+    if (consumesHelp && body.kind === "toolResult" && run.capability === "readOnly" && body.outcome !== "rejected" && parsedHelp?.kind !== "invalid") throw new ConvexError("Read-only runs cannot request help");
     let stored: RunEventBody;
-    if (consumesHelp && body.kind === "toolResult" && (run.capability === "full" || run.handoff !== undefined)) {
+    if (consumesHelp && body.kind === "toolResult" && parsedHelp?.kind === "invalid") {
+      stored = { kind: "toolResult", toolCallId: body.toolCallId, name: "request_takeover", outcome: "invalid", output: parsedHelp.reason, truncated: false };
+    } else if (consumesHelp && body.kind === "toolResult" && (run.capability === "full" || run.handoff !== undefined)) {
       await requireHandoffContext(ctx, run, body.toolCallId);
       if (run.handoff?.toolCallId !== body.toolCallId || run.handoff.state.kind !== "completed") throw new ConvexError("The owner has not completed this help request");
       stored = { kind: "toolResult", toolCallId: body.toolCallId, name: "request_takeover", outcome: "ok", output: TAKEOVER_COMPLETED_OUTPUT, truncated: false };

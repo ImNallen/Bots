@@ -29,7 +29,7 @@ export async function endRun(ctx: MutationCtx, runId: Id<"runs">, state: Termina
   if (run?.handoff !== undefined) {
     await closeUnansweredCalls(ctx, run, handoffEnd);
     const bot = await ctx.db.get(run.botId);
-    if (bot !== null) await ctx.db.patch(bot._id, { takeoverUntil: undefined, takeoverSessionId: undefined });
+    if (bot !== null && run.handoff.state.kind === "pending") await ctx.db.patch(bot._id, { takeoverUntil: undefined, takeoverSessionId: undefined });
   }
   await ctx.db.patch(runId, { state, endedAt: Date.now(), handoff: undefined });
   await deleteStream(ctx, runId);

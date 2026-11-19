@@ -64,7 +64,7 @@ export async function waitForHandoff(args: {
       const timer = setTimeout(finish, args.pollMs ?? POLL_MS);
       for (const signal of args.signals) signal.addEventListener("abort", finish, { once: true });
     });
-    try { state = await args.read(); } catch { /* A failed read never gives consent. */ }
+    try { state = await args.read(); } catch {}
   }
   return "invalidated";
 }
