@@ -46,7 +46,7 @@
     "@types/ws": "catalog:",
     "convex": "catalog:",
     "jose": "catalog:",
-    "playwright": "^1.65.0",
+    "playwright": "^1.65.1",
     "typescript": "catalog:",
     "ws": "catalog:"
   }

@@ -11,9 +11,9 @@
   "dependencies": {
     "@bots/convex": "workspace:*",
     "@bots/protocol": "workspace:*",
-    "@hono/node-server": "2.1.6",
+    "@hono/node-server": "2.1.8",
     "convex": "catalog:",
-    "hono": "4.13.16",
+    "hono": "4.13.19",
     "jose": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
