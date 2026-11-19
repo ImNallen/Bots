@@ -84,10 +84,12 @@ function ScreenStream(props: { botId: string; mode: "watch" | "control"; session
   return <div className="scr-stream" ref={target} aria-label="This bot's screen" />;
 }
 
+type ControlGrant = { sessionId: string; isCurrent: () => boolean };
+
 function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<ScreenEvent>, paused: RefObject<boolean>) {
   const takeOver = useMutation(api.bots.takeOver);
   const release = useMutation(api.bots.releaseTakeover);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [grant, setGrant] = useState<ControlGrant | null>(null);
   const holding = holdsScreen(state);
   useEffect(() => {
     if (!holding) return;
@@ -98,7 +100,7 @@ function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<S
       owned = grant.sessionId;
       if (cancelled) { void release({ botId, sessionId: owned }).catch(() => {}); return; }
       paused.current = false;
-      setSessionId(owned);
+      setGrant({ sessionId: owned, isCurrent: () => !cancelled });
       dispatch({ type: "granted" });
       renew = setInterval(() => {
         if (paused.current) return;
@@ -112,12 +114,12 @@ function useTakeover(botId: Id<"bots">, state: ScreenState, dispatch: Dispatch<S
     return () => {
       cancelled = true;
       clearInterval(renew);
-      setSessionId(null);
+      setGrant(null);
       if (owned !== null) void release({ botId, sessionId: owned }).catch(() => {});
     };
   }, [botId, holding, dispatch, release, takeOver, paused]);
   useEffect(() => { if (state.kind === "lost") dispatch({ type: "settled" }); }, [state.kind, dispatch]);
-  return sessionId;
+  return grant;
 }
 
 // A phone's keyboard covers the page without resizing it, so the view follows the part that stays visible. A pinch also shrinks that
@@ -320,21 +322,26 @@ export function ScreenPanel({ botId, botName, character, chat, openRequest, onCl
   const [state, dispatch] = useReducer(screenReducer, INITIAL_SCREEN_STATE);
   const paused = useRef(false);
   const pauseInput = useRef<((paused: boolean) => void) | null>(null);
-  const sessionId = useTakeover(botId, state, dispatch, paused);
+  const grant = useTakeover(botId, state, dispatch, paused);
   const decide = useMutation(api.handoffs.decide);
-  const [resuming, setResuming] = useState(false);
+  const [resumingGrant, setResumingGrant] = useState<ControlGrant | null>(null);
+  const resuming = grant !== null && resumingGrant === grant;
   const [resumeError, setResumeError] = useState<string | null>(null);
   async function resume() {
-    if (handoff === undefined || sessionId === null) return;
+    if (handoff === undefined || grant === null || !grant.isCurrent()) return;
     paused.current = true;
     pauseInput.current?.(true);
-    setResuming(true); setResumeError(null);
+    setResumingGrant(grant); setResumeError(null);
     try {
-      const answer = await decide({ ...handoff, decision: { kind: "complete", controlSessionId: sessionId } });
+      const answer = await decide({ ...handoff, decision: { kind: "complete", controlSessionId: grant.sessionId } });
+      if (!grant.isCurrent()) return;
       if (answer.kind !== "completed") throw new Error("This help request is no longer current.");
       dispatch({ type: "giveBack" });
-    } catch (error) { setResumeError(error instanceof Error ? error.message : "Could not resume. Try again."); }
-    finally { setResuming(false); }
+    } catch (error) {
+      if (!grant.isCurrent()) return;
+      setResumeError(error instanceof Error ? error.message : "Could not resume. Try again.");
+      dispatch({ type: "giveBack" });
+    } finally { if (grant.isCurrent()) setResumingGrant(null); }
   }
   const isPhone = useIsPhone();
   const hasTouchKeyboard = useHasCoarsePointer();
@@ -406,7 +413,7 @@ export function ScreenPanel({ botId, botName, character, chat, openRequest, onCl
       </div>}
       <p key="status" className={fullScreen ? "scr-state" : "visually-hidden"} role="status">{handoff !== undefined ? "The bot is still waiting for your help." : topLine(state) ?? "Watch your bot work. Take over whenever you need."}</p>
       <div className="scr-mid" key="stream" hidden={minimized}>
-        {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} sessionId={sessionId} pauseInput={pauseInput} dispatch={dispatch} />}
+        {mode !== null && <ScreenStream key={mode} botId={botId} mode={mode} sessionId={grant?.sessionId ?? null} pauseInput={pauseInput} dispatch={dispatch} />}
         <Message state={state} dispatch={dispatch} />
       </div>
       <div className="scr-low" key="controls" hidden={minimized}>

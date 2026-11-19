@@ -286,13 +286,27 @@ try {
   page.setDefaultTimeout(15000);
   await page.addInitScript(`{
     const NativeSocket = window.WebSocket;
+    const failure = window.resumeFailure = {
+      delayNext: false, requestId: null, response: null, rejected: false, replaying: false,
+      flush() { const [socket, data] = this.response; this.response = null; this.replaying = true;
+        socket.dispatchEvent(new MessageEvent('message', { data })); this.replaying = false; }
+    };
     function ResumeFailureSocket(...args) {
       const socket = new NativeSocket(...args), send = socket.send.bind(socket);
+      socket.addEventListener('message', (event) => {
+        if (failure.replaying || typeof event.data !== 'string') return;
+        let message; try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === 'MutationResponse' && message.requestId === failure.requestId) {
+          failure.response = [socket, event.data]; failure.rejected = message.success === false;
+          event.stopImmediatePropagation();
+        }
+      });
       socket.send = (data) => {
-        if (window.failNextResume && typeof data === 'string') {
+        if ((window.failNextResume || failure.delayNext) && typeof data === 'string') {
           const message = JSON.parse(data);
           if (message.type === 'Mutation' && message.udfPath === 'handoffs:decide') {
             window.failNextResume = false;
+            if (failure.delayNext) { failure.delayNext = false; failure.requestId = message.requestId; }
             message.args[0].decision.controlSessionId = 'expired-session';
             data = JSON.stringify(message);
           }
@@ -327,6 +341,30 @@ try {
   await until(async () => keys.length >= beforeRetry + secret.length ? true : null, "RFB input after failed resume");
   assert.equal(String.fromCodePoint(...keys.slice(beforeRetry).filter(k => k < 128)), secret);
   console.log("ok failed resume releases control without completing help; reacquired screen accepts private input");
+  const delayedSession = (await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverSessionId; assert(delayedSession);
+  await page.evaluate("window.resumeFailure.delayNext = true");
+  await page.getByRole("button", { name: "Give back and resume", exact: true }).click();
+  await page.waitForFunction("window.resumeFailure.response !== null");
+  assert.equal(await page.evaluate("window.resumeFailure.rejected"), true, "delayed completion failed in the real backend");
+  await page.getByRole("button", { name: "Minimize computer window" }).click();
+  await until(async () => !(await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverUntil ? true : null, "release while completion response is delayed");
+  await page.getByRole("button", { name: "Restore computer window" }).click();
+  await page.getByRole("button", { name: "Take control", exact: true }).click();
+  await page.getByRole("button", { name: "Give back and resume", exact: true }).waitFor();
+  const recoveredSession = (await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverSessionId; assert(recoveredSession);
+  assert.notEqual(recoveredSession, delayedSession);
+  assert.equal(await page.getByRole("button", { name: "Give back and resume", exact: true }).isEnabled(), true);
+  await page.evaluate("window.resumeFailure.flush()");
+  await page.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  assert.equal((await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverSessionId, recoveredSession);
+  assert.equal(await page.getByRole("button", { name: "Give back and resume", exact: true }).isEnabled(), true);
+  assert.equal(await page.locator(".scr-resume-error").count(), 0);
+  assert.equal((await pending(screenCase.threadId)).handoff?.kind, "pending");
+  const beforeDelayedFailure = keys.length;
+  await page.locator(".scr-stream canvas").click(); await page.keyboard.type(secret);
+  await until(async () => keys.length >= beforeDelayedFailure + secret.length ? true : null, "RFB input after stale completion failure");
+  assert.equal(String.fromCodePoint(...keys.slice(beforeDelayedFailure).filter(k => k < 128)), secret);
+  console.log("ok delayed completion rejection cannot release or disable a newer grant; help stays pending and real RFB input works");
   await page.getByRole("button", { name: "Minimize computer window" }).click();
   await until(async () => !(await owner.query(api.bots.get, { botId: screenCase.botId }))?.takeoverUntil ? true : null, "input release");
   assert.equal((await pending(screenCase.threadId)).handoff?.kind, "pending");
