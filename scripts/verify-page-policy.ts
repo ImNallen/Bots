@@ -153,7 +153,14 @@ try {
   await f.finish(); console.log("ok old approved aimless browser row cannot rebind");
 
   const modelPort = await serve(model);
-  modelSteps.push({ name: "browser_navigate", args: { url: site } }, { name: "browser_type", args: { ref: 1, text: "Pipeline" } }, { name: "browser_click", args: { ref: 2 } }, { name: "browser_press", args: { key: "Enter" } });
+  modelSteps.push(
+    { name: "browser_navigate", args: { url: site } },
+    { name: "browser_press", args: { key: "Tab" } },
+    { name: "browser_snapshot", args: {} },
+    { name: "browser_type", args: { ref: 1, text: "Pipeline" } },
+    { name: "browser_click", args: { ref: 2 } },
+    { name: "browser_press", args: { key: "Enter" } },
+  );
   const origin = `http://127.0.0.1:${env.PORT}`;
   child = spawn(process.execPath, ["--env-file=.env.local", "apps/orchestrator/src/main.ts"], { cwd: paths.repoRoot, env: { ...process.env, DEV_LOGIN: env.DEV_LOGIN, COMPUTER_TOKEN: env.COMPUTER_TOKEN, MISTRAL_BASE_URL: `http://127.0.0.1:${modelPort}`, TOGETHER_BASE_URL: `http://127.0.0.1:${modelPort}` }, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.on("data", data => process.stdout.write(data)); child.stderr?.on("data", data => process.stderr.write(data));
@@ -163,6 +170,7 @@ try {
   const threadId = await owner.mutation(api.threads.ensureForBot, { botId });
   await owner.mutation(api.threads.send, { threadId, text: "Run browser page policy fixture" });
   const clickCard = await pending(threadId); assert.match(clickCard.subject ?? "", /Click "Commit"/);
+  assert.ok(clickCard.reason?.trim(), "the click approval must explain why it asks");
   ui = await chromium.launch({ headless: true });
   const tab = await ui.newPage();
   let screenQueries = 0;
@@ -188,8 +196,10 @@ try {
   assert.equal((await evaluate("actions")).value, 1);
   const timeline = await owner.query(api.threads.timeline, { threadId });
   const results = timeline.runs.flatMap(run => run.events.map(event => event.body)).filter(body => body.kind === "toolResult");
-  assert.equal(results.find(body => body.name === "browser_press")?.outcome, "error");
-  console.log("ok scripted model -> real runner -> real link/computer/browser: fill then click/Enter cards; UI names control/site without desktop picture");
+  const keyResults = results.filter(body => body.name === "browser_press");
+  assert.deepEqual(keyResults.map(result => result.outcome), ["error", "error"]);
+  for (const result of keyResults) assert.match(result.output, /browser keys cannot bind safely/i);
+  console.log("ok captured Tab reaches the browser without approval; fill, click and Enter follow their approval rules");
   await direct({ name: "browser_navigate", args: { url: `${origin}/bots/${botId}` } });
   const appPage = await wait(async () => {
     const result = await direct({ name: "browser_snapshot", args: {} });
